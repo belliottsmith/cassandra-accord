@@ -168,9 +168,9 @@ public class Serialize
                 nodeIds[0] = cfk.redundantBefore().node.id;
                 nodeIdCount = 1;
                 {
-                    TxnId bootstrappedAt = cfk.bootstrappedAt();
-                    if (bootstrappedAt != null)
-                        nodeIds[nodeIdCount++] = bootstrappedAt.node.id;
+                    TxnId readyAt = cfk.readyAt();
+                    if (readyAt != null)
+                        nodeIds[nodeIdCount++] = readyAt.node.id;
                 }
                 for (int i = 0 ; i < commandCount ; ++i)
                 {
@@ -326,7 +326,7 @@ public class Serialize
                               | (executeAtCount          > 0  ? HAS_EXECUTE_AT_HEADER_BIT         : 0)
                               | (ballotCount             > 0  ? HAS_BALLOT_HEADER_BIT             : 0)
                               | (overrideCount           > 0  ? HAS_STATUS_OVERRIDES_HEADER_BIT   : 0)
-                              | (cfk.bootstrappedAt() != null ? HAS_BOOTSTRAPPED_AT_HEADER_BIT    : 0)
+                              | (cfk.readyAt() != null ? HAS_BOOTSTRAPPED_AT_HEADER_BIT : 0)
                               | (hasBoundsFlags(cfk)          ? HAS_BOUNDS_FLAGS_HEADER_BIT       : 0)
                               | (cfk.hasMaxUniqueHlc()        ? HAS_MAX_HLC_HEADER_BIT            : 0)
             ;
@@ -368,7 +368,7 @@ public class Serialize
 
             {
                 Timestamp redundantBefore = cfk.redundantBefore();
-                TxnId bootstrappedAt = cfk.bootstrappedAt();
+                TxnId readyAt = cfk.readyAt();
                 prevEpoch = redundantBefore.epoch();
                 prevHlc = redundantBefore.hlc();
                 {
@@ -384,13 +384,13 @@ public class Serialize
                 if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
                     totalBytes += sizeOfUnsignedVInt(redundantBefore.flags());
                 totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, redundantBefore.node.id));
-                if (bootstrappedAt != null)
+                if (readyAt != null)
                 {
-                    totalBytes += sizeOfUnsignedVInt(bootstrappedAt.epoch() - prevEpoch);
-                    totalBytes += sizeOfVInt(bootstrappedAt.hlc() - prevHlc);
+                    totalBytes += sizeOfUnsignedVInt(readyAt.epoch() - prevEpoch);
+                    totalBytes += sizeOfVInt(readyAt.hlc() - prevHlc);
                     if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
-                        totalBytes += sizeOfUnsignedVInt(bootstrappedAt.flags());
-                    totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id));
+                        totalBytes += sizeOfUnsignedVInt(readyAt.flags());
+                    totalBytes += sizeOfUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, readyAt.node.id));
                 }
                 if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
                     totalBytes += sizeOfVInt(cfk.maxUniqueHlc - prevHlc);
@@ -468,7 +468,7 @@ public class Serialize
 
             {
                 TxnId redundantBefore = cfk.redundantBefore();
-                Timestamp bootstrappedAt = cfk.bootstrappedAt();
+                Timestamp readyAt = cfk.readyAt();
                 QuickBounds bounds = cfk.bounds();
                 long start = bounds.startEpoch;
                 long end = bounds.endEpoch;
@@ -480,13 +480,13 @@ public class Serialize
                 if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
                     VIntCoding.writeUnsignedVInt32(redundantBefore.flags(), out);
                 VIntCoding.writeUnsignedVInt32(Arrays.binarySearch(nodeIds, 0, nodeIdCount, redundantBefore.node.id), out);
-                if (bootstrappedAt != null)
+                if (readyAt != null)
                 {
-                    VIntCoding.writeUnsignedVInt(bootstrappedAt.epoch() - prevEpoch, out);
-                    VIntCoding.writeVInt(bootstrappedAt.hlc() - prevHlc, out);
+                    VIntCoding.writeUnsignedVInt(readyAt.epoch() - prevEpoch, out);
+                    VIntCoding.writeVInt(readyAt.hlc() - prevHlc, out);
                     if (0 != (globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT))
-                        VIntCoding.writeUnsignedVInt(bootstrappedAt.flags(), out);
-                    VIntCoding.writeUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, bootstrappedAt.node.id), out);
+                        VIntCoding.writeUnsignedVInt(readyAt.flags(), out);
+                    VIntCoding.writeUnsignedVInt(Arrays.binarySearch(nodeIds, 0, nodeIdCount, readyAt.node.id), out);
                 }
                 if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
                     VIntCoding.writeVInt(cfk.maxUniqueHlc - prevHlc, out);
@@ -819,7 +819,7 @@ public class Serialize
                 long hlc = prevHlc + VIntCoding.readVInt(in);
                 int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
                 Id node = (Id)nodeIds[VIntCoding.readUnsignedVInt32(in)];
-                bounds = bounds.withBootstrappedAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
+                bounds = bounds.withReadyAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
             }
             if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
                 maxUniqueHlc = bounds.gcBefore.hlc() + VIntCoding.readVInt(in);
@@ -1143,9 +1143,9 @@ public class Serialize
 
     private static boolean hasBoundsFlags(CommandsForKey cfk)
     {
-        Timestamp bootstrappedAt = cfk.bootstrappedAt();
+        Timestamp readyAt = cfk.readyAt();
         Timestamp redundantBefore = cfk.redundantBefore();
-        return (bootstrappedAt != null && bootstrappedAt.flags() != RX_FLAGS) || (redundantBefore.flags() != RX_FLAGS);
+        return (readyAt != null && readyAt.flags() != RX_FLAGS) || (redundantBefore.flags() != RX_FLAGS);
     }
 
     private static final int RX_FLAGS = new TxnId(0, 0, TrackStable.bit(), ExclusiveSyncPoint, Range, Id.NONE).flags();

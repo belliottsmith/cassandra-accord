@@ -16,13 +16,24 @@
  * limitations under the License.
  */
 
-package accord.utils;
+package accord.local;
 
-import java.util.function.BiConsumer;
+import accord.utils.WrappableException;
 
-// TODO (required): introduce e.g. MapReduceConsumeSafeStore, to encapsulate
-public interface MapReduceConsume<I, O> extends MapReduce<I, O>, BiConsumer<O, Throwable>
+public class LogUnavailableException extends RuntimeException implements WrappableException<LogUnavailableException>
 {
+    public LogUnavailableException()
+    {
+    }
+
+    private LogUnavailableException(Throwable cause)
+    {
+        super(cause);
+    }
+
     @Override
-    void accept(O result, Throwable failure);
+    public LogUnavailableException wrap()
+    {
+        return new LogUnavailableException(this);
+    }
 }

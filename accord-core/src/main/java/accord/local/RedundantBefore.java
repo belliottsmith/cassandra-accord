@@ -58,7 +58,6 @@ import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.RedundantStatus.Coverage.SOME;
 import static accord.local.RedundantStatus.ONLY_LE_MASK;
 import static accord.local.RedundantStatus.NOT_OWNED_ONLY;
-import static accord.local.RedundantStatus.PRE_BOOTSTRAP_OR_STALE_ONLY;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
@@ -67,21 +66,20 @@ import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STOR
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
-import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP;
-import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
+import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.WAS_OWNED_SYNCED;
 import static accord.local.RedundantStatus.WAS_OWNED_ONLY;
 import static accord.local.RedundantStatus.WAS_OWNED_RETIRED;
 import static accord.local.RedundantStatus.addHistory;
 import static accord.local.RedundantStatus.any;
-import static accord.local.RedundantStatus.mask;
+import static accord.local.RedundantStatus.shiftedMask;
 import static accord.local.RedundantStatus.matchesMask;
 import static accord.local.RedundantStatus.toAll;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 import static accord.utils.ArrayBuffers.cachedAny;
-import static accord.utils.ArrayBuffers.cachedShorts;
+import static accord.utils.ArrayBuffers.cachedInts;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.require;
 import static accord.utils.Invariants.requireStrictlyOrdered;
@@ -105,16 +103,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     {
         // start inclusive, end exclusive
         public final long startEpoch, endEpoch;
-        // TODO (required): this should probably be preBootstrapOrStale OR WE SHOULD REVISIT (e.g. HAS_CONSENSUS_LOG)
-        public final TxnId bootstrappedAt;
+        public final TxnId readyAt;
         public final TxnId gcBefore;
         public final TxnId locallyAppliedBefore;
 
-        public QuickBounds(long startEpoch, long endEpoch, TxnId bootstrappedAt, TxnId gcBefore, TxnId locallyAppliedBefore)
+        public QuickBounds(long startEpoch, long endEpoch, TxnId readyAt, TxnId gcBefore, TxnId locallyAppliedBefore)
         {
             this.startEpoch = startEpoch;
             this.endEpoch = endEpoch;
-            this.bootstrappedAt = bootstrappedAt;
+            this.readyAt = readyAt;
             this.gcBefore = gcBefore;
             this.locallyAppliedBefore = locallyAppliedBefore;
         }
@@ -123,44 +120,44 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         {
             if (startEpoch == this.startEpoch && endEpoch == this.endEpoch)
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, gcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, locallyAppliedBefore);
         }
 
-        public QuickBounds withGcBeforeBeforeAtLeast(TxnId newGcBefore)
+        public QuickBounds withReadyAtLeast(TxnId newReadyAt)
         {
-            if (newGcBefore.equals(this.gcBefore))
+            if (newReadyAt.equals(readyAt))
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, newGcBefore, locallyAppliedBefore);
-        }
-
-        public QuickBounds withBootstrappedAtLeast(TxnId newBootstrappedAt)
-        {
-            if (newBootstrappedAt.equals(bootstrappedAt))
-                return this;
-            return new QuickBounds(startEpoch, endEpoch, newBootstrappedAt, gcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, newReadyAt, gcBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withLocallyAppliedAtLeast(TxnId newLocallyAppliedBefore)
         {
             if (newLocallyAppliedBefore.equals(locallyAppliedBefore))
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, bootstrappedAt, gcBefore, newLocallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, newLocallyAppliedBefore);
+        }
+
+        public QuickBounds withGcBeforeBeforeAtLeast(TxnId newGcBefore)
+        {
+            if (newGcBefore.equals(this.gcBefore))
+                return this;
+            return new QuickBounds(startEpoch, endEpoch, readyAt, newGcBefore, locallyAppliedBefore);
         }
     }
 
     public static class Bounds extends QuickBounds
     {
-        public static final Bounds NONE = new Bounds(null, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NO_TXNIDS, new short[0], null);
+        public static final Bounds NONE = new Bounds(null, Long.MIN_VALUE, Long.MAX_VALUE, TxnId.NO_TXNIDS, new int[0], null);
 
         // TODO (desired): we don't need to maintain this now, can migrate to ReducingRangeMap.foldWithBounds
         public final Range range;
 
-        // TODO (expected): we need to eventually support GCing PRE_BOOTSTRAP bounds
+        // TODO (expected): we need to eventually support GCing UNREADY bounds
         //  once we know storage layer has fully expunged earlier TxnId
         //  OR we may be able to safely overwrite them with some better invariants and adequate testing
         public final TxnId[] bounds;
         // two entries per bound, first for equality (LE) matches, second for inequality (LT) matches
-        private final short[] statuses;
+        private final int[] statuses;
 
         private transient final long maxBoundEpoch, maxBoundHlc;
         public transient final TxnId depBound;
@@ -172,19 +169,19 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
          * See also {@link SafeCommandStore#safeToReadAt()}.
          */
         public final @Nullable Timestamp staleUntilAtLeast;
-        private transient final RedundantStatus noMatch;
         private transient RedundantStatus last = RedundantStatus.NONE;
 
-        public Bounds(Range range, long startEpoch, long endEpoch, TxnId[] bounds, short[] statuses, @Nullable Timestamp staleUntilAtLeast)
+        public Bounds(Range range, long startEpoch, long endEpoch, TxnId[] bounds, int[] statuses, @Nullable Timestamp staleUntilAtLeast)
         {
-            super(startEpoch, endEpoch, maxBound(bounds, statuses, PRE_BOOTSTRAP), maxBound(bounds, statuses, GC_BEFORE),
+            super(startEpoch, endEpoch,
+                  maxBound(bounds, statuses, UNREADY),
+                  maxBound(bounds, statuses, GC_BEFORE),
                   maxBound(bounds, statuses, LOCALLY_APPLIED));
             Invariants.require(statuses.length == bounds.length * 2);
             this.range = range;
             this.bounds = bounds;
             this.statuses = statuses;
             this.staleUntilAtLeast = staleUntilAtLeast;
-            this.noMatch = staleUntilAtLeast == null ? RedundantStatus.NONE : PRE_BOOTSTRAP_OR_STALE_ONLY;
             this.maxBoundEpoch = bounds.length == 0 ? 0 : bounds[0].epoch();
             this.maxBoundHlc = bounds.length == 0 ? 0 : bounds[0].hlc();
             this.depBound = depBound(bounds, statuses);
@@ -193,9 +190,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             require(isShardBound(gcBefore) || isMinBound(gcBefore));
         }
 
-        public final int status(int index)
+        public final long status(int index)
         {
-            return statuses[index] & 0xFFFF;
+            return statuses[index] & 0xFFFFFFFFL;
         }
 
         public static Bounds create(Range range, TxnId bound, SomeStatus status, @Nullable Timestamp staleUntilAtLeast)
@@ -205,12 +202,12 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         public static Bounds create(Range range, long startEpoch, long endEpoch, TxnId bound, SomeStatus status, @Nullable Timestamp staleUntilAtLeast)
         {
-            return new Bounds(range, startEpoch, endEpoch, new TxnId[] { bound }, new short[] { (short) (status.encoded & ONLY_LE_MASK), (short)status.encoded }, staleUntilAtLeast);
+            return new Bounds(range, startEpoch, endEpoch, new TxnId[] { bound }, new int[] { (int) (status.encoded & ONLY_LE_MASK), (int)status.encoded }, staleUntilAtLeast);
         }
 
-        private static TxnId depBound(TxnId[] bounds, short[] statuses)
+        private static TxnId depBound(TxnId[] bounds, int[] statuses)
         {
-            TxnId depBound = maxBound(bounds, statuses, mask(SHARD_APPLIED, SOME) | mask(LOCALLY_APPLIED, SOME));
+            TxnId depBound = maxBound(bounds, statuses, shiftedMask(SHARD_APPLIED, SOME) | shiftedMask(LOCALLY_APPLIED, SOME));
             if (depBound.equals(TxnId.NONE))
                 return null;
             return depBound.addFlag(SHARD_BOUND);
@@ -259,19 +256,19 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             long startEpoch = Long.max(cur.startEpoch, add.startEpoch);
             long endEpoch = Long.min(cur.endEpoch, add.endEpoch);
             TxnId[] mergedBounds;
-            short[] mergedStatuses;
+            int[] mergedStatuses;
             {
                 Object[] boundBuf = null;
-                short[] statusBuf = null;
+                int[] statusBuf = null;
                 int mergedCount = 0;
-                int prevLtStatus = staleUntilAtLeast == null ? 0 : PRE_BOOTSTRAP_OR_STALE_ONLY.encodedPart(SOME);
-                int prevExistingLtStatus = prevLtStatus; // we don't apply PRE_BOOTSTRAP_MERGE_MASK as this already applied
+                long prevLtStatus = 0;
+                long prevExistingLtStatus = prevLtStatus; // we don't apply UNREADY_MERGE_MASK as this already applied
                 int i = 0, j = 0;
                 while (i < cur.bounds.length || j < add.bounds.length)
                 {
                     int c = i == cur.bounds.length ? -1 : j == add.bounds.length ? 1 : cur.bounds[i].compareTo(add.bounds[j]);
                     TxnId nextBound;
-                    int leStatus, ltStatus;
+                    long leStatus, ltStatus;
                     if (c > 0)
                     {
                         nextBound = cur.bounds[i];
@@ -295,18 +292,18 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                         ++j;
                     }
 
-                    // we keep the start/end bound of an equal pre-bootstrap run, so that we correctly apply Property.mergeWithPreBootstrap
+                    // we keep the start/end bound of an equal pre-bootstrap run, so that we correctly apply Property.mergeWithUnready
                     if (leStatus == ltStatus && ltStatus == prevLtStatus)
                     {
-                        if (!any(prevLtStatus, PRE_BOOTSTRAP_OR_STALE))
+                        if (!any(prevLtStatus, UNREADY))
                             continue;
 
                         if (mergedCount >= 2)
                         {
-                            short[] prev = statusBuf != null ? statusBuf : cur.statuses;
-                            int prev2LtStatus = 0xFFFF & prev[mergedCount*2 - 3];
-                            int prevLeStatus = 0xFFFF & prev[mergedCount*2 - 2];
-                            Invariants.require(prevLtStatus == (0xFFFF & prev[mergedCount*2 - 1]));
+                            int[] prev = statusBuf != null ? statusBuf : cur.statuses;
+                            long prev2LtStatus = 0xFFFFFFFFL & prev[mergedCount*2 - 3];
+                            long prevLeStatus = 0xFFFFFFFFL & prev[mergedCount*2 - 2];
+                            Invariants.require(prevLtStatus == (0xFFFFFFFFL & prev[mergedCount*2 - 1]));
                             if (prevLtStatus == prev2LtStatus && prevLeStatus == prev2LtStatus)
                                 --mergedCount;
                         }
@@ -323,13 +320,13 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                         }
 
                         boundBuf = cachedAny().get(cur.bounds.length + add.bounds.length);
-                        statusBuf = cachedShorts().getShorts((cur.bounds.length + add.bounds.length) * 2);
+                        statusBuf = cachedInts().getInts((cur.bounds.length + add.bounds.length) * 2);
                         System.arraycopy(cur.bounds, 0, boundBuf, 0, mergedCount);
                         System.arraycopy(cur.statuses, 0, statusBuf, 0, mergedCount*2);
                     }
                     boundBuf[mergedCount] = nextBound;
-                    statusBuf[mergedCount*2] = (short) leStatus;
-                    statusBuf[mergedCount*2 + 1] = (short) ltStatus;
+                    statusBuf[mergedCount*2] = (int) leStatus;
+                    statusBuf[mergedCount*2 + 1] = (int) ltStatus;
                     ++mergedCount;
                     prevLtStatus = ltStatus;
                 }
@@ -342,22 +339,22 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                 else
                 {
                     mergedBounds = new TxnId[mergedCount];
-                    mergedStatuses = new short[mergedCount*2];
+                    mergedStatuses = new int[mergedCount*2];
                     System.arraycopy(boundBuf, 0, mergedBounds, 0, mergedCount);
                     System.arraycopy(statusBuf, 0, mergedStatuses, 0, mergedCount*2);
                     cachedAny().forceDiscard(boundBuf, mergedCount);
-                    cachedShorts().forceDiscard(statusBuf);
+                    cachedInts().forceDiscard(statusBuf);
                 }
             }
 
             return new Bounds(range, startEpoch, endEpoch, mergedBounds, mergedStatuses, staleUntilAtLeast);
         }
 
-        private static Timestamp maybeClearStaleUntilAtLeast(Timestamp staleUntilAtLeast, TxnId[] bounds, short[] statuses)
+        private static Timestamp maybeClearStaleUntilAtLeast(Timestamp staleUntilAtLeast, TxnId[] bounds, int[] statuses)
         {
             for (int i = 0 ; staleUntilAtLeast != null && i < bounds.length && bounds[i].compareTo(staleUntilAtLeast) > 0 ; ++i)
             {
-                if (any(statuses[i], PRE_BOOTSTRAP))
+                if (any(statuses[i], UNREADY))
                     staleUntilAtLeast = null;
             }
             return staleUntilAtLeast;
@@ -366,7 +363,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         public Bounds with(TxnId newBound, SomeStatus addStatus)
         {
             // TODO (desired): introduce special-cased faster merge for adding a single value
-            return merge(range, this, new Bounds(range, Long.MIN_VALUE, Long.MAX_VALUE, new TxnId[] { newBound }, new short[] { (short)addStatus.encoded }, null));
+            return merge(range, this, new Bounds(range, Long.MIN_VALUE, Long.MAX_VALUE, new TxnId[] { newBound }, new int[] { (int)addStatus.encoded }, null));
         }
 
         @VisibleForImplementation
@@ -391,10 +388,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (a.compareLessEqual != b.compareLessEqual)
                 return is(txnId, a) && is(txnId, b);
 
-            int propertyMask = mask(a, SOME) | mask(b, SOME);
-            if (matchesMask(noMatch.encoded, propertyMask))
-                return true;
-
+            long propertyMask = shiftedMask(a, SOME) | shiftedMask(b, SOME);
             if (noBoundMatches(txnId))
                 return false;
 
@@ -406,9 +400,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         {
             Invariants.require(test != GC_BEFORE);
             if (noBoundMatches(txnId))
-                return noMatch.any(test);
+                return false;
 
-            if (test.mergeWithPreBootstrapOrStale)
+            if (test.mergeWithUnready)
                 return txnId.compareTo(bound(test)) <= test.compareLessEqual;
 
             int i = findStatusIndexInternal(txnId);
@@ -418,16 +412,16 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         TxnId bound(Property property)
         {
             Invariants.require(property != GC_BEFORE);
-            Invariants.require(property.mergeWithPreBootstrapOrStale);
+            Invariants.require(property.mergeWithUnready);
             return maxBound(property);
         }
 
         TxnId bound(Property a, Property b)
         {
             Invariants.require(a != GC_BEFORE);
-            Invariants.require(a.mergeWithPreBootstrapOrStale);
+            Invariants.require(a.mergeWithUnready);
             Invariants.require(b != GC_BEFORE);
-            Invariants.require(b.mergeWithPreBootstrapOrStale);
+            Invariants.require(b.mergeWithUnready);
             return maxBoundBoth(a, b);
         }
 
@@ -464,15 +458,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         public TxnId maxBoundBoth(Property a, Property b)
         {
-            return maxBound(bounds, statuses, mask(a, SOME) | mask(b, SOME));
+            return maxBound(bounds, statuses, shiftedMask(a, SOME) | shiftedMask(b, SOME));
         }
 
-        static TxnId maxBound(TxnId[] bounds, short[] statuses, Property property)
+        static TxnId maxBound(TxnId[] bounds, int[] statuses, Property property)
         {
-            return maxBound(bounds, statuses, mask(property, SOME));
+            return maxBound(bounds, statuses, shiftedMask(property, SOME));
         }
 
-        static TxnId maxBound(TxnId[] bounds, short[] statuses, int propertyMask)
+        static TxnId maxBound(TxnId[] bounds, int[] statuses, long propertyMask)
         {
             // we ignore LT/LE, as this should be applied by the caller as part of comparing maxBound
             for (int i = 1; i < statuses.length ; i += 2)
@@ -508,7 +502,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (bounds == null)
                 return safeToRead;
 
-            if (bootstrapAt.compareTo(bounds.maxBootstrappedAt()) < 0 || (bounds.staleUntilAtLeast != null && bootstrapAt.compareTo(bounds.staleUntilAtLeast) < 0))
+            if (bootstrapAt.compareTo(bounds.maxReadyAt()) < 0 || (bounds.staleUntilAtLeast != null && bootstrapAt.compareTo(bounds.staleUntilAtLeast) < 0))
                 return safeToRead.without(Ranges.of(bounds.range));
 
             return safeToRead;
@@ -530,43 +524,42 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return TxnId.nonNullOrMax(max, get.apply(bounds));
         }
 
-        static Participants<?> withoutStaleOrPreBootstrap(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, @Nullable EpochSupplier executeAt)
+        static Participants<?> withoutLostAtExecutionOrUnready(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, EpochSupplier executeAt)
         {
             if (bounds == null)
                 return execute;
 
-            Invariants.require(txnId.isSyncPoint() || (executeAt == null ? !bounds.outOfBounds(txnId) : !bounds.outOfBounds(txnId, executeAt)));
-            if (bounds.is(txnId, PRE_BOOTSTRAP_OR_STALE))
+            if (bounds.endEpoch <= executeAt.epoch() || bounds.is(txnId, UNREADY))
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;
         }
 
-        static Participants<?> withoutStaleOrPreBootstrapOrLocallyRetired(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId)
+        static Participants<?> withoutUnreadyOrLocallyRetired(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId)
         {
             if (bounds == null)
                 return execute;
 
-            if (bounds.is(txnId, PRE_BOOTSTRAP_OR_STALE) || bounds.isLocallyRetired())
+            if (bounds.is(txnId, UNREADY) || bounds.isLocallyRetired())
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;
         }
 
-        static Participants<?> withoutRedundantAnd_StaleOrPreBootstrap(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, @Nullable Timestamp executeAt)
+        static Participants<?> withoutRedundantAnd_Unready(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, @Nullable Timestamp executeAt)
         {
             if (bounds == null)
                 return execute;
 
             boolean outOfBounds = executeAt == null ? bounds.outOfBounds(txnId) : bounds.outOfBounds(txnId, executeAt);
-            Invariants.expect(!outOfBounds, "Trying to apply withoutRedundantAnd_StaleOrPreBootstrap to %s for a range we don't own (%s), suggesting we computed ownership without an up-to-date epoch", txnId, bounds);
-            if (outOfBounds || bounds.is(txnId, SHARD_APPLIED, PRE_BOOTSTRAP_OR_STALE))
+            Invariants.expect(!outOfBounds, "Trying to apply withoutRedundantAnd_Unready to %s for a range we don't own (%s), suggesting we computed ownership without an up-to-date epoch", txnId, bounds);
+            if (outOfBounds || bounds.is(txnId, SHARD_APPLIED, UNREADY))
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;
         }
 
-        static Participants<?> withoutRedundantAnd_StaleOrPreBootstrapOrRetiredOrNotOwned(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, @Nullable Timestamp executeAtIfKnown)
+        static Participants<?> withoutRedundantAnd_UnreadyOrRetiredOrNotOwned(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, @Nullable Timestamp executeAtIfKnown)
         {
             if (bounds == null)
                 return execute;
@@ -575,7 +568,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (bounds.is(txnId, SHARD_APPLIED)
                 && ((bounds.endEpoch <= txnId.epoch() && bounds.isLocallyRetired())
                     || (executeAtIfKnown != null && executeAtIfKnown.epoch() < bounds.startEpoch)
-                    || bounds.is(txnId, PRE_BOOTSTRAP_OR_STALE)))
+                    || bounds.is(txnId, UNREADY)))
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;
@@ -647,15 +640,15 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return notRetired.without(Ranges.of(bounds.range));
         }
 
-        static Ranges withoutPreBootstrap(Bounds bounds, @Nonnull Ranges notPreBootstrap, TxnId txnId, Object ignore)
+        static Ranges withoutUnreadyOrLost(Bounds bounds, @Nonnull Ranges notUnready, TxnId txnId, Object ignore)
         {
             if (bounds == null)
-                return notPreBootstrap;
+                return notUnready;
 
-            if (bounds.is(txnId, PRE_BOOTSTRAP))
-                return notPreBootstrap.without(Ranges.of(bounds.range));
+            if (bounds.is(txnId, UNREADY))
+                return notUnready.without(Ranges.of(bounds.range));
 
-            return notPreBootstrap;
+            return notUnready;
         }
 
         RedundantStatus get(TxnId txnId, @Nullable Timestamp applyAtIfKnown)
@@ -673,7 +666,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         {
             int i = findStatusIndex(txnId);
             if (i < 0)
-                return noMatch;
+                return RedundantStatus.NONE;
 
             int status = statuses[i] & 0xFFFF;
             if (any(status, GC_BEFORE))
@@ -742,10 +735,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return maxBound(LOCALLY_APPLIED);
         }
 
-        // TODO (expected): check call-sites to see if can use something weaker such as redundantBefore
-        public final TxnId maxBootstrappedAt()
+        public final TxnId maxReadyAt()
         {
-            return bootstrappedAt;
+            return readyAt;
         }
 
         private boolean outOfBounds(EpochSupplier lb, EpochSupplier ub)
@@ -770,9 +762,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return endEpoch <= maxBound(LOCALLY_SYNCED).epoch();
         }
 
-        public boolean isLocallyRetiredOrPreBootstrap(TxnId txnId)
+        public boolean hasLostOwnership()
         {
-            return isLocallyRetired() || is(txnId, PRE_BOOTSTRAP_OR_STALE);
+            return endEpoch < Long.MAX_VALUE;
+        }
+
+        public boolean isLocallyRetiredOrUnready(TxnId txnId)
+        {
+            return isLocallyRetired() || is(txnId, UNREADY);
         }
 
         private boolean outOfBounds(Timestamp lb)
@@ -818,41 +815,40 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
     public static RedundantBefore EMPTY = new RedundantBefore();
 
-    private final Ranges staleRanges, locallyRetiredRanges;
-    private final TxnId maxBootstrap, maxShardAppliedBefore, maxGcBefore;
+    private final Ranges staleRanges, lostRanges;
+    private final TxnId maxStale, maxShardAppliedBefore, maxGcBefore;
     private final TxnId minShardAndLocallyAppliedBefore, minGcBefore;
     private final long minGcHlcBefore;
-    private final long maxStartEpoch, minLocallyRetiredEpoch;
+    private final long maxStartEpoch, minEndEpoch;
 
     private RedundantBefore()
     {
-        staleRanges = locallyRetiredRanges = Ranges.EMPTY;
-        maxBootstrap = maxShardAppliedBefore = maxGcBefore = TxnId.NONE;
+        staleRanges = lostRanges = Ranges.EMPTY;
+        maxStale = maxShardAppliedBefore = maxGcBefore = TxnId.NONE;
         minShardAndLocallyAppliedBefore = minGcBefore = TxnId.MAX;
         minGcHlcBefore = 0L;
         maxStartEpoch = 0;
-        minLocallyRetiredEpoch = Long.MAX_VALUE;
+        minEndEpoch = Long.MAX_VALUE;
     }
 
     RedundantBefore(boolean inclusiveEnds, RoutingKey[] starts, Bounds[] values)
     {
         super(inclusiveEnds, starts, values);
         staleRanges = extractRanges(values, b -> b.staleUntilAtLeast != null);
-        locallyRetiredRanges = extractRanges(values, Bounds::isLocallyRetired);
-        TxnId maxBootstrap = TxnId.NONE, maxGcBefore = TxnId.NONE, maxShardAppliedBefore = TxnId.NONE;
+        lostRanges = extractRanges(values, Bounds::hasLostOwnership);
+        TxnId maxUnready = TxnId.NONE, maxGcBefore = TxnId.NONE, maxShardAppliedBefore = TxnId.NONE;
         TxnId minShardAndLocallyRedundantBefore = TxnId.MAX, minGcBefore = TxnId.MAX;
         long minGcHlcBefore = Long.MAX_VALUE;
-        long minLocallyRetiredEpoch = Long.MAX_VALUE, maxStartEpoch = 0;
-        boolean hasLocallyRetired = !locallyRetiredRanges.isEmpty();
+        long maxStartEpoch = 0, minEndEpoch = Long.MAX_VALUE;
         for (Bounds bounds : values)
         {
             if (bounds == null)
                 continue;
 
             {
-                TxnId bootstrappedAt = bounds.maxBound(PRE_BOOTSTRAP_OR_STALE);
-                if (bootstrappedAt.compareTo(maxBootstrap) > 0)
-                    maxBootstrap = bootstrappedAt;
+                TxnId unready = bounds.maxBound(UNREADY);
+                if (unready.compareTo(maxUnready) > 0)
+                    maxUnready = unready;
             }
             {
                 TxnId gcBefore = bounds.maxBound(GC_BEFORE);
@@ -872,17 +868,17 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             }
             if (bounds.startEpoch > maxStartEpoch)
                 maxStartEpoch = bounds.startEpoch;
-            if (hasLocallyRetired && bounds.isLocallyRetired() && bounds.endEpoch < minLocallyRetiredEpoch)
-                minLocallyRetiredEpoch = bounds.endEpoch;
+            if (bounds.endEpoch < minEndEpoch)
+                minEndEpoch = bounds.endEpoch;
         }
-        this.maxBootstrap = maxBootstrap;
+        this.maxStale = maxUnready;
         this.maxShardAppliedBefore = maxShardAppliedBefore;
         this.maxGcBefore = maxGcBefore;
         this.minShardAndLocallyAppliedBefore = minShardAndLocallyRedundantBefore;
         this.minGcBefore = minGcBefore;
         this.minGcHlcBefore = minGcHlcBefore;
         this.maxStartEpoch = maxStartEpoch;
-        this.minLocallyRetiredEpoch = minLocallyRetiredEpoch;
+        this.minEndEpoch = minEndEpoch;
         checkParanoid(starts, values);
     }
 
@@ -928,7 +924,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         if (ranges.isEmpty())
             return EMPTY;
 
-        Bounds bounds = new Bounds(null, startEpoch, endEpoch, new TxnId[] { bound }, new short[] { (short) (status.encoded & ONLY_LE_MASK), (short)status.encoded }, staleUntilAtLeast);
+        Bounds bounds = new Bounds(null, startEpoch, endEpoch, new TxnId[] { bound }, new int[] { (int) (status.encoded & ONLY_LE_MASK), (int)status.encoded }, staleUntilAtLeast);
         Builder builder = new Builder(ranges.get(0).endInclusive(), ranges.size() * 2);
         for (int i = 0 ; i < ranges.size() ; ++i)
         {
@@ -964,9 +960,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
      * RedundantStatus.REDUNDANT overrides PRE_BOOTSTRAP; to avoid complicating that state machine,
      * for cases where we care independently about the overall pre-bootstrap state we have a separate mechanism
      */
-    public Coverage locallyDefunct(TxnId txnId, Participants<?> participants)
+    public boolean isLocallyDefunct(TxnId txnId, Participants<?> participants, Coverage coverage)
     {
-        return status(txnId, null, participants).get(LOCALLY_DEFUNCT);
+        return status(txnId, null, participants).is(LOCALLY_DEFUNCT, coverage);
     }
 
     public <T extends Deps> RangeDeps.BuilderByRange collectDeps(Routables<?> participants, RangeDeps.BuilderByRange builder, EpochSupplier minEpoch, EpochSupplier executeAt)
@@ -1015,6 +1011,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         return foldl(ranges, Bounds::withoutAnyRetired, ranges, r -> false);
     }
 
+    public Ranges removeLocallyRetired(Ranges ranges)
+    {
+        return ranges.without(lostRanges);
+    }
+
     public TxnId minShardAndLocallyAppliedBefore()
     {
         return minShardAndLocallyAppliedBefore;
@@ -1036,16 +1037,6 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     }
 
     /**
-     * Subtract any ranges we consider stale or pre-bootstrap
-     */
-    public Ranges removePreBootstrap(TxnId txnId, Ranges ranges)
-    {
-        if (maxBootstrap.compareTo(txnId) <= 0)
-            return ranges;
-        return foldl(ranges, Bounds::withoutPreBootstrap, ranges, txnId, null);
-    }
-
-    /**
      * Subtract anything we don't need to coordinate (because they are known to be shard durable),
      * and we don't execute locally, i.e. are pre-bootstrap or stale (or for RX are on ranges that are already retired)
      *
@@ -1055,58 +1046,56 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     {
         if (txnId.isSyncPoint())
         {
-            if (!mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(txnId, executeAt, participants))
+            if (!mayFilterUnreadyOrNotOwned(txnId, executeAt, participants))
                 return participants;
 
-            return foldl(participants, Bounds::withoutRedundantAnd_StaleOrPreBootstrapOrRetiredOrNotOwned, participants, txnId, executeAt);
+            return foldl(participants, Bounds::withoutRedundantAnd_UnreadyOrRetiredOrNotOwned, participants, txnId, executeAt);
         }
         else
         {
-            if (!mayFilterStaleOrPreBootstrap(txnId, participants))
+            if (!mayFilterStale(txnId, participants))
                 return participants;
 
-            return foldl(participants, Bounds::withoutRedundantAnd_StaleOrPreBootstrap, participants, txnId, executeAt);
+            return foldl(participants, Bounds::withoutRedundantAnd_Unready, participants, txnId, executeAt);
         }
     }
 
     /**
      * Subtract anything we won't execute locally, i.e. are pre-bootstrap or stale (or for RX are on ranges that are already retired)
+     * but also anything that executes in an epoch we don't own
      */
-    public Participants<?> expectToExecute(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
+    public Participants<?> expectToExecute(TxnId txnId, @Nonnull Timestamp executeAt, Participants<?> participants)
     {
-        if (!mayFilterStaleOrPreBootstrap(txnId, participants))
-            return participants;
-
-        return foldl(participants, Bounds::withoutStaleOrPreBootstrap, participants, txnId, executeAt);
+        Invariants.require(executeAt != null);
+        return foldl(participants, Bounds::withoutLostAtExecutionOrUnready, (Participants)participants, txnId, executeAt);
     }
 
     /**
      * Subtract anything we won't execute locally, i.e. are pre-bootstrap or stale or retired
      */
-    public Participants<?> expectExclusiveSyncPointToWaitOn(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
+    public Participants<?> expectExclusiveSyncPointToWaitOn(TxnId txnId, @Nonnull Timestamp executeAt, Participants<?> participants)
     {
+        Invariants.require(executeAt != null);
         Invariants.require(txnId.isSyncPoint());
-        if (!mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(txnId, executeAt, participants))
-            return participants;
-
-        return foldl(participants, Bounds::withoutStaleOrPreBootstrapOrLocallyRetired, participants, txnId);
+        return foldl(participants, Bounds::withoutUnreadyOrLocallyRetired, participants, txnId);
     }
 
     public boolean mayFilter(TxnId txnId, @Nullable Timestamp executeAtIfKnown, Participants<?> participants)
     {
-        return mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(txnId, executeAtIfKnown, participants);
+        return mayFilterUnreadyOrNotOwned(txnId, executeAtIfKnown, participants);
     }
 
-    private boolean mayFilterStaleOrPreBootstrapOrRetiredOrNotOwned(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
+    private boolean mayFilterUnreadyOrNotOwned(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
     {
-        return (minLocallyRetiredEpoch <= txnId.epoch() && locallyRetiredRanges.intersects(participants))
+        long maxEpoch = (executeAt == null ? txnId : executeAt).epoch();
+        return (minEndEpoch <= maxEpoch && lostRanges.intersects(participants))
                || (executeAt != null && executeAt.epoch() < maxStartEpoch)
-               || mayFilterStaleOrPreBootstrap(txnId, participants);
+               || mayFilterStale(txnId, participants);
     }
 
-    private boolean mayFilterStaleOrPreBootstrap(TxnId txnId, Participants<?> participants)
+    private boolean mayFilterStale(TxnId txnId, Participants<?> participants)
     {
-        return maxBootstrap.compareTo(txnId) > 0 || (staleRanges != null && staleRanges.intersects(participants));
+        return maxStale.compareTo(txnId) > 0 || (staleRanges != null && staleRanges.intersects(participants));
     }
 
     /**
@@ -1241,7 +1230,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         RangeDeps rangeDeps = builder.directRangeDeps;
         foldl(participants, (e, s, d, b) -> {
-            int bootstrapIdx = d.txnIdsWithFlags().find(e.maxBootstrappedAt());
+            int bootstrapIdx = d.txnIdsWithFlags().find(e.maxReadyAt());
             if (bootstrapIdx < 0) bootstrapIdx = -1 - bootstrapIdx;
             s.bootstrapIdx = bootstrapIdx;
 
@@ -1296,7 +1285,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     {
         return "gc:" + toString(GC_BEFORE)
                + "\nlocal:" + toString(LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE)
-               + "\nbootstrap:" + toString(PRE_BOOTSTRAP);
+               + "\nbootstrap:" + toString(UNREADY);
     }
 
     private String toString(Property p1)

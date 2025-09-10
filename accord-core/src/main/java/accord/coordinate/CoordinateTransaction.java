@@ -34,13 +34,14 @@ import accord.local.Commands;
 import accord.local.DepsCalculator;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
-import accord.local.PreLoadContext;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.PreAccept.PreAcceptNack;
 import accord.messages.PreAccept.PreAcceptReply;
+import accord.primitives.Route;
 import accord.primitives.Status;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
@@ -52,7 +53,6 @@ import accord.primitives.FullRoute;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.utils.MapReduceConsume;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -203,16 +203,21 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     }
 
     enum LocalExecuteState { PENDING, SUCCESS, TIMEOUT}
-    class LocalExecute implements PreLoadContext, MapReduceConsume<SafeCommandStore, PreAcceptReply>, Timeouts.Timeout
+    class LocalExecute extends MapReduceConsumeCommandStores<Route<?>, PreAcceptReply> implements Timeouts.Timeout
     {
         LocalExecuteState state = LocalExecuteState.PENDING;
         Cancellable cancel;
         RegisteredTimeout timeout;
 
+        protected LocalExecute()
+        {
+            super(route);
+        }
+
         void start()
         {
             markSelfContacted();
-            Cancellable cancel = node.mapReduceConsumeLocal(this, route, topologies.oldestEpoch(), topologies.currentEpoch(), this);
+            Cancellable cancel = node.commandStores().mapReduceConsume(topologies.oldestEpoch(), topologies.currentEpoch(), this);
             long expiresAt = node.agent().selfExpiresAt(txnId, Status.Phase.PreAccept, MICROSECONDS);
             RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
             synchronized (this)
@@ -265,7 +270,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         }
 
         @Override
-        public PreAcceptReply apply(SafeCommandStore safeStore)
+        public PreAcceptReply applyInternal(SafeCommandStore safeStore)
         {
             long minEpoch = topologies.oldestEpoch();
             StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, txnId.epoch());

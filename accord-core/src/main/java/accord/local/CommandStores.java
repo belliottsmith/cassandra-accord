@@ -27,12 +27,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -65,16 +64,14 @@ import accord.topology.Topology;
 import accord.utils.IndexedQuadConsumer;
 import accord.utils.IndexedRangeQuadConsumer;
 import accord.utils.Invariants;
-import accord.utils.MapReduce;
-import accord.utils.MapReduceConsume;
 import accord.utils.RandomSource;
 import accord.utils.Reduce;
 import accord.utils.SearchableRangeList;
 import accord.utils.LargeBitSet;
-import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.Hashing;
@@ -82,6 +79,9 @@ import org.agrona.collections.Int2IntHashMap;
 import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ConfigurationService.EpochReady.done;
+import static accord.api.DataStore.FetchKind.Sync;
+import static accord.local.CommandStores.BootstrapRangeAction.NO_BOOTSTRAP;
+import static accord.local.CommandStores.BootstrapRangeAction.SAFE_BOOTSTRAP;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 import static java.util.stream.Collectors.toList;
@@ -680,14 +680,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return current.local;
     }
 
-    public void forEach(BiConsumer<CommandStore, RangesForEpoch> forEach)
-    {
-        for (ShardHolder shard : current.shards)
-        {
-            forEach.accept(shard.store, shard.ranges);
-        }
-    }
-
     public DataStore dataStore()
     {
         return supplier.store;
@@ -705,9 +697,31 @@ public abstract class CommandStores implements AsyncExecutorFactory
         }
     }
 
-    protected boolean shouldBootstrap(Node node, Topology local, Topology newLocalTopology, Range add)
+    public enum BootstrapRangeAction
     {
-        return newLocalTopology.epoch() != 1;
+        NO_BOOTSTRAP, SAFE_BOOTSTRAP, UNSAFE_BOOTSTRAP
+    }
+
+    protected BootstrapRangeAction shouldBootstrap(Node node, Topology prevGlobal, Topology newLocalTopology, Range add)
+    {
+        if (newLocalTopology.epoch() == 1 || !prevGlobal.ranges().contains(add))
+            return NO_BOOTSTRAP;
+
+        return SAFE_BOOTSTRAP;
+    }
+
+    public AsyncResult<Void> rebootstrap(Node node)
+    {
+        List<AsyncResult<EpochReady>> results = new ArrayList<>();
+        Snapshot snapshot = current;
+        for (ShardHolder shard : snapshot.shards)
+            results.add(shard.store.startUnsafeBootstrap(node, shard.ranges.all(), snapshot.global.epoch(), Sync));
+        return AsyncResults.allOf(results).flatMap(list -> {
+            return AsyncChains.reduce(list.stream()
+                                             .flatMap(b -> Stream.of(b.reads.chain(), b.coordinate.chain()))
+                                             .collect(Collectors.toList()),
+                                      Reduce.toNull()).beginAsResult();
+        });
     }
 
     private synchronized TopologyUpdate updateTopology(Node node, Snapshot prev, Topology newTopology, boolean startSync)
@@ -767,11 +781,12 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder));
                 shard.ranges = rangesForEpoch;
 
-                Map<Boolean, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range));
-                if (partitioned.containsKey(false))
-                    bootstrapUpdates.add(shard.store.initialise(epoch, partitioned.get(false)));
-                if (partitioned.containsKey(true))
-                    bootstrapUpdates.add(shard.store.bootstrapper(node, partitioned.get(true), newLocalTopology.epoch()));
+                Map<BootstrapRangeAction, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range));
+                for (Map.Entry<BootstrapRangeAction, Ranges> entry : partitioned.entrySet())
+                {
+                    BootstrapRangeAction action = entry.getKey();
+                    bootstrapUpdates.add(shard.store.bootstrapper(node, entry.getValue(), newLocalTopology.epoch(), action));
+                }
                 result.add(shard);
             }
         }
@@ -816,95 +831,62 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return false;
     }
 
-    public <R> R unsafeFoldLeft(R initial, BiFunction<R, CommandStore, R> f)
-    {
-        Snapshot snapshot = current;
-        for (ShardHolder shard : snapshot.shards)
-            initial = f.apply(initial, shard.store);
-        return initial;
-    }
-
-    public AsyncChain<Void> forEach(PreLoadContext context, Consumer<SafeCommandStore> forEach)
-    {
-        List<AsyncChain<Void>> list = new ArrayList<>();
-        Snapshot snapshot = current;
-        for (ShardHolder shard : snapshot.shards)
-            list.add(shard.store.chain(context, forEach));
-        return AsyncChains.reduce(list, Reduce.toNull(), null);
-    }
-
-    public void forEachCommandStore(Consumer<CommandStore> forEach)
+    public void forAllUnsafe(Consumer<CommandStore> forEach)
     {
         Snapshot snapshot = current;
         for (ShardHolder shard : snapshot.shards)
             forEach.accept(shard.store);
     }
 
-    public AsyncChain<Void> ifLocal(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
+    public AsyncChain<Void> forAll(String reason, Consumer<SafeCommandStore> forEach)
     {
-        return forEach(context, RoutingKeys.of(key), minEpoch, maxEpoch, forEach, false);
-    }
-
-    public AsyncChain<Void> forEach(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
-    {
-        return forEach(context, RoutingKeys.of(key), minEpoch, maxEpoch, forEach, true);
-    }
-
-    public AsyncChain<Void> forEach(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
-    {
-        return forEach(context, keys, minEpoch, maxEpoch, forEach, true);
-    }
-
-    private AsyncChain<Void> forEach(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach, boolean matchesMultiple)
-    {
-        return this.mapReduce(context, keys, minEpoch, maxEpoch, new MapReduce<>()
+        return mapReduce(snapshot -> Stream.of(snapshot.shards).map(shard -> shard.store).iterator(), new MapReduceCommandStores<>(RoutingKeys.EMPTY)
         {
+            @Override public Void reduce(Void o1, Void o2) { return null; }
+            @Override public TxnId primaryTxnId() { return null; }
+            @Override public String reason() { return reason; }
             @Override
-            public Void apply(SafeCommandStore in)
+            protected Void applyInternal(SafeCommandStore safeStore)
             {
-                forEach.accept(in);
+                forEach.accept(safeStore);
                 return null;
-            }
-
-            @Override
-            public Void reduce(Void o1, Void o2)
-            {
-                if (!matchesMultiple && minEpoch == maxEpoch)
-                    throw new IllegalStateException();
-
-                return null;
-            }
-
-            @Override
-            public String toString()
-            {
-                return forEach.getClass().getName();
             }
         });
     }
 
-    public AsyncChain<Void> forEach(PreLoadContext context, StoreSelector selector, Consumer<SafeCommandStore> forEach)
+    public AsyncChain<Void> forEach(String reason, Participants<?> participants, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
     {
-        return this.mapReduce(context, selector, new MapReduce<>()
+        return forEach(reason, null, participants, minEpoch, maxEpoch, forEach);
+    }
+
+    public AsyncChain<Void> forEach(String reason, TxnId txnId, Participants<?> participants, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
+    {
+        return forEach(reason, txnId, participants, LoadKeys.SYNC, LoadKeysFor.READ_WRITE,  minEpoch, maxEpoch, forEach);
+    }
+
+    public AsyncChain<Void> forEach(String reason, TxnId txnId, Participants<?> participants, LoadKeys loadKeys, LoadKeysFor loadKeysFor, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
+    {
+        return mapReduce(StoreFinder.selector(participants, minEpoch, maxEpoch), new MapReduceCommandStores<Participants<?>, Void>(participants)
         {
+            @Override public Unseekables<?> keys() { return participants; }
+            @Override public LoadKeys loadKeys() { return loadKeys;}
+            @Override public LoadKeysFor loadKeysFor() { return loadKeysFor; }
+            @Override public Void reduce(Void o1, Void o2) { return null; }
+            @Override public TxnId primaryTxnId() { return txnId; }
+            @Override public String reason() { return reason; }
             @Override
-            public Void apply(SafeCommandStore in)
+            protected Void applyInternal(SafeCommandStore safeStore)
             {
-                forEach.accept(in);
+                forEach.accept(safeStore);
                 return null;
             }
-            @Override
-            public Void reduce(Void o1, Void o2) { return null; }
-            @Override public String toString() { return forEach.getClass().getName(); }
         });
     }
 
-    /**
-     * See {@link #mapReduceConsume(PreLoadContext, Unseekables, long, long, MapReduceConsume)}
-     */
-    public <O> Cancellable mapReduceConsume(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    public <O> Cancellable mapReduceConsume(long minEpoch, long maxEpoch, MapReduceConsumeCommandStores<?, O> mapReduceConsume)
     {
-        return mapReduceConsume(context, RoutingKeys.of(key), minEpoch, maxEpoch, mapReduceConsume);
+        AsyncChain<O> reduced = mapReduce(StoreFinder.selector(mapReduceConsume.scope, minEpoch, maxEpoch), mapReduceConsume);
+        return reduced.begin(mapReduceConsume);
     }
 
     /**
@@ -913,121 +895,36 @@ public abstract class CommandStores implements AsyncExecutorFactory
      *
      * Note that {@code reduce} and {@code accept} are invoked by only one thread, and never concurrently with {@code apply},
      * so they do not require mutual exclusion.
-     *
-     * Implementations are expected to invoke {@link #mapReduceConsume(PreLoadContext, Unseekables, long, long, MapReduceConsume)}
      */
-    protected <O> Cancellable mapReduceConsume(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    public  <O> Cancellable mapReduceConsume(StoreSelector selector, MapReduceConsumeCommandStores<?, O> mapReduceConsume)
     {
-        AsyncChain<O> reduced = mapReduce(context, keys, minEpoch, maxEpoch, mapReduceConsume);
+        AsyncChain<O> reduced = mapReduce(selector, mapReduceConsume);
         return reduced.begin(mapReduceConsume);
     }
 
-    protected <O> Cancellable mapReduceConsume(PreLoadContext context, StoreSelector selector, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    public <O> Cancellable mapReduceConsume(IntStream commandStoreIds, MapReduceConsumeCommandStores<?, O> mapReduceConsume)
     {
-        AsyncChain<O> reduced = mapReduce(context, selector, mapReduceConsume);
+        AsyncChain<O> reduced = mapReduce(commandStoreIds, mapReduceConsume);
         return reduced.begin(mapReduceConsume);
     }
 
-    public  <O> Cancellable mapReduceConsume(PreLoadContext context, IntStream commandStoreIds, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
+    public <O> AsyncChain<O> mapReduce(IntStream commandStoreIds, MapReduceCommandStores<?, O> mapReduce)
     {
-        AsyncChain<O> reduced = mapReduce(context, commandStoreIds, mapReduceConsume);
-        return reduced.begin(mapReduceConsume);
+        return mapReduce(snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
     }
 
-    public <O> AsyncChain<O> mapReduce(PreLoadContext context, Unseekables<?> unseekables, long minEpoch, long maxEpoch, MapReduce<? super SafeCommandStore, O> mapReduce)
-    {
-        // TODO (desired): we shouldn't need to allocate a new lambda here
-        return mapReduce(CommandStore::chain, context, mapReduce, mapReduce, unseekables, minEpoch, maxEpoch);
-    }
-
-    public <O> Cancellable mapReduceConsume(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<O, O> reduce, BiConsumer<? super O, Throwable> consume)
-    {
-        AsyncChain<O> reduced = mapReduce(unseekables, minEpoch, maxEpoch, map, reduce);
-        return reduced.begin(consume);
-    }
-
-    public <O> AsyncChain<O> mapReduce(Unseekables<?> unseekables, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<O>> map, Reduce<O, O> reducer)
-    {
-        return mapReduce((commandStore, i, f) -> f.apply(commandStore), null, map, reducer, unseekables, minEpoch, maxEpoch);
-    }
-
-    public <O, P1, P2> AsyncChain<O> mapReduce(TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<O, O> reducer, Unseekables<?> unseekables, long minEpoch, long maxEpoch)
-    {
-        return mapReduce(StoreFinder.selector(unseekables, minEpoch, maxEpoch), applyMap, p1, p2, reducer);
-    }
-
-    public <O> AsyncChain<O> mapReduce(PreLoadContext context, StoreSelector selector, MapReduce<? super SafeCommandStore, O> mapReduce)
-    {
-        return mapReduce(selector, CommandStore::chain, context, mapReduce, mapReduce);
-    }
-
-    public <O, P1, P2> AsyncChain<O> mapReduce(StoreSelector selector, TriFunction<CommandStore, P1, P2, AsyncChain<O>> applyMap, P1 p1, P2 p2, Reduce<O, O> reducer)
+    public <O> AsyncChain<O> mapReduce(StoreSelector selector, MapReduceCommandStores<?, O> mapReduceConsume)
     {
         Snapshot snapshot = current;
         Iterator<CommandStore> stores = selector.select(snapshot);
         AsyncChain<O> chain = null;
         while (stores.hasNext())
         {
-            AsyncChain<O> next = applyMap.apply(stores.next(), p1, p2);
+            AsyncChain<O> next = mapReduceConsume.applyAsync(stores.next());
             if (next != null)
-                chain = chain != null ? AsyncChains.reduce(chain, next, reducer) : next;
+                chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
-    }
-
-    protected <O> AsyncChain<O> mapReduce(PreLoadContext context, IntStream commandStoreIds, MapReduce<? super SafeCommandStore, O> mapReduce)
-    {
-        return mapReduce(context, snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
-    }
-
-    public <O> Cancellable mapReduceConsume(PreLoadContext context, MapReduceConsume<? super SafeCommandStore, O> mapReduceConsume)
-    {
-        AsyncChain<O> reduced = mapReduce(context, mapReduceConsume);
-        return reduced.begin(mapReduceConsume);
-    }
-
-    protected <O> AsyncChain<O> mapReduce(PreLoadContext context, MapReduce<? super SafeCommandStore, O> mapReduce)
-    {
-        AsyncChain<O> chain = null;
-        for (ShardHolder shardHolder : current.shards)
-        {
-            CommandStore commandStore = shardHolder.store;
-            AsyncChain<O> next = commandStore.chain(context, mapReduce);
-            chain = chain != null ? AsyncChains.reduce(chain, next, mapReduce) : next;
-        }
-        return chain == null ? AsyncChains.success(null) : chain;
-    }
-
-
-    public <O> AsyncChain<List<O>> map(PreLoadContext context, Function<? super SafeCommandStore, O> mapper)
-    {
-        ShardHolder[] shards = current.shards;
-        List<AsyncChain<O>> results = new ArrayList<>(shards.length);
-
-        for (ShardHolder shard : shards)
-            results.add(shard.store.chain(context, mapper));
-
-        return AsyncChains.allOf(results);
-    }
-
-    protected <O> AsyncChain<List<O>> map(PreLoadContext context, IntStream commandStoreIds, Function<? super SafeCommandStore, O> map)
-    {
-        // TODO (low priority, efficiency): avoid using an array, or use a scratch buffer
-        int[] ids = commandStoreIds.toArray();
-        if (ids.length == 1)
-        {
-            return forId(ids[0]).chain(context, map.andThen(Collections::singletonList));
-        }
-
-        List<AsyncChain<O>> list = new ArrayList<>(ids.length);
-        for (int id : ids)
-        {
-            CommandStore commandStore = forId(id);
-            AsyncChain<O> next = commandStore.chain(context, map);
-            list.add(next);
-        }
-
-        return AsyncChains.allOf(list);
     }
 
     /**
@@ -1051,6 +948,57 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         nextId = maxId + 1;
         loadSnapshot(new Snapshot(shards, update.global.forNode(supplier.node.id()).trim(), update.global));
+    }
+
+    public synchronized void resetTopology(Journal.TopologyUpdate update)
+    {
+        // TODO: assert
+        Snapshot current = this.current;
+        Invariants.require(update.global.epoch() == current.local.epoch());
+        ShardHolder[] shards = new ShardHolder[current.commandStores.size()];
+        int i = 0;
+        int maxId = -1;
+        for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
+        {
+            int storeId = e.getKey();
+            RangesForEpoch ranges = e.getValue();
+            Invariants.require(ranges != null);
+            ShardHolder shard = new ShardHolder(current.byId(storeId), ranges);
+            EpochUpdateHolder holder = shard.store.epochUpdateHolder;
+            ranges.forEach(new BiConsumer<>()
+            {
+                RangesForEpoch accumulator = null;
+                Ranges prev = null;
+                public void accept(Long epoch, Ranges ranges)
+                {
+                    if (accumulator == null)
+                        accumulator = new RangesForEpoch(epoch, ranges);
+                    else
+                        accumulator = accumulator.withRanges(epoch, ranges);
+
+                    Ranges additions = Ranges.EMPTY;
+                    Ranges removals = Ranges.EMPTY;
+                    if (prev != null)
+                    {
+                        additions = ranges.without(prev);
+                        removals = prev.without(ranges);
+                    }
+
+                    if (!additions.isEmpty())
+                        holder.add(epoch, accumulator, additions);
+                    if (!removals.isEmpty())
+                        holder.remove(epoch, accumulator, removals);
+                    shard.store.unsafeUpdateRangesForEpoch();
+                    prev = ranges;
+                }
+            });
+
+            shards[storeId] = shard;
+            maxId = Math.max(maxId, storeId);
+        }
+
+        nextId = maxId + 1;
+        loadSnapshot(new Snapshot(shards, current.local, current.global));
     }
 
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology, boolean startSync)

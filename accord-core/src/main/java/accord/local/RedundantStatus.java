@@ -20,7 +20,6 @@ package accord.local;
 
 import accord.utils.Invariants;
 import accord.utils.TinyEnumSet;
-import accord.utils.UnhandledEnum;
 
 import static accord.local.RedundantStatus.Cmp.LT;
 import static accord.local.RedundantStatus.Cmp.LE;
@@ -32,14 +31,13 @@ import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_S
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
+import static accord.local.RedundantStatus.Property.LOG_UNAVAILABLE;
 import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
-import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP;
-import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
+import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.RedundantStatus.Property.REVERSE_PROPERTIES;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.WAS_OWNED;
-import static accord.utils.Invariants.illegalState;
 
 // TODO (testing): validate that we never lose a status previously held,
 //  i.e. once any particular property holds for a TxnId, it should continue to hold in perpetuity
@@ -47,13 +45,13 @@ public class RedundantStatus
 {
     public enum Coverage
     {
-        NONE(0),
-        SOME(1),
-        ALL(0x10001);
+        NONE(0L),
+        SOME(1L),
+        ALL(0x100000001L);
 
-        final int mask;
+        final long mask;
 
-        Coverage(int mask)
+        Coverage(long mask)
         {
             this.mask = mask;
         }
@@ -69,6 +67,8 @@ public class RedundantStatus
         LE, LT
     }
 
+    // note: while many of these properties are implied by other ones, the reason we track them as separate bits
+    //  is so that the implied properties are correctly tracked across shards when we merge.
     public enum Property
     {
         // applied or pre-bootstrap or stale or was owned
@@ -76,29 +76,31 @@ public class RedundantStatus
         LOCALLY_REDUNDANT                  (false,  true,  LT),
 
         // pre-bootstrap or stale or was owned
-        // (WAS_OWNED | PRE_BOOTSTRAP_OR_STALE)
+        // (WAS_OWNED | UNREADY)
         LOCALLY_DEFUNCT                    (false,  true,  LT, LOCALLY_REDUNDANT),
 
         /**
+         *
          * We can bootstrap ranges at different times, and have a transaction that participates in both ranges -
          * in this case one of the portions of the transaction may be totally unordered with respect to other transactions
-         * in that range because both occur prior to the bootstrappedAt point, so their (local) dependencies are entirely erased.
+         * in that range because both occur prior to the readyAt point, so their (local) dependencies are entirely erased.
          * We can also re-bootstrap the same range because bootstrap failed, and leave dangling transactions to execute
          * which then execute in an unordered fashion.
          *
          * See also {@link SafeCommandStore#safeToReadAt()}.
-         * TODO (expected): do we need to distinguish this case from DEFUNCT?
          */
-        PRE_BOOTSTRAP_OR_STALE             ( true,  true,  LT, LOCALLY_DEFUNCT),
-        PRE_BOOTSTRAP                      ( true,  true,  LT, PRE_BOOTSTRAP_OR_STALE),
+        UNREADY(true, true, LT, LOCALLY_DEFUNCT),
+
+        UNUSED(true, true, LT),
 
         /**
-         * Ranges can be marked as LOCALLY_LOST if the node has lost was forced by operator to give up knowledge
-         * of transactional history for a specific range.
+         * A point before which we do not know OUR OWN log
          */
-        LOCALLY_LOST                       (false, false, LT, PRE_BOOTSTRAP_OR_STALE),
+        LOG_UNAVAILABLE(true, false, LT, UNREADY),
 
+        // have applied a VisibilitySyncPoint locally, syncing deps for active transactions
         LOCALLY_WITNESSED                  (false,  true,  LE),
+
         // we've applied a sync point locally covering the transaction, but the transaction itself may not have applied
         LOCALLY_SYNCED                     (false,  true,  LE, LOCALLY_REDUNDANT),
         LOCALLY_APPLIED                    ( true, false,  LE, LOCALLY_SYNCED),
@@ -127,7 +129,10 @@ public class RedundantStatus
          */
         SHARD_APPLIED                      (false,  true,  LE, QUORUM_APPLIED),
 
+        // TODO (expected): this is effectively defunct (== GC_BEFORE). Presumably intended to apply prior to LOCALLY_DURABLE_..
+        //  to permit TRUNCATE_WITH_OUTCOME to be applied by compaction more eagerly
         TRUNCATE_BEFORE                    (false,  true,  LT, SHARD_APPLIED, LOCALLY_SYNCED),
+
         // TODO (desired): separate GC_BEFORE with HLC_BOUND and without
         GC_BEFORE                          (false,  true,  LT, TRUNCATE_BEFORE),
 
@@ -135,7 +140,6 @@ public class RedundantStatus
         WAS_OWNED                          (false,  false, LT, LOCALLY_DEFUNCT),
         NOT_OWNED                          (false,  false, LT),
         ;
-
 
         static final Property[] PROPERTIES = values();
         static final Property[] REVERSE_PROPERTIES = values();
@@ -151,15 +155,15 @@ public class RedundantStatus
         }
 
         final boolean overrideWasOwned;
-        final boolean mergeWithPreBootstrapOrStale;
+        final boolean mergeWithUnready;
         final Cmp cmp;
         final int compareLessEqual;
         final Property[] implies;
 
-        Property(boolean overrideWasOwned, boolean mergeWithPreBootstrapOrStale, Cmp cmp, Property ... implies)
+        Property(boolean overrideWasOwned, boolean mergeWithUnready, Cmp cmp, Property ... implies)
         {
             this.overrideWasOwned = overrideWasOwned;
-            this.mergeWithPreBootstrapOrStale = mergeWithPreBootstrapOrStale;
+            this.mergeWithUnready = mergeWithUnready;
             this.cmp = cmp;
             this.compareLessEqual = cmp == Cmp.LT ? -1 : 0;
             this.implies = implies;
@@ -175,11 +179,12 @@ public class RedundantStatus
     {
         public static final SomeStatus NONE = new SomeStatus(0);
 
-        public static final SomeStatus PRE_BOOTSTRAP_ONLY = oneSlow(PRE_BOOTSTRAP);
+        public static final SomeStatus UNREADY_ONLY = oneSlow(UNREADY);
         public static final SomeStatus LOCALLY_WITNESSED_ONLY = oneSlow(LOCALLY_WITNESSED);
         public static final SomeStatus LOCALLY_APPLIED_ONLY = oneSlow(LOCALLY_APPLIED);
         public static final SomeStatus QUORUM_APPLIED_ONLY = oneSlow(QUORUM_APPLIED);
         public static final SomeStatus SHARD_APPLIED_ONLY = oneSlow(SHARD_APPLIED);
+        public static final SomeStatus LOG_UNAVAILABLE_ONLY = oneSlow(LOG_UNAVAILABLE);
         public static final SomeStatus LOCALLY_DURABLE_TO_DATA_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_DATA_STORE);
         public static final SomeStatus LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY = oneSlow(LOCALLY_DURABLE_TO_COMMAND_STORE);
         public static final SomeStatus GC_BEFORE_AND_LOCALLY_DURABLE = multi(GC_BEFORE, LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE);
@@ -187,7 +192,6 @@ public class RedundantStatus
         final int encoded;
         public SomeStatus(int encoded)
         {
-            Invariants.require((encoded & ~0xFFFF) == 0);
             this.encoded = encoded;
         }
 
@@ -199,54 +203,54 @@ public class RedundantStatus
 
     private static final Coverage[] COVERAGE_TO_STRING = new Coverage[] { ALL, SOME };
     public static final RedundantStatus NONE = new RedundantStatus(0);
-    public static final RedundantStatus PRE_BOOTSTRAP_OR_STALE_ONLY = toAll(oneSlow(PRE_BOOTSTRAP_OR_STALE));
+    public static final RedundantStatus UNREADY_ONLY = toAll(oneSlow(UNREADY));
     public static final RedundantStatus NOT_OWNED_ONLY = toAll(oneSlow(NOT_OWNED));
 
     public static final RedundantStatus WAS_OWNED_ONLY = toAll(oneSlow(WAS_OWNED));
     public static final RedundantStatus WAS_OWNED_SYNCED = toAll(multi(WAS_OWNED, LOCALLY_SYNCED));
     public static final RedundantStatus WAS_OWNED_RETIRED = toAll(multi(WAS_OWNED, GC_BEFORE));
 
-    final int encoded;
-    RedundantStatus(int encoded)
+    final long encoded;
+    RedundantStatus(long encoded)
     {
         this.encoded = encoded;
     }
 
     public RedundantStatus mergeShards(RedundantStatus that)
     {
-        int merged = mergeShards(this.encoded, that.encoded);
+        long merged = mergeShards(this.encoded, that.encoded);
         return selectOrCreate(merged, this, that);
     }
 
     public RedundantStatus add(RedundantStatus that)
     {
-        int bits = this.encoded | that.encoded;
+        long bits = this.encoded | that.encoded;
         return selectOrCreate(bits, this, that);
     }
 
     public RedundantStatus subtract(RedundantStatus that)
     {
-        int bits = this.encoded & ~that.encoded;
+        long bits = this.encoded & ~that.encoded;
         return selectOrCreate(bits, this, that);
     }
 
     static RedundantStatus addHistory(RedundantStatus add, RedundantStatus history)
     {
-        int addEncoded = add.encoded;
-        if (history.any(PRE_BOOTSTRAP_OR_STALE))
-            addEncoded &= PRE_BOOTSTRAP_MERGE_MASK;
-        int encoded = addEncoded | history.encoded;
+        long addEncoded = add.encoded;
+        if (history.any(UNREADY))
+            addEncoded &= UNREADY_MERGE_MASK;
+        long encoded = addEncoded | history.encoded;
         return selectOrCreate(encoded, history, add);
     }
 
-    static int addHistory(int add, int history)
+    static long addHistory(long add, long history)
     {
-        if (decode(history, PRE_BOOTSTRAP_OR_STALE) != Coverage.NONE)
-            add &= PRE_BOOTSTRAP_MERGE_MASK;
+        if (!none(history, UNREADY))
+            add &= UNREADY_MERGE_MASK;
         return add | history;
     }
 
-    static RedundantStatus selectOrCreate(int encoded, RedundantStatus a, RedundantStatus b)
+    static RedundantStatus selectOrCreate(long encoded, RedundantStatus a, RedundantStatus b)
     {
         if (encoded == a.encoded) return a;
         if (encoded == b.encoded) return b;
@@ -255,36 +259,14 @@ public class RedundantStatus
 
     static SomeStatus selectOrCreate(int encoded, SomeStatus a, SomeStatus b)
     {
-        Invariants.require(0 == (encoded & ~0xFFFF));
         if (encoded == a.encoded) return a;
         if (encoded == b.encoded) return b;
         return new SomeStatus(encoded);
     }
 
-    public int encodedPart(Coverage coverage)
+    public boolean is(Property property, Coverage coverage)
     {
-        switch (coverage)
-        {
-            default: throw new UnhandledEnum(coverage);
-            case NONE: return 0;
-            case SOME: return (encoded & 0xffff);
-            case ALL:  return (encoded >>> 16) & 0xffff;
-        }
-    }
-
-    public Coverage get(Property property)
-    {
-        return get(encoded, property);
-    }
-
-    public static Coverage get(short encoded, Property property)
-    {
-        return get(encoded & 0xFF, property);
-    }
-
-    public static Coverage get(int encoded, Property property)
-    {
-        return decode(encoded, property);
+        return is(encoded, property, coverage);
     }
 
     public boolean all(Property property)
@@ -297,22 +279,22 @@ public class RedundantStatus
         return all(encoded, a, b);
     }
 
-    public static boolean all(short encoded, Property property)
-    {
-        return all(encoded & 0xFF, property);
-    }
-
     public static boolean all(int encoded, Property property)
     {
-        return get(encoded, property) == ALL;
+        return all(encoded & 0xFFFFFFFFL, property);
     }
 
-    public static boolean all(short encoded, Property a, Property b)
+    public static boolean all(long encoded, Property property)
     {
-        return all(encoded & 0xFF, a, b);
+        return is(encoded, property, ALL);
     }
 
     public static boolean all(int encoded, Property a, Property b)
+    {
+        throw new IllegalArgumentException("Impossible to match ALL on int encoded");
+    }
+
+    public static boolean all(long encoded, Property a, Property b)
     {
         return all(encoded, a) && all(encoded, b);
     }
@@ -322,14 +304,14 @@ public class RedundantStatus
         return none(encoded, property);
     }
 
-    public static boolean none(short encoded, Property property)
-    {
-        return none(encoded & 0xFF, property);
-    }
-
     public static boolean none(int encoded, Property property)
     {
-        return get(encoded, property) == Coverage.NONE;
+        return none(encoded & 0xFFFFFFFFL, property);
+    }
+
+    public static boolean none(long encoded, Property property)
+    {
+        return !is(encoded, property, SOME);
     }
 
     public boolean any(Property property)
@@ -337,76 +319,71 @@ public class RedundantStatus
         return any(encoded, property);
     }
 
-    public static boolean any(short encoded, Property property)
-    {
-        return any(encoded & 0xFFFF, property);
-    }
-
     public static boolean any(int encoded, Property property)
     {
-        return get(encoded, property) != Coverage.NONE;
+        return any(encoded & 0xFFFFFFFFL, property);
     }
 
-    public static boolean matchesMask(short encoded, int propertyMask)
+    public static boolean any(long encoded, Property property)
     {
-        return matchesMask(encoded & 0xFFFF, propertyMask);
+        return is(encoded, property, SOME);
     }
 
-    public static boolean matchesMask(int encoded, int propertyMask)
+    // propertyMask in this case must be SOME, not ALL
+    public static boolean matchesMask(int encoded, long propertyMask)
+    {
+        Invariants.require((propertyMask & ~0xFFFFFFFL) == 0);
+        return matchesMask(encoded & 0xFFFFFFFFL, propertyMask);
+    }
+
+    public static boolean matchesMask(long encoded, long propertyMask)
     {
         return (encoded & propertyMask) == propertyMask;
     }
 
-    public static int mask(Property property, Coverage coverage)
+    public static long shiftedMask(Property property, Coverage coverage)
     {
-        int mask = coverage.mask;
+        long mask = coverage.mask;
         return mask << property.shift();
     }
 
-    public static Coverage decode(long encoded, Property property)
+    public static boolean is(long encoded, Property property, Coverage coverage)
     {
-        int coverage = (int)((encoded >>> property.shift()) & ALL.mask);
-        switch (coverage)
-        {
-            default: throw illegalState("Invalid Coverage value encoded for " + property + ": " + coverage);
-            case 0: return Coverage.NONE;
-            case 1: return SOME;
-            case 0x10001: return ALL;
-        }
+        return matchesMask(encoded, shiftedMask(property, coverage));
     }
 
-    private static final int ALL_BITS = 0xFFFF0000;
-    private static final int ANY_BITS = 0x0000FFFF;
-    private static final int WAS_OWNED_OVERRIDE_MASK;
-    static final int PRE_BOOTSTRAP_MERGE_MASK;
-    static final int ONLY_LE_MASK;
-    private static final int WAS_ALL_OWNED_MASK = ALL.mask << WAS_OWNED.shift();
-    private static final int NOT_OWNED_MASK = ALL.mask << NOT_OWNED.shift();
+    private static final long ALL_BITS = 0xFFFFFFFF00000000L;
+    private static final long ANY_BITS = 0x00000000FFFFFFFFL;
+    private static final long WAS_OWNED_OVERRIDE_MASK;
+    static final long UNREADY_MERGE_MASK;
+    static final long ONLY_LE_MASK;
+    private static final long WAS_ALL_OWNED_MASK = ALL.mask << WAS_OWNED.shift();
+    private static final long NOT_OWNED_MASK = ALL.mask << NOT_OWNED.shift();
     static
     {
-        int wasOwnedMask = 0;
-        int preBootstrapMask = 0, leMask = 0;
+        long wasOwnedMask = 0;
+        long unreadyMask = 0, leMask = 0;
         for (Property property : Property.values())
         {
             if (!property.overrideWasOwned)
                 wasOwnedMask |= encodeAll(property);
-            if (property.mergeWithPreBootstrapOrStale)
-                preBootstrapMask |= encodeAny(property);
+            if (property.mergeWithUnready)
+                unreadyMask |= encodeAny(property);
             if (property.cmp == LE)
                 leMask |= encodeAny(property);
         }
         WAS_OWNED_OVERRIDE_MASK = wasOwnedMask;
-        PRE_BOOTSTRAP_MERGE_MASK = preBootstrapMask;
+        UNREADY_MERGE_MASK = unreadyMask;
         ONLY_LE_MASK = leMask;
     }
 
-    public static int mergeShards(int a, int b)
+    public static long mergeShards(long a, long b)
     {
-        int either = a | b;
+        long either = a | b;
         Invariants.require((either & NOT_OWNED_MASK) == 0);
-        int all = (a & b) & ALL_BITS;
-        int any = either & ANY_BITS;
-        int result = all | any;
+        long all = (a & b) & ALL_BITS;
+        long any = either & ANY_BITS;
+        long result = all | any;
         if ((either & WAS_ALL_OWNED_MASK) == WAS_ALL_OWNED_MASK)
         {
             if ((a & WAS_ALL_OWNED_MASK) != WAS_ALL_OWNED_MASK)
@@ -443,15 +420,15 @@ public class RedundantStatus
         return 1 << property.shift();
     }
 
-    static int encodeAll(Property property)
+    static long encodeAll(Property property)
     {
         return ALL.mask << property.shift();
     }
 
-    static int toAll(int encodedKeyStatus)
+    static long toAll(long encodedKeyStatus)
     {
-        Invariants.require(0 == (encodedKeyStatus & ~0xFFFF));
-        return encodedKeyStatus | (encodedKeyStatus<<16);
+        Invariants.require(0 == (encodedKeyStatus & ~0xFFFFFFFFL));
+        return encodedKeyStatus | (encodedKeyStatus<<32);
     }
 
     static RedundantStatus toAll(SomeStatus key)
@@ -478,7 +455,7 @@ public class RedundantStatus
                 {
                     implied |= TinyEnumSet.encode(property.implies);
                 }
-                else if (get(property) == coverage)
+                else if (is(property, coverage))
                 {
                     if (!firstProperty) builder.append(",");
                     firstProperty = false;

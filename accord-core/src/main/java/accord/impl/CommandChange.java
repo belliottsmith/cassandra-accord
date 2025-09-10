@@ -599,18 +599,11 @@ public class CommandChange
                 return null;
 
             Invariants.require(txnId != null);
-            if (participants != null)
-                participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus != null && saveStatus.known.isExecuteAtKnown() ? executeAt : null);
-
-            if (durability == null)
-                durability = NotDurable;
-
-            WaitingOn waitingOn = null;
-            if (this.waitingOn != null)
-                waitingOn = this.waitingOn.construct(partialDeps(), executesAtLeast, minUniqueHlc);
-
             if (cleanup != null)
             {
+                // we don't apply participant filtering first because we may have erased e.g. executeAt
+                // but we may not have expunged, so we still need to return the suitable cleanup result;
+                // TODO (desired): should we have dedicated filtering logic here too? It will be filtered by the caller before use anyway.
                 switch (cleanup)
                 {
                     default: throw new UnhandledEnum(cleanup);
@@ -629,6 +622,20 @@ public class CommandChange
                         break;
                 }
             }
+
+            // TODO (expected): bitset of expected known fields for cheap and comprehensive expunge check
+            if (executeAt == null && saveStatus != null && saveStatus.known.isExecuteAtKnown())
+                return null;
+
+            if (participants != null)
+                participants = participants.filter(LOAD, redundantBefore, txnId, saveStatus != null && saveStatus.known.isExecuteAtKnown() ? executeAt : null);
+
+            if (durability == null)
+                durability = NotDurable;
+
+            WaitingOn waitingOn = null;
+            if (this.waitingOn != null)
+                waitingOn = this.waitingOn.construct(partialDeps(), executesAtLeast, minUniqueHlc);
 
             Invariants.require(saveStatus != null);
             switch (saveStatus.status)

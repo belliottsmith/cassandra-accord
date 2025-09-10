@@ -45,8 +45,8 @@ import org.agrona.collections.IntHashSet;
 
 import static accord.local.Commands.eraseEphemeralRead;
 import static accord.messages.MessageType.StandardMessage.READ_EPHEMERAL_REQ;
-import static accord.messages.TxnRequest.computeScope;
-import static accord.messages.TxnRequest.latestRelevantEpochIndex;
+import static accord.messages.RouteRequest.computeScope;
+import static accord.messages.RouteRequest.latestRelevantEpochIndex;
 
 public class ReadEphemeralTxnData extends ReadData
 {
@@ -90,18 +90,18 @@ public class ReadEphemeralTxnData extends ReadData
     }
 
     @Override
-    public CommitOrReadNack apply(SafeCommandStore safeStore)
+    public CommitOrReadNack applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        return apply(safeStore, safeCommand, participants);
+        return applyInternal(safeStore, safeCommand, participants);
     }
 
     @Override
-    protected synchronized CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
+    protected synchronized CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
         Commands.ephemeralRead(safeStore, safeCommand, participants, route, txnId, partialTxn, partialDeps);
-        return super.apply(safeStore, safeCommand, participants);
+        return super.applyInternal(safeStore, safeCommand, participants);
     }
 
     public final PartialDeps partialDeps()
@@ -175,8 +175,11 @@ public class ReadEphemeralTxnData extends ReadData
     }
 
     @Override
-    public void timeout()
+    protected boolean cancel()
     {
+        if (!super.cancel())
+            return false;
+
         synchronized (this)
         {
             IntHashSet.IntIterator iter = waitingOn.iterator();
@@ -188,7 +191,7 @@ public class ReadEphemeralTxnData extends ReadData
                     }, node.agent());
             }
         }
-        super.timeout();
+        return true;
     }
 
     @Override

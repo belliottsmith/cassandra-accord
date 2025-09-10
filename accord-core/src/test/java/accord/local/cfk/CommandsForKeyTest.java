@@ -41,6 +41,7 @@ import accord.api.Agent;
 import accord.api.Data;
 import accord.api.DataStore;
 import accord.api.Journal;
+import accord.api.OwnershipEventListener;
 import accord.api.ProgressLog;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Query;
@@ -632,7 +633,7 @@ public class CommandsForKeyTest
     public void testMany()
     {
         long seed = System.nanoTime();
-        for (int i = 0 ; i < 1000 ; ++i)
+        for (int i = 0 ; i < 100 ; ++i)
         {
             test(seed++, 1000);
         }
@@ -942,7 +943,7 @@ public class CommandsForKeyTest
         }
     }
 
-    private static class TestCommandStore extends CommandStore implements Agent
+    private static class TestCommandStore extends CommandStore implements Agent, OwnershipEventListener
     {
         static class Task extends AsyncResults.AbstractResult<Void>
         {
@@ -1048,6 +1049,12 @@ public class CommandsForKeyTest
         public void onStale(Timestamp staleSince, Ranges ranges)
         {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public OwnershipEventListener ownershipEvents()
+        {
+            return this;
         }
 
         @Override

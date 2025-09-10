@@ -35,7 +35,7 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.PartialDeps;
 import accord.local.StoreParticipants;
-import accord.messages.TxnRequest.WithUnsynced;
+import accord.messages.RouteRequest.WithUnsynced;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialTxn;
@@ -110,11 +110,11 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     @Override
     protected Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, acceptEpoch, this);
+        return node.commandStores().mapReduceConsume(minEpoch, acceptEpoch, this);
     }
 
     @Override
-    public PreAcceptReply apply(SafeCommandStore safeStore)
+    public PreAcceptReply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, acceptEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);

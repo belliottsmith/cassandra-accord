@@ -25,16 +25,15 @@ import javax.annotation.Nullable;
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
 import accord.local.Node;
-import accord.local.PreLoadContext;
-import accord.local.SafeCommandStore;
+import accord.local.MapReduceConsumeCommandStores;
+import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-public abstract class AbstractRequest<R extends Reply> implements PreLoadContext, Request, MapReduceConsume<SafeCommandStore, R>, Timeouts.Timeout
+public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> extends MapReduceConsumeCommandStores<P, R> implements Request, Timeouts.Timeout
 {
     private static class Cancellation implements Cancellable
     {
@@ -68,10 +67,11 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
     private boolean hasSentFinalReply;
 
     private transient volatile Cancellation cancellation;
-    private static final AtomicReferenceFieldUpdater<AbstractRequest, Cancellation> cancellationUpdater = AtomicReferenceFieldUpdater.newUpdater(AbstractRequest.class, Cancellation.class, "cancellation");
+    private static final AtomicReferenceFieldUpdater<NoWaitRequest, Cancellation> cancellationUpdater = AtomicReferenceFieldUpdater.newUpdater(NoWaitRequest.class, Cancellation.class, "cancellation");
 
-    protected AbstractRequest(TxnId txnId)
+    protected NoWaitRequest(TxnId txnId, P scope)
     {
+        super(scope);
         this.txnId = txnId;
     }
 
@@ -105,18 +105,21 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
         return cancellation == CANCEL;
     }
 
+    protected boolean ifDoneExpectCancelled()
+    {
+        if (!isDone())
+            return false;
+        Invariants.require(cancellation == CANCEL);
+        return true;
+    }
+
     protected abstract Cancellable submit();
 
     @Override
     public final void accept(R reply, Throwable failure)
     {
-        cleanup(processedInternal());
+        cleanup(failure == null ? clearInternal() : cancelInternal());
         acceptInternal(reply, failure);
-    }
-
-    protected @Nullable Cancellable processedInternal()
-    {
-        return clearInternal().timeout;
     }
 
     protected void acceptInternal(R reply, Throwable failure)
@@ -126,6 +129,7 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
             Invariants.require(!hasSentFinalReply);
             hasSentFinalReply = true;
         }
+        if (failure != null) cancel();
         node.reply(replyTo, replyContext, reply, failure);
     }
 
@@ -182,6 +186,11 @@ public abstract class AbstractRequest<R extends Reply> implements PreLoadContext
             if (cur == DONE || cur == CANCEL || cancellationUpdater.compareAndSet(this, cur, done))
                 return cur != null ? cur : EMPTY;
         }
+    }
+
+    public ReplyContext replyContext()
+    {
+        return replyContext;
     }
 
     @Override

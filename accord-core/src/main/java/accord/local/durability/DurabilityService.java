@@ -100,6 +100,7 @@ public class DurabilityService implements ConfigurationService.Listener
     {
         shards.stop();
         global.stop();
+        started = false;
     }
 
     public AsyncResult<Void> close(String requestedBy, Txn.Kind kind, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)

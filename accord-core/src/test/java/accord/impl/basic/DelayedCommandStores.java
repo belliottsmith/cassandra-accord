@@ -48,7 +48,6 @@ import accord.impl.basic.TaskExecutorService.Task;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
-import accord.local.Node;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
@@ -82,17 +81,6 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
     {
         return (time, agent, store, random, journal, shardDistributor, progressLogFactory, listenersFactory) ->
                new DelayedCommandStores(time, agent, store, random, shardDistributor, progressLogFactory, listenersFactory, new SimulatedDelayedExecutorService(pending, agent, time.id()), isLoadedCheck, journal);
-    }
-
-    @Override
-    protected boolean shouldBootstrap(Node node, Topology previous, Topology updated, Range range)
-    {
-        if (!super.shouldBootstrap(node, previous, updated, range))
-            return false;
-        if (!(range.start() instanceof PrefixedIntHashKey)) return true;
-        int prefix = ((PrefixedIntHashKey) range.start()).prefix;
-        // we see new prefix when a new prefix is added, so avoid bootstrap in these cases
-        return contains(previous, prefix);
     }
 
     public void validateShardStateForTesting(Journal.TopologyUpdate lastUpdate)

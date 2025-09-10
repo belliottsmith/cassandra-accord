@@ -61,7 +61,7 @@ import static accord.Utils.topology;
 import static accord.impl.IntKey.keys;
 import static accord.impl.IntKey.range;
 import static accord.impl.SizeOfIntersectionSorter.SUPPLIER;
-import static accord.messages.TxnRequest.computeWaitForEpoch;
+import static accord.messages.RouteRequest.computeWaitForEpoch;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.ExtendedAssertions.assertThat;
 import static accord.utils.Property.qt;

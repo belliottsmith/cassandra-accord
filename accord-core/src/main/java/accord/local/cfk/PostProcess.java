@@ -150,15 +150,15 @@ abstract class PostProcess
      * In practice this means that transactions which include a bootstrap range and a range not covered by bootstrap
      * will not wait for the bootstrapping key.
      */
-    static CommandsForKeyUpdate notifyManagedPreBootstrap(CommandsForKey prev, QuickBounds newBounds, CommandsForKeyUpdate update)
+    static CommandsForKeyUpdate notifyManagedUnready(CommandsForKey prev, QuickBounds newBounds, CommandsForKeyUpdate update)
     {
         Timestamp maxApplied = null;
         TxnId[] notify = NO_TXNIDS;
         int notifyCount = 0;
-        // <= because maxAppliedWrite is actually maxAppliedOrPreBootstrapWrite
+        // <= because maxAppliedWrite is actually maxAppliedOrUnreadyWrite
         for (TxnInfo txn : prev.committedByExecuteAt)
         {
-            if (txn.compareTo(newBounds.bootstrappedAt) >= 0)
+            if (txn.compareTo(newBounds.readyAt) >= 0)
                 continue;
 
             if (txn.is(STABLE))
@@ -259,8 +259,8 @@ abstract class PostProcess
     {
         // TODO (expected): can we relax this to shardRedundantBefore?
         TxnId redundantBefore = bounds.gcBefore;
-        TxnId bootstrappedAt = bounds.bootstrappedAt;
-        if (bootstrappedAt.compareTo(redundantBefore) <= 0) bootstrappedAt = null;
+        TxnId readyAt = bounds.readyAt;
+        if (readyAt.compareTo(redundantBefore) <= 0) readyAt = null;
 
         PostProcess notifier = null;
         {
@@ -268,8 +268,8 @@ abstract class PostProcess
             Timestamp minUndecided = minUndecidedById < 0 ? Timestamp.MAX : byId[minUndecidedById];
             if (!BTree.isEmpty(loadingPruned))
             {
-                TxnId minLoadingPruned = bootstrappedAt == null ? BTree.findByIndex(loadingPruned, 0)
-                                                                : BTree.ceil(loadingPruned, TxnId::compareTo, bootstrappedAt);
+                TxnId minLoadingPruned = readyAt == null ? BTree.findByIndex(loadingPruned, 0)
+                                                                : BTree.ceil(loadingPruned, TxnId::compareTo, readyAt);
 
                 minUndecided = Timestamp.nonNullOrMin(minUndecided, minLoadingPruned);
             }
@@ -288,7 +288,7 @@ abstract class PostProcess
         {
             if (newInfo != null && newInfo.is(APPLIED))
             {
-                TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                TxnInfo maxContiguousApplied = CommandsForKey.maxContiguousManagedApplied(committedByExecuteAt, maxAppliedWriteByExecuteAt, readyAt);
                 if (maxContiguousApplied != null && maxContiguousApplied.compareExecuteAt(newInfo) >= 0)
                 {
                     Timestamp applyTo = maxContiguousApplied.executeAt;
@@ -323,7 +323,7 @@ abstract class PostProcess
                 {   // process unmanaged waiting on applies that may now not occur
                     int start = firstApply;
                     int end = start;
-                    int j = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                    int j = 1 + maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, readyAt);
                     boolean hasUnapplied = false;
                     while (end < unmanageds.length && j < committedByExecuteAt.length)
                     {
@@ -367,29 +367,29 @@ abstract class PostProcess
             rescheduleOrNotifyIf = curInfo.executeAt::equals;
         }
 
-        if (isNewBoundsInfo && bootstrappedAt != null)
+        if (isNewBoundsInfo && readyAt != null)
         {
-            Timestamp maxPreBootstrap;
+            Timestamp maxUnready;
             {
-                Timestamp tmp = bootstrappedAt;
+                Timestamp tmp = readyAt;
                 for (TxnInfo txn : byId)
                 {
-                    if (txn.compareTo(bootstrappedAt) > 0)
+                    if (txn.compareTo(readyAt) > 0)
                         break;
                     // while we can in principle exclude all transactions with a lower txnId regardless of their executeAt
                     // for consistent handling with other transactions we don't leap ahead by executeAt as this permits
                     // us to also exclude transactions with a higher txnId which is not consistent with other validity checks
                     // which don't have this additional context
-                    if (txn.executeAt.compareTo(bootstrappedAt) > 0)
+                    if (txn.executeAt.compareTo(readyAt) > 0)
                         continue;
                     tmp = Timestamp.nonNullOrMax(tmp, txn.executeAt);
                 }
-                maxPreBootstrap = tmp;
+                maxUnready = tmp;
             }
             if (rescheduleOrNotifyIf == null)
-                rescheduleOrNotifyIf = test -> test.compareTo(maxPreBootstrap) <= 0;
+                rescheduleOrNotifyIf = test -> test.compareTo(maxUnready) <= 0;
             else
-                rescheduleOrNotifyIf = test -> curInfo.executeAt.equals(test) || test.compareTo(maxPreBootstrap) <= 0;
+                rescheduleOrNotifyIf = test -> curInfo.executeAt.equals(test) || test.compareTo(maxUnready) <= 0;
         }
 
         if (rescheduleOrNotifyIf != null)
@@ -415,7 +415,7 @@ abstract class PostProcess
 
                     if (predecessor >= 0)
                     {
-                        int maxContiguousApplied = maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, bootstrappedAt);
+                        int maxContiguousApplied = maxContiguousManagedAppliedIndex(committedByExecuteAt, maxAppliedWriteByExecuteAt, readyAt);
                         if (maxContiguousApplied >= predecessor)
                             predecessor = -1;
                     }

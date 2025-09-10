@@ -44,7 +44,7 @@ import accord.utils.async.Cancellable;
 import static accord.messages.MessageType.StandardMessage.GET_LATEST_DEPS_REQ;
 import static accord.messages.MessageType.StandardMessage.GET_LATEST_DEPS_RSP;
 
-public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLatestDepsReply>
+public class GetLatestDeps extends RouteRequest.WithUnsynced<GetLatestDeps.GetLatestDepsReply>
 {
     public static final class SerializationSupport
     {
@@ -74,11 +74,11 @@ public class GetLatestDeps extends TxnRequest.WithUnsynced<GetLatestDeps.GetLate
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
+        return node.commandStores().mapReduceConsume(minEpoch, executeAt.epoch(), this);
     }
 
     @Override
-    public GetLatestDepsReply apply(SafeCommandStore safeStore)
+    public GetLatestDepsReply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);

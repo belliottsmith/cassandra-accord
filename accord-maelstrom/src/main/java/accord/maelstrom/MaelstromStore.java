@@ -56,7 +56,7 @@ public class MaelstromStore implements DataStore
     }
 
     @Override
-    public FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges callback)
+    public FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges callback, FetchKind kind)
     {
         return new ImmediateFetchResult(ranges);
     }

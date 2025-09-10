@@ -25,8 +25,10 @@ import javax.annotation.Nonnull;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
@@ -250,17 +252,17 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         return mergeTouching(this, Ranges::ofSortedAndDeoverlapped);
     }
 
-    public Map<Boolean, Ranges> partitioningBy(Predicate<? super Range> test)
+    public <T> Map<T, Ranges> partitioningBy(Function<? super Range, T> split)
     {
         if (isEmpty())
             return Collections.emptyMap();
-        List<Range> trues = new ArrayList<>();
-        List<Range> falses = new ArrayList<>();
+        Map<T, List<Range>> collector = new HashMap<>();
         for (Range range : this)
-            (test.test(range) ? trues : falses).add(range);
-        if (trues.isEmpty()) return ImmutableMap.of(Boolean.FALSE, this);
-        if (falses.isEmpty()) return ImmutableMap.of(Boolean.TRUE, this);
-        return ImmutableMap.of(Boolean.TRUE, Ranges.ofSortedAndDeoverlapped(trues.toArray(new Range[0])),
-                               Boolean.FALSE, Ranges.ofSortedAndDeoverlapped(falses.toArray(new Range[0])));
+            collector.computeIfAbsent(split.apply(range), ignore -> new ArrayList<>()).add(range);
+
+        ImmutableMap.Builder<T, Ranges> builder = ImmutableMap.builder();
+        for (Map.Entry<T, List<Range>> e : collector.entrySet())
+            builder.put(e.getKey(), Ranges.ofSortedAndDeoverlapped(e.getValue().toArray(Range[]::new)));
+        return builder.build();
     }
 }

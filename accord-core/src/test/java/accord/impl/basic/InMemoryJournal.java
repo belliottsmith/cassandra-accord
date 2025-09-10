@@ -45,6 +45,7 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
+import accord.local.LogUnavailableException;
 import accord.local.Node;
 import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
@@ -129,6 +130,12 @@ public class InMemoryJournal implements Journal
     public void start(Node node)
     {
         this.node = node;
+    }
+
+    public void dropAll()
+    {
+        diffsPerCommandStore.clear();
+        fieldStates.clear();
     }
 
     @Override
@@ -522,7 +529,11 @@ public class InMemoryJournal implements Journal
 
                 Input input = isPartialCompaction ? PARTIAL : FULL;
                 ++counter;
-                Cleanup cleanup = builder.shouldCleanup(input, store.unsafeGetRedundantBefore(), store.durableBefore());
+
+                Cleanup cleanup;
+                try {cleanup = builder.shouldCleanup(input, store.unsafeGetRedundantBefore(), store.durableBefore()); }
+                catch (LogUnavailableException ignore) {cleanup = ERASE; }
+
                 cleanup = builder.maybeCleanup(true, cleanup);
                 if (cleanup != NO)
                 {
@@ -581,21 +592,25 @@ public class InMemoryJournal implements Journal
                 }
 
                 Builder before = reconstruct(diffs, ALL);
-                before.maybeCleanup(true, FULL, store.unsafeGetRedundantBefore(), store.durableBefore());
+                boolean unavailableBefore = false, unavailableAfter = false;
+                try { before.maybeCleanup(true, FULL, store.unsafeGetRedundantBefore(), store.durableBefore()); }
+                catch (LogUnavailableException ignore) { unavailableBefore = true; }
                 diffs.size -= removeCount;
                 diffs.flushed.removeAll(subset.flushed);
                 diffs.files.removeAll(subset.files);
                 diffs.files.add(new DiffFile(sorted));
                 diffs.sorted = null;
                 Builder after = reconstruct(diffs, ALL);
-                after.maybeCleanup(true, FULL, store.unsafeGetRedundantBefore(), store.durableBefore());
+                try { after.maybeCleanup(true, FULL, store.unsafeGetRedundantBefore(), store.durableBefore()); }
+                catch (LogUnavailableException ignore) { unavailableAfter = true; }
+                Invariants.require(unavailableBefore == unavailableAfter);
                 Invariants.require(Objects.equals(before.construct(store.unsafeGetRedundantBefore()), after.construct(store.unsafeGetRedundantBefore())));
             }
         }
     }
 
     @Override
-    public void replay(CommandStores commandStores)
+    public boolean replay(CommandStores commandStores)
     {
         for (Map.Entry<Integer, NavigableMap<TxnId, Diffs>> diffEntry : diffsPerCommandStore.entrySet())
         {
@@ -619,6 +634,7 @@ public class InMemoryJournal implements Journal
             }
 
         }
+        return true;
     }
 
     static class TruncatedList extends ArrayList<Diff>

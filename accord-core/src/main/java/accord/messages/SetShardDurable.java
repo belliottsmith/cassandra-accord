@@ -18,14 +18,13 @@
 
 package accord.messages;
 
-import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.AbstractRanges;
+import accord.primitives.Route;
 import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import accord.utils.MapReduceConsume;
 import accord.utils.async.Cancellable;
 
 import static accord.messages.MessageType.StandardMessage.SET_SHARD_DURABLE_REQ;
@@ -34,15 +33,14 @@ import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.primitives.Status.Durability.HasOutcome.Universal;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 
-public class SetShardDurable extends AbstractRequest<SimpleReply>
-        implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, SimpleReply>
+public class SetShardDurable extends NoWaitRequest<Route<?>, SimpleReply>
 {
     public final SyncPoint exclusiveSyncPoint;
     public final HasOutcome durability;
 
     public SetShardDurable(SyncPoint exclusiveSyncPoint, HasOutcome durability)
     {
-        super(exclusiveSyncPoint.syncId);
+        super(exclusiveSyncPoint.syncId, exclusiveSyncPoint.route);
         this.exclusiveSyncPoint = exclusiveSyncPoint;
         this.durability = durability;
         Invariants.require(durability.compareTo(Quorum) >= 0);
@@ -61,16 +59,22 @@ public class SetShardDurable extends AbstractRequest<SimpleReply>
         node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, durability.compareTo(Universal) >= 0 ? syncIdWithFlags : TxnId.NONE)
         .invoke((success, fail) -> {
             if (fail != null) node.reply(replyTo, replyContext, null, fail);
-            else node.mapReduceConsumeLocal(this, exclusiveSyncPoint.route, waitForEpoch(), waitForEpoch(), this);
+            else node.commandStores().mapReduceConsume(waitForEpoch(), waitForEpoch(), this);
         });
         return null;
     }
 
     @Override
-    public SimpleReply apply(SafeCommandStore safeStore)
+    public SimpleReply applyInternal(SafeCommandStore safeStore)
     {
         safeStore.commandStore().markShardDurable(safeStore, syncIdWithFlags(), ((AbstractRanges) exclusiveSyncPoint.route).toRanges(), durability);
         return Ok;
+    }
+
+    @Override
+    protected SimpleReply refuseInternal(SafeCommandStore safeStore)
+    {
+        return applyInternal(safeStore);
     }
 
     @Override

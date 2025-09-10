@@ -23,9 +23,6 @@ import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import accord.api.Data;
 import accord.api.Result;
 import accord.api.Timeouts;
@@ -35,6 +32,7 @@ import accord.coordinate.tracking.QuorumIdTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
+import accord.local.LogUnavailableException;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
@@ -96,8 +94,6 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 // TODO (expected): by default, if we can execute locally, never contact a remote replica regardless of local outcome
 public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 {
-    private static final Logger logger = LoggerFactory.getLogger(ExecuteTxn.class);
-
     class StableTracker extends QuorumIdTracker implements Callback<ReadReply>
     {
         private boolean isDone;
@@ -190,7 +186,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         Node.Id self = node.id();
         if (permitLocalExecution() && tryIfUniversal(self))
         {
-            isPrivilegedVoteCommitting = true;
+            isPrivilegedVoteCommitting = txnId.hasPrivilegedCoordinator() && path == FAST;
             ExecuteFlags executeFlags = flags.get(self);
             /*
               This decides if our local execution may fast execute with the provided flags.
@@ -203,8 +199,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
               ensures PREAPPLIED is recorded at the local coordinator before any other replicas are sent Apply, but
               for now we simply disable this optimisation in this case.
              */
-            boolean mayFastExecute = executeFlags.contains(READY_TO_EXECUTE)
-                                     && (!txnId.hasPrivilegedCoordinator() || path != FAST)
+            boolean mayFastExecute = !isPrivilegedVoteCommitting
+                                     && executeFlags.contains(READY_TO_EXECUTE)
                                      && fastReadsMayBypassSafeStore(txnId);
 
             if (mayFastExecute)
@@ -470,20 +466,28 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         }
 
         @Override
-        public CommitOrReadNack apply(SafeCommandStore safeStore)
+        public CommitOrReadNack applyInternal(SafeCommandStore safeStore)
         {
             StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
             SafeCommand safeCommand = safeStore.get(txnId, participants);
-            return apply(safeStore, safeCommand, participants);
+            return applyInternal(safeStore, safeCommand, participants);
         }
 
         @Override
-        protected CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
+        protected CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
         {
             if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind()))
                 return CommitOrReadNack.Rejected;
 
-            return super.apply(safeStore, safeCommand, participants);
+            return super.applyInternal(safeStore, safeCommand, participants);
+        }
+
+        @Override
+        protected CommitOrReadNack refuseInternal(SafeCommandStore safeStore)
+        {
+            if (isPrivilegedVoteCommitting)
+                throw new LogUnavailableException();
+            return super.refuseInternal(safeStore);
         }
 
         @Override
@@ -516,14 +520,15 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         }
 
         @Override
-        public void timeout()
+        protected boolean timeoutInternal()
         {
-            if (!super.cancel())
-                return;
+            if (!super.timeoutInternal())
+                return false;
 
             slowTimeout = null;
             if (committed) callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
             else callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
+            return true;
         }
 
         @Override

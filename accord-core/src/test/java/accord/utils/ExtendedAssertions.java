@@ -27,7 +27,7 @@ import accord.local.Node;
 import accord.messages.PreAccept;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
-import accord.messages.TxnRequest;
+import accord.messages.RouteRequest;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Unseekables;
@@ -248,7 +248,7 @@ public class ExtendedAssertions
         }
     }
 
-    public static <T extends Reply> ObjectAssert<T> process(TxnRequest<?> request, Node on, Node.Id replyTo, Class<T> replyType)
+    public static <T extends Reply> ObjectAssert<T> process(RouteRequest<?> request, Node on, Node.Id replyTo, Class<T> replyType)
     {
         ReplyContext replyContext = Mockito.mock(ReplyContext.class);
         request.process(on, replyTo, replyContext);

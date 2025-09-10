@@ -22,6 +22,7 @@ import java.util.concurrent.TimeUnit;
 
 import accord.api.Agent;
 import accord.api.CoordinatorEventListener;
+import accord.api.OwnershipEventListener;
 import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.local.Node;
@@ -44,7 +45,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class MaelstromAgent implements Agent, CoordinatorEventListener
+public class MaelstromAgent implements Agent, CoordinatorEventListener, OwnershipEventListener
 {
     static final MaelstromAgent INSTANCE = new MaelstromAgent();
 
@@ -72,6 +73,12 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener
     @Override
     public void onStale(Timestamp staleSince, Ranges ranges)
     {
+    }
+
+    @Override
+    public OwnershipEventListener ownershipEvents()
+    {
+        return this;
     }
 
     @Override
