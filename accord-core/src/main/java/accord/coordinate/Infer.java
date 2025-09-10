@@ -27,8 +27,8 @@ import accord.local.Command;
 import accord.local.CommandStores.StoreFinder;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.Commands;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Status;
@@ -37,7 +37,6 @@ import accord.local.StoreParticipants;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
-import accord.utils.MapReduceConsume;
 
 import static accord.primitives.Status.PreCommitted;
 
@@ -105,24 +104,23 @@ public class Infer
     }
 
     // TODO (required): audit all use cases
-    private static abstract class CleanupAndCallback<T> implements MapReduceConsume<SafeCommandStore, Void>, PreLoadContext
+    private static abstract class CleanupAndCallback<T> extends MapReduceConsumeCommandStores<Participants<?>, Void>
     {
         final Node node;
         final TxnId txnId;
         // TODO (expected): more consistent handling of transactions that only MAY intersect a commandStore
         //  (e.g. dependencies from an earlier epoch that have not yet committed, or commands that are proposed to execute in a later epoch than eventually agreed)
         final StoreSelector reportTo;
-        final Participants<?> participants;
         final T param;
         final BiConsumer<T, Throwable> callback;
         final Tracing tracing;
 
         private CleanupAndCallback(Node node, TxnId txnId, StoreSelector reportTo, Participants<?> participants, T param, BiConsumer<T, Throwable> callback, Tracing tracing)
         {
+            super(participants);
             this.node = node;
             this.txnId = txnId;
             this.reportTo = reportTo;
-            this.participants = participants;
             this.param = param;
             this.callback = callback;
             this.tracing = tracing;
@@ -130,15 +128,21 @@ public class Infer
 
         void start()
         {
-            node.mapReduceConsumeLocal(this, reportTo.refine(txnId, null, participants), this);
+            node.commandStores().mapReduceConsume(reportTo.refine(txnId, null, scope), this);
         }
 
         @Override
-        public Void apply(SafeCommandStore safeStore)
+        public Void applyInternal(SafeCommandStore safeStore)
         {
             // we're applying an invalidation, so the record will not be cleaned up until the whole range is truncated
-            StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
+            StoreParticipants participants = StoreParticipants.notAccept(safeStore, scope, txnId);
             return apply(safeStore, safeStore.get(txnId, participants));
+        }
+
+        @Override
+        protected Void refuseInternal(SafeCommandStore safeStore)
+        {
+            return null;
         }
 
         abstract Void apply(SafeCommandStore safeStore, SafeCommand safeCommand);
@@ -188,14 +192,14 @@ public class Infer
             if (tracing != null)
                 tracing.trace(safeStore.commandStore(), "Invalidating (from %s)", command.saveStatus());
             Invariants.require(!command.hasBeen(PreCommitted) || command.hasBeen(Status.Truncated), "Unexpected status for %s", command);
-            Commands.commitInvalidate(safeStore, safeCommand, participants);
+            Commands.commitInvalidate(safeStore, safeCommand, scope);
             return null;
         }
 
         @Override
         public String reason()
         {
-            return "Invalidate " + txnId + " with " + participants;
+            return "Invalidate";
         }
     }
 }

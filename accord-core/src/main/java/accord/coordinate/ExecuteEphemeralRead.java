@@ -182,11 +182,11 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
         }
 
         @Override
-        public CommitOrReadNack apply(SafeCommandStore safeStore)
+        public CommitOrReadNack applyInternal(SafeCommandStore safeStore)
         {
             StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
             SafeCommand safeCommand = safeStore.get(txnId, participants);
-            return apply(safeStore, safeCommand, participants);
+            return applyInternal(safeStore, safeCommand, participants);
         }
 
         @Override
@@ -215,13 +215,14 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
         }
 
         @Override
-        public void timeout()
+        protected boolean timeoutInternal()
         {
-            if (!super.cancel())
-                return;
+            if (!super.timeoutInternal())
+                return false;
 
             // TODO (desired): if we fail to commit locally we can submit a slow/medium path request
             callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
+            return true;
         }
 
         @Override

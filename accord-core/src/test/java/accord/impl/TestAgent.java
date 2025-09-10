@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
 import accord.api.CoordinatorEventListener;
+import accord.api.OwnershipEventListener;
 import accord.api.ProgressLog;
 import accord.api.Result;
 import accord.impl.mock.MockStore;
@@ -47,7 +48,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class TestAgent implements Agent
+public class TestAgent implements Agent, OwnershipEventListener
 {
     private static final Logger logger = LoggerFactory.getLogger(TestAgent.class);
 
@@ -117,6 +118,12 @@ public class TestAgent implements Agent
     public void onStale(Timestamp staleSince, Ranges ranges)
     {
 
+    }
+
+    @Override
+    public OwnershipEventListener ownershipEvents()
+    {
+        return this;
     }
 
     @Override

@@ -56,6 +56,7 @@ import accord.utils.async.AsyncChains;
 import static accord.local.LoadKeys.INCR;
 import static accord.local.LoadKeys.NONE;
 import static accord.local.LoadKeysFor.WRITE;
+import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
@@ -91,6 +92,23 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     {
         --reentrancyCounter;
         Invariants.require(reentrancyCounter >= 0);
+    }
+
+    public final boolean refusesAnyOf(Participants<?> participants)
+    {
+        Ranges refuses = commandStore().refuses;
+        return refuses != null && participants.intersects(refuses);
+    }
+
+    public final boolean refusesAllOwnedOf(Participants<?> participants)
+    {
+        Ranges refuses = commandStore().refuses;
+        if (refuses == null)
+            return false;
+
+        // TODO (required): memoize this, and expose it as a standard method as we want it elsewhere
+        Ranges notRetired = redundantBefore().removeLocallyRetired(ranges().all());
+        return refuses.containsAll(participants.slice(notRetired, Minimal));
     }
 
     /**
@@ -328,7 +346,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (!txnId.isVisible())
             return;
 
-        commandStore().updateMaxConflicts(prev, updated);
+        commandStore().updateMaxConflicts(prev, updated, force);
     }
 
     /**
@@ -447,7 +465,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 TxnId maxTxnId = txnIdsForKey.get(txnIdsForKey.size() - 1);
                 // TODO (desired): convert to O(n) merge
                 RedundantStatus status = redundantBefore.status(maxTxnId, null, key);
-                if (!status.all(SHARD_APPLIED) || !status.all(LOCALLY_REDUNDANT))
+                if (!status.all(SHARD_APPLIED, LOCALLY_APPLIED) || !status.all(LOCALLY_REDUNDANT)) // TODO (required): should be a new property for correct merge?
                     select.set(i);
             }
             if (select.getSetBitCount() != keys.size())
@@ -515,7 +533,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
         CommandStore commandStore = safeStore.commandStore();
         Ranges touches = syncCommand.participants().touches().toRanges();
-        Ranges waitingOn = commandStore.isWaitingOnSync(syncId, touches);
+        Ranges waitingOn = commandStore.isWaitingOnVisibility(syncId, touches);
         if (waitingOn.isEmpty())
             return;
 
@@ -531,11 +549,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             }));
         });
 
-        AsyncChains.chain(() -> commandStore.markSyncing(syncId, waitingOn))
+        AsyncChains.chain(() -> commandStore.markingVisible(syncId, waitingOn))
                    .flatMap(ignore -> AsyncChains.reduce(async, Reduce.toNull(), null))
                    .begin((success, fail) -> {
-                       if (fail == null) commandStore.execute((PreLoadContext.Empty)() -> "Mark Synced", safeStore0 -> commandStore.markSynced(safeStore0, syncId, waitingOn));
-                       else commandStore.execute((PreLoadContext.Empty)() -> "Unmark Syncing", safeStore0 -> commandStore.unmarkSyncing(syncId, waitingOn));
+                       if (fail == null) commandStore.execute((PreLoadContext.Empty)() -> "Mark Synced", safeStore0 -> commandStore.markVisible(safeStore0, syncId, waitingOn));
+                       else commandStore.execute((PreLoadContext.Empty)() -> "Unmark Syncing", safeStore0 -> commandStore.cancelMarkingVisible(syncId, waitingOn));
                    });
     }
 

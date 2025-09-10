@@ -78,14 +78,14 @@ public class MockConfigurationService implements TestableConfigurationService
             return;
 
         fetchTopologyHandler.apply(epoch, this);
-        return;
     }
 
     @Override
-    public synchronized void acknowledgeEpoch(EpochReady epoch, boolean startSync)
+    public synchronized boolean acknowledgeEpoch(EpochReady epoch, boolean startSync)
     {
         Assertions.assertFalse(acks.containsKey(epoch.epoch));
         acks.put(epoch.epoch, epoch);
+        return true;
     }
 
     public synchronized EpochReady ackFor(long epoch)

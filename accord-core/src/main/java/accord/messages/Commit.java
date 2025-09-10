@@ -23,7 +23,6 @@ import accord.local.Commands;
 import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -63,7 +62,7 @@ import static accord.messages.Commit.WithTxn.HasTxn;
 import static accord.messages.Commit.WithTxn.NoTxn;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
-public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
+public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
 {
     public static class SerializerSupport
     {
@@ -150,8 +149,8 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     public final Ballot ballot;
     public final Timestamp executeAt;
     // TODO (expected): share keys with partialTxn and partialDeps - in memory and on wire
-    public final @Nullable PartialTxn partialTxn;
-    public final @Nullable PartialDeps partialDeps;
+    private @Nullable PartialTxn partialTxn;
+    private @Nullable PartialDeps partialDeps;
     public final @Nullable FullRoute<?> route;
 
 
@@ -180,6 +179,16 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         this.route = fullRoute;
     }
 
+    public @Nullable PartialTxn partialTxn()
+    {
+        return partialTxn;
+    }
+
+    public @Nullable PartialDeps partialDeps()
+    {
+        return partialDeps;
+    }
+
     public static void commitMinimalNoRead(SortedArrayList<Id> contact, Node node, SequentialAsyncExecutor executor, Topologies stabilise, Topologies all, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps unstableDeps, Callback<ReadReply> callback)
     {
         Invariants.requireArgument(stabilise.size() == 1, "Invalid coordinate epochs: %s", stabilise);
@@ -198,12 +207,17 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
+        return node.commandStores().mapReduceConsume(minEpoch, executeAt.epoch(), this);
     }
 
     @Override
-    public synchronized CommitOrReadNack apply(SafeCommandStore safeStore)
+    public CommitOrReadNack applyInternal(SafeCommandStore safeStore)
     {
+        PartialDeps partialDeps = this.partialDeps;
+        PartialTxn partialTxn = this.partialTxn;
+        if (ifDoneExpectCancelled()) // check cancellation after reading nullable fields
+            return null; // we can't throw an exception here else we override any non-exceptional reply informing the reason
+
         Route<?> route = this.route != null ? this.route : scope;
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
@@ -230,7 +244,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         if (route == null) fullRoute = Route.tryCastToFullRoute(safeCommand.current().route());
         Invariants.require(route != null);
         return safeStore.redundantBefore().foldl(fullRoute, (RedundantBefore.Bounds b, Long v, TxnId id) -> {
-            if (b.endEpoch < Long.MAX_VALUE && b.endEpoch <= v && !b.isLocallyRetiredOrPreBootstrap(id))
+            if (b.endEpoch < Long.MAX_VALUE && b.endEpoch <= v && !b.isLocallyRetiredOrUnready(id))
                 return b.endEpoch - 1;
             return v;
         }, Long.MAX_VALUE, txnId);
@@ -245,6 +259,8 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
     @Override
     protected void acceptInternal(CommitOrReadNack reply, Throwable failure)
     {
+        partialDeps = null;
+        partialTxn = null;
         if (reply != null || failure != null)
             node.reply(replyTo, replyContext, reply, failure);
         else if (kind.saveStatus == Committed)
@@ -267,7 +283,7 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
                '}';
     }
 
-    public static class Invalidate implements Request, PreLoadContext
+    public static class Invalidate extends ParticipantsRequest<Participants<?>, Reply>
     {
         public static class SerializerSupport
         {
@@ -296,27 +312,42 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
             node.send(commitTo.nodes(), to -> new Invalidate(to, commitTo, txnId, inform));
         }
 
-        public final TxnId txnId;
-        public final Participants<?> scope;
-        public final long waitForEpoch;
         public final long invalidateUntilEpoch;
 
         Invalidate(Id to, Topologies topologies, TxnId txnId, Participants<?> scope)
         {
-            this.txnId = txnId;
-            int latestRelevantIndex = latestRelevantEpochIndex(to, topologies, scope);
-            this.scope = computeScope(to, topologies, (Participants)scope, latestRelevantIndex, Participants::slice, Participants::with);
-            this.waitForEpoch = computeWaitForEpoch(to, topologies, latestRelevantIndex);
+            this(to, topologies, txnId, scope, latestRelevantEpochIndex(to, topologies, scope));
+        }
+
+        private Invalidate(Id to, Topologies topologies, TxnId txnId, Participants<?> scope, int latestRelevantIndex)
+        {
+            super(txnId, computeScope(to, topologies, (Participants)scope, latestRelevantIndex, Participants::slice, Participants::with), computeWaitForEpoch(to, topologies, latestRelevantIndex));
             // TODO (expected): make sure we're picking the right upper limit - it can mean future owners that have never witnessed the command are invalidated
             this.invalidateUntilEpoch = topologies.currentEpoch();
         }
 
         Invalidate(TxnId txnId, Participants<?> scope, long waitForEpoch, long invalidateUntilEpoch)
         {
-            this.txnId = txnId;
-            this.scope = scope;
-            this.waitForEpoch = waitForEpoch;
+            super(txnId, scope, waitForEpoch);
             this.invalidateUntilEpoch = invalidateUntilEpoch;
+        }
+
+        @Nullable
+        @Override
+        protected Cancellable submit()
+        {
+            return node.commandStores().mapReduceConsume(txnId.epoch(), invalidateUntilEpoch, this);
+        }
+
+        @Override
+        protected void acceptInternal(Reply reply, Throwable failure)
+        {
+        }
+
+        @Override
+        public Reply reduce(Reply o1, Reply o2)
+        {
+            return null;
         }
 
         @Override
@@ -338,14 +369,26 @@ public class Commit extends TxnRequest.WithUnsynced<CommitOrReadNack>
         }
 
         @Override
-        public void process(Node node, Id from, ReplyContext replyContext)
+        protected boolean supportsPartialRefusal()
         {
-            node.forEachLocal(this, scope, txnId.epoch(), invalidateUntilEpoch, safeStore -> {
-                // it's fine for this to operate on a non-participating home key, since invalidation is a terminal state,
-                // so it doesn't matter if we resurrect a redundant entry
-                StoreParticipants participants = StoreParticipants.notAccept(safeStore, scope, txnId);
-                Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), scope);
-            }).begin(node.agent());
+            return true;
+        }
+
+        @Override
+        protected Reply refuseInternal(SafeCommandStore safeStore)
+        {
+            // don't want to fail to invalidate on other shards because one shard has re-bootstrapped
+            return null;
+        }
+
+        @Override
+        protected Reply applyInternal(SafeCommandStore safeStore)
+        {
+            // it's fine for this to operate on a non-participating home key, since invalidation is a terminal state,
+            // so it doesn't matter if we resurrect a redundant entry
+            StoreParticipants participants = StoreParticipants.notAccept(safeStore, scope, txnId);
+            Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), scope);
+            return null;
         }
 
         @Override

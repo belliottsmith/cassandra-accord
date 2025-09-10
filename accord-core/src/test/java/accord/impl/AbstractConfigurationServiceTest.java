@@ -36,7 +36,7 @@ import accord.utils.async.AsyncResults;
 import com.google.common.collect.ImmutableSet;
 
 import accord.api.ConfigurationService;
-import accord.impl.AbstractConfigurationService.Minimal.EpochHistory;
+import accord.impl.AbstractTestConfigurationService.EpochHistory;
 import accord.local.Node.Id;
 import accord.primitives.Range;
 import accord.topology.Shard;
@@ -126,7 +126,7 @@ public class AbstractConfigurationServiceTest
         }
     }
 
-    private static class TestableConfigurationService extends AbstractConfigurationService.Minimal
+    private static class TestableConfigurationService extends AbstractTestConfigurationService
     {
         final Set<Long> syncStarted = new HashSet<>();
         final Set<Long> epochsFetched = new HashSet<>();
@@ -143,7 +143,7 @@ public class AbstractConfigurationServiceTest
         }
 
         @Override
-        protected void localSyncComplete(Topology topology, boolean startSync)
+        protected void onReadyToCoordinate(Topology topology, boolean startSync)
         {
             if (!syncStarted.add(topology.epoch()))
                 Assertions.fail("Sync started multiple times for " + topology.epoch());

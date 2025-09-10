@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
@@ -32,6 +33,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
 import accord.api.ConfigurationService;
+import accord.api.VisibleForImplementation;
 import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
@@ -58,7 +60,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         protected final AsyncResult.Settable<Topology> received = AsyncResults.settable();
         protected final AsyncResult.Settable<Void> acknowledged = AsyncResults.settable();
         @GuardedBy("AbstractEpochHistory.this")
-        protected AsyncResult<Void> reads = null;
+        protected EpochReady ready = null;
         @GuardedBy("AbstractEpochHistory.this")
         protected Topology topology = null;
 
@@ -72,9 +74,9 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             return epoch;
         }
 
-        public boolean isReady()
+        public EpochReady ready()
         {
-            return reads != null && reads.isDone();
+            return ready;
         }
 
         @Override
@@ -98,8 +100,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
               .append(received)
               .append(" acknowledged ")
               .append(acknowledged)
-              .append(" reads ")
-              .append(reads);
+              .append(" ready ")
+              .append(ready);
         }
 
         @VisibleForTesting
@@ -108,7 +110,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             this.topology = topology;
             received.setSuccess(topology);
             acknowledged.setSuccess(null);
-            reads = AsyncResults.success(null);
+            ready = EpochReady.done(topology.epoch());
         }
     }
 
@@ -188,7 +190,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             return getOrCreate(epoch);
         }
 
-        synchronized EpochState getOrCreate(long epoch)
+        protected synchronized EpochState getOrCreate(long epoch)
         {
             Invariants.requireArgument(!wasTruncated(epoch), "Can not re-create truncated epoch %d. Last truncated: %d", epoch, lastTruncated);
             Invariants.requireArgument(epoch >= 0, "Epoch must be non-negative but given %d", epoch);
@@ -276,8 +278,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
                 Invariants.require(lastAcknowledged == epoch - 1 || epoch == 0 || lastAcknowledged == 0,
                                    "Epoch %d != %d + 1", epoch, lastAcknowledged);
                 state = getOrCreate(epoch);
-                Invariants.require(state.reads == null, "Reads result was already set for epoch", epoch);
-                state.reads = ready.reads;
+                Invariants.require(state.ready == null, "Ready result was already set for epoch", epoch);
+                state.ready = ready;
                 lastAcknowledged = epoch;
             }
             // avoid resolving the future while holding the lock, as the callbacks get called in-line
@@ -306,7 +308,8 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
             int highestReadyIdx = -1;
             for (int i = trimFrom; i >= 0; i--)
             {
-                if (epochs.get(i).isReady())
+                EpochReady ready = epochs.get(i).ready;
+                if (ready != null && ready.reads.isDone())
                 {
                     highestReadyIdx = i;
                     break;
@@ -318,7 +321,7 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
                 return;
 
             List<EpochState> next = new ArrayList<>(epochs.subList(highestReadyIdx, count));
-            Invariants.require(next.get(0).reads.isDone());
+            Invariants.require(next.get(0).ready.reads.isDone());
             epochs = next;
             lastTruncated = next.get(0).epoch - 1;
         }
@@ -372,19 +375,18 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
     @Override
     public abstract void fetchTopologyForEpoch(long epoch);
 
-    // TODO (expected): rename, sync is too ambiguous
-    protected abstract void localSyncComplete(Topology topology, boolean startSync);
-    protected void localBootstrapsComplete(Topology topology) {}
+    protected abstract void onReadyToCoordinate(Topology topology, boolean isNewEvent);
 
+    // TODO (expected): startSync should not be necessary if we handle pending propagation work better
     @Override
-    public void acknowledgeEpoch(EpochReady ready, boolean startSync)
+    public boolean acknowledgeEpoch(EpochReady ready, boolean startSync)
     {
         if (epochs.wasTruncated(ready.epoch))
-            return;
+            return false;
 
         ready.metadata.invokeIfSuccess(() -> epochs.acknowledge(ready)).invoke(agent);
-        ready.coordinate.invokeIfSuccess(() -> localSyncComplete(epochs.getOrCreate(ready.epoch).topology, startSync)).invoke(agent);
-        ready.reads.invokeIfSuccess(() ->  localBootstrapsComplete(epochs.getOrCreate(ready.epoch).topology)).invoke(agent);
+        ready.coordinate.invokeIfSuccess(() -> onReadyToCoordinate(epochs.getOrCreate(ready.epoch).topology, startSync)).invoke(agent);
+        return true;
     }
 
     protected void topologyUpdatePostListenerNotify(Topology topology) {}
@@ -482,47 +484,17 @@ public abstract class AbstractConfigurationService<EpochState extends AbstractCo
         return sb.toString();
     }
 
-    // synchronized because state.reads is written
-    public AsyncResult<Void> epochReady(long epoch)
+    @VisibleForImplementation
+    public AsyncResult<Void> epochReady(long epoch, Function<EpochReady, AsyncResult<Void>> get)
     {
+        // synchronized for state.ready visibility
         synchronized (this)
         {
             EpochState state = epochs.getOrCreate(epoch);
-            if (state.reads != null)
-                return state.reads;
+            if (state.ready != null)
+                return get.apply(state.ready);
 
-            return state.acknowledged.flatMap(r -> state.reads);
-        }
-    }
-
-    public abstract static class Minimal extends AbstractConfigurationService<Minimal.EpochState, Minimal.EpochHistory>
-    {
-        static class EpochState extends AbstractEpochState
-        {
-            public EpochState(long epoch)
-            {
-                super(epoch);
-            }
-        }
-
-        static class EpochHistory extends AbstractEpochHistory<EpochState>
-        {
-            @Override
-            protected EpochState createEpochState(long epoch)
-            {
-                return new EpochState(epoch);
-            }
-        }
-
-        public Minimal(Node.Id node, Agent agent)
-        {
-            super(node, agent);
-        }
-
-        @Override
-        protected EpochHistory createEpochHistory()
-        {
-            return new EpochHistory();
+            return state.acknowledged.flatMap(r -> get.apply(state.ready));
         }
     }
 }

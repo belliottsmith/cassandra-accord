@@ -69,7 +69,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
     public static void withCommitted(CoordinationAdapter<?> adapter, Node node, SequentialAsyncExecutor executor, Merge merge, FullRoute<?> route, Ballot ballot, TxnId txnId, Timestamp executeAt, Txn txn, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
     {
-        if (!node.topology().hasEpoch(executeAt.epoch()))
+        if (!node.topology().hasAtLeastEpoch(executeAt.epoch()))
         {
             node.withEpochAtLeast(executeAt.epoch(), executor, failureCallback, () -> withCommitted(adapter, node, executor, merge, route, ballot, txnId, executeAt, txn, failureCallback, withDeps));
             return;

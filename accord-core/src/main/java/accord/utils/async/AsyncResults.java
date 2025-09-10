@@ -18,6 +18,7 @@
 
 package accord.utils.async;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -379,7 +380,6 @@ public class AsyncResults
      * An AsyncResult that also implements Runnable
      * @param <V>
      */
-    @VisibleForImplementation
     public static class RunnableResult<V> extends AbstractResult<V> implements Runnable
     {
         protected final Callable<V> callable;
@@ -413,14 +413,17 @@ public class AsyncResults
         return new RunnableResult<>(callable);
     }
 
-    public static RunnableResult<Void> runnableResult(Runnable runnable)
+    public static <V> AsyncResult<List<V>> allOf(List<? extends AsyncResult<? extends V>> results)
     {
-        return new RunnableResult<>(() -> {
-            runnable.run();
-            return null;
-        });
-    }
+        return new AsyncCombiner.ResultCombiner<V, List<V>>(results) {
 
+            @Override
+            List<V> process(V[] inputs)
+            {
+                return Arrays.asList(inputs);
+            }
+        }.beginAsResult();
+    }
 
     public static <V> AsyncResult<V> reduce(List<? extends AsyncResult<? extends V>> results, Reduce<V, V> reducer)
     {

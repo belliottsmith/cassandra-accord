@@ -658,7 +658,6 @@ public abstract class InMemoryCommandStore extends CommandStore
         {
             super(context, commandStore);
 
-            super.setRangesForEpoch(ranges);
             this.commands = commands;
             this.commandsForKey = commandsForKey;
             for (InMemorySafeCommand cmd : commands.values())
@@ -906,31 +905,31 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (txnId.is(EphemeralRead)) continue;
                 Participants<?> intersecting = (txnId.isSyncPoint() ? command.participants().owns(): command.participants().stillWaitsOn()).intersecting(covering, Minimal);
                 if (intersecting.isEmpty()) continue;
-                if (commandStore().unsafeGetRedundantBefore().locallyDefunct(command.txnId(), intersecting) == ALL) continue;
+                if (commandStore().unsafeGetRedundantBefore().isLocallyDefunct(command.txnId(), intersecting, ALL)) continue;
                 if (txnId.is(Key))
                 {
                     // TODO (required): document our invariants around this scenario, where a transaction with a higher txnId
                     //  but lower executeAt than a transaction that is pre-bootstrap is ignore by the CFK (but cannot be validated to be pre-bootstrap independently).
                     //  This invariant requires a timestamp store for correctness at least (as do other protocol assumptions).
                     //  Make sure these invariants are validated in all relevant locations in the burn test.
-                    boolean isShadowedByPreBootstrap = true;
+                    boolean isShadowedByUnready = true;
                     for (RoutingKey key : (AbstractUnseekableKeys)command.participants().executes())
                     {
                         SafeCommandsForKey safeCfk = commandsForKey.get(key);
                         CommandsForKey cfk = safeCfk.current();
-                        int i = cfk.indexOf(cfk.bounds().bootstrappedAt);
+                        int i = cfk.indexOf(cfk.bounds().readyAt);
                         if (i < 0) i = -1 - i;
                         while (--i >= 0)
                         {
                             CommandsForKey.TxnInfo txn = cfk.get(i);
-                            if (txn.isCommittedToExecute() && txn.executeAt.compareTo(cfk.bootstrappedAt()) > 0)
+                            if (txn.isCommittedToExecute() && txn.executeAt.compareTo(cfk.readyAt()) > 0)
                                 break;
                         }
-                        isShadowedByPreBootstrap &= i >= 0;
+                        isShadowedByUnready &= i >= 0;
                     }
-                    if (isShadowedByPreBootstrap) continue;
+                    if (isShadowedByUnready) continue;
                 }
-                illegalState();
+                illegalState("Prev: %s, updated: %s, command: %s", prev, updated, command);
             }
         }
     }
@@ -1016,7 +1015,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             super(id, time, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder, journal);
             this.executor = Executors.newSingleThreadExecutor(r -> {
                 Thread thread = new Thread(r);
-                thread.setName(CommandStore.class.getSimpleName() + '[' + id + ',' + time.id() + ']');
+                thread.setName(CommandStore.class.getSimpleName() + '[' + time.id() + ']');
                 return thread;
             });
             // "this" is leaked before constructor is completed, but since all fields are "final" and set before "this"
@@ -1205,18 +1204,15 @@ public abstract class InMemoryCommandStore extends CommandStore
      * Replay and loading logic
      */
 
-    // redundantBefore, durableBefore, newBootstrapBeganAt, safeToRead, rangesForEpoch are
-    // not replayed here. It is assumed that persistence on the application side will ensure
-    // they are brought up to latest values _before_ replay.
-    public void clear()
+    @VisibleForTesting
+    public void unsafeClearForTesting()
     {
-        Invariants.require(current == null);
-        progressLog.clear();
+        super.unsafeClearForTesting();
         commands.clear();
         commandsByExecuteAt.clear();
         commandsForKey.clear();
         rangeCommands.clear();
-        listeners.clear();
+        progressLog.clear();
         unsafeSetRejectBefore(new RejectBefore());
     }
 

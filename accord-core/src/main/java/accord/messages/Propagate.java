@@ -29,7 +29,7 @@ import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.CommandStores.StoreSelector;
 import accord.local.Commands;
 import accord.local.Node;
-import accord.local.PreLoadContext;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.RedundantStatus;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -51,7 +51,6 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.primitives.Writes;
 import accord.utils.Invariants;
-import accord.utils.MapReduceConsume;
 import accord.utils.UnhandledEnum;
 
 import javax.annotation.Nullable;
@@ -78,11 +77,10 @@ import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.utils.Invariants.illegalState;
 
 // TODO (required): detect propagate loops where we don't manage to update anything but should
-public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandStore, Void>
+public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
 {
     final Node node;
     final TxnId txnId;
-    final Route<?> route;
     final Known target;
     @Nullable final Known foundAtLeast; // the minimum we found for the keys we queried
     final InvalidIf invalidIf;
@@ -126,9 +124,9 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     @Nullable Result result,
     BiConsumer<? super FetchResult, Throwable> callback, @Nullable Tracing tracing)
     {
+        super(route);
         this.node = node;
         this.txnId = txnId;
-        this.route = route;
         this.target = target;
         this.foundAtLeast = foundAtLeast;
         this.invalidIf = invalidIf;
@@ -179,7 +177,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
             untilEpoch = Math.max(untilEpoch, committedExecuteAt.epoch());
 
         StoreSelector selector = reportTo.refine(txnId, committedExecuteAt, route);
-        node.withEpochAtLeast(untilEpoch, null, propagate, () -> node.mapReduceConsumeLocal(propagate, selector, propagate));
+        node.withEpochAtLeast(untilEpoch, null, propagate, () -> node.commandStores().mapReduceConsume(selector, propagate));
     }
 
     @Override
@@ -195,11 +193,11 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     }
 
     @Override
-    public Void apply(SafeCommandStore safeStore)
+    public Void applyInternal(SafeCommandStore safeStore)
     {
         long executeAtEpoch = committedExecuteAt == null ? txnId.epoch() : committedExecuteAt.epoch();
-        long lowEpoch = StoreParticipants.computePropagateLowEpoch(safeStore, txnId, route);
-        StoreParticipants participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, executeAtEpoch, committedExecuteAt != null);
+        long lowEpoch = StoreParticipants.computePropagateLowEpoch(safeStore, txnId, scope);
+        StoreParticipants participants = StoreParticipants.update(safeStore, scope, lowEpoch, txnId, executeAtEpoch, executeAtEpoch, committedExecuteAt != null);
         // TODO (expected): can we come up with a better more universal pattern for avoiding updating a command we don't intersect with?
         //   ideally integrated with safeStore.get()
         if (participants.owns().isEmpty() && safeStore.ifInitialised(txnId) == null)
@@ -216,7 +214,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         if (participants.executes() == null && executeAtIfKnown != null)
         {
             executeAtEpoch = executeAtIfKnown.epoch();
-            participants = StoreParticipants.update(safeStore, route, lowEpoch, txnId, executeAtEpoch, executeAtEpoch, true);
+            participants = StoreParticipants.update(safeStore, scope, lowEpoch, txnId, executeAtEpoch, executeAtEpoch, true);
         }
 
         switch (command.saveStatus().phase)
@@ -289,15 +287,24 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
         SaveStatus propagate = found.atLeast(currentlyKnown).propagatesSaveStatus();
         if (propagate.known.isSatisfiedBy(currentlyKnown))
         {
-            if (invalidIf == IfUncommitted)
+            if (found.is(Outcome.Erased) && participants.stillTouches().isEmpty())
+            {
+                if (tracing != null)
+                    tracing.trace(safeStore.commandStore(), "No longer interact with this command, and received erased response. Erasing.");
+                purge(safeStore, safeCommand, command, participants, ERASE, true);
+            }
+            else if (invalidIf == IfUncommitted)
             {
                 if (tracing != null)
                     tracing.trace(safeStore.commandStore(), "Marking invalidIfUncommitted");
                 safeStore.progressLog().invalidIfUncommitted(txnId);
             }
+            else
+            {
+                if (tracing != null)
+                    tracing.trace(safeStore.commandStore(), "Already know at least as much as peer responses.");
+            }
 
-            if (tracing != null)
-                tracing.trace(safeStore.commandStore(), "Already know at least as much as peer responses.");
             updateFetchResult(found, participants.owns());
             return updateDurability(safeStore, safeCommand, participants);
         }
@@ -349,7 +356,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
             case PreAccepted:
                 // only preaccept if we coordinate the transaction
-                if (safeStore.ranges().coordinates(txnId).intersects(route) && Route.isFullRoute(route))
+                if (safeStore.ranges().coordinates(txnId).intersects(scope) && Route.isFullRoute(scope))
                 {
                     if (tracing != null)
                         tracing.trace(safeStore.commandStore(), "Pre-accepting");
@@ -360,6 +367,12 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
 
         updateFetchResult(found, participants.owns());
         return updateDurability(safeStore, safeCommand, participants);
+    }
+
+    @Override
+    protected Void refuseInternal(SafeCommandStore safeStore)
+    {
+        return null;
     }
 
     private void updateFetchResult(Known found, Participants<?> owns)
@@ -385,7 +398,7 @@ public class Propagate implements PreLoadContext, MapReduceConsume<SafeCommandSt
     {
         FetchResult current = fetchResult;
         if (current == null)
-            return new FetchResult(target, route.slice(0, 0), foundAtLeast);
+            return new FetchResult(target, scope.slice(0, 0), foundAtLeast);
 
         return current;
     }

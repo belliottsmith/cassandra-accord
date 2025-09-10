@@ -29,8 +29,7 @@ import javax.annotation.concurrent.GuardedBy;
 
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
-import accord.api.TestableConfigurationService;
-import accord.impl.AbstractConfigurationService;
+import accord.impl.AbstractTestConfigurationService;
 import accord.local.Node;
 import accord.messages.Callback;
 import accord.messages.MessageType;
@@ -42,7 +41,7 @@ import accord.topology.Topology;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncResults;
 
-public class BurnTestConfigurationService extends AbstractConfigurationService.Minimal implements TestableConfigurationService
+public class BurnTestConfigurationService extends AbstractTestConfigurationService
 {
     private final AsyncExecutor executor;
     private final Function<Node.Id, Node> lookup;
@@ -183,15 +182,9 @@ public class BurnTestConfigurationService extends AbstractConfigurationService.M
     }
 
     @Override
-    protected void localSyncComplete(Topology topology, boolean startSync)
+    protected void onReadyToCoordinate(Topology topology, boolean startSync)
     {
         topologyUpdates.syncComplete(lookup.apply(localId), topology.nodes(), topology.epoch());
-    }
-
-    @Override
-    protected void localBootstrapsComplete(Topology topology)
-    {
-        topologyUpdates.bootstrapComplete(lookup.apply(localId), topology.epoch());
     }
 
     @Override

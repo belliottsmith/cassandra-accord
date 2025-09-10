@@ -35,8 +35,8 @@ import accord.local.Command;
 import accord.local.Command.Committed;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.RoutingKeys;
@@ -51,7 +51,6 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
-import accord.utils.MapReduceConsume;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -68,7 +67,7 @@ import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.MessageType.StandardMessage.READ_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Kind.InsufficientEpochs;
-import static accord.messages.TxnRequest.latestRelevantEpochIndex;
+import static accord.messages.RouteRequest.latestRelevantEpochIndex;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
@@ -79,7 +78,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 // TODO (required): (v1.1) if one shard times out waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)
 //   this means timing out a little earlier so the reply has time to arrive (but this should anyway be the case).
 //   This ensures a multi-key transaction interacting with replicas that have different stale shards on a replica can make progress
-public abstract class ReadData implements PreLoadContext, Request, MapReduceConsume<SafeCommandStore, ReadData.CommitOrReadNack>, LocalListeners.ComplexListener, Timeouts.Timeout
+public abstract class ReadData extends MapReduceConsumeCommandStores<Participants<?>, ReadData.CommitOrReadNack> implements Request, LocalListeners.ComplexListener, Timeouts.Timeout
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
 
@@ -134,7 +133,6 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     }
 
     public final TxnId txnId;
-    public final Participants<?> scope;
     public final long executeAtEpoch;
     public final ExecuteFlags flags;
     final boolean requiresListenersDuringExecution;
@@ -164,10 +162,9 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
+        super(RouteRequest.computeScope(to, topologies, scope, latestRelevantEpochIndex(to, topologies, scope), Participants::slice, Participants::with));
         this.txnId = txnId;
         this.flags = flags;
-        int startIndex = latestRelevantEpochIndex(to, topologies, scope);
-        this.scope = TxnRequest.computeScope(to, topologies, scope, startIndex, Participants::slice, Participants::with);
         this.partialTxn = txn == null ? null : txn.intersecting(scope, true);
         this.executeAt = executeAt;
         this.executeAtEpoch = executeAtEpoch;
@@ -181,8 +178,8 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
 
     protected ReadData(TxnId txnId, Participants<?> scope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
+        super(scope);
         this.txnId = txnId;
-        this.scope = scope;
         this.partialTxn = partialTxn;
         this.executeAt = executeAt;
         this.executeAtEpoch = executeAtEpoch;
@@ -268,9 +265,9 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         stamp = node.currentStamp();
 
         if (flags.contains(READY_TO_EXECUTE) && fastReadsMayBypassSafeStore(txnId) && partialTxn != null && executeAt != null && mayFastExecute() && (txnId.is(EphemeralRead) || flags.contains(HAS_UNIQUE_HLC)))
-            return node.commandStores().mapReduceConsume(scope, minEpoch(), executeAtEpoch, this::applyFastRead, this, this);
+            return node.commandStores().mapReduceConsume(minEpoch(), executeAtEpoch, this.overrideWithSynchronousApply(this::applyFastRead));
 
-        return node.mapReduceConsumeLocal(this, scope, minEpoch(), executeAtEpoch, this);
+        return node.commandStores().mapReduceConsume(minEpoch(), executeAtEpoch, this);
     }
 
     @Override
@@ -285,15 +282,23 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
         else return a.minEpoch <= b.minEpoch ? a : b;
     }
 
-    @Override
-    public CommitOrReadNack apply(SafeCommandStore safeStore)
+    protected CommitOrReadNack applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.execute(safeStore, scope, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        return apply(safeStore, safeCommand, participants);
+        return applyInternal(safeStore, safeCommand, participants);
     }
 
-    protected CommitOrReadNack apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
+    protected CommitOrReadNack refuseInternal(SafeCommandStore safeStore)
+    {
+        synchronized (this)
+        {
+            updateUnavailable(safeStore.ranges().allAt(executeAtEpoch));
+        }
+        return null;
+    }
+
+    protected CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
         synchronized (this)
         {
@@ -692,10 +697,15 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
             cancel.cancel();
     }
 
-    public void timeout()
+    public final void timeout()
+    {
+        timeoutInternal();
+    }
+
+    protected boolean timeoutInternal()
     {
         timeout = null;
-        cancel();
+        return cancel();
     }
 
     public int stripe()

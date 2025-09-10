@@ -40,6 +40,7 @@ import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
+import static accord.local.RedundantStatus.Property.LOG_UNAVAILABLE;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
@@ -179,7 +180,10 @@ public enum Cleanup
         FullRoute<?> route = Route.castToFullRoute(participants.route());
         // we must not use executeAt here if input == PARTIAL because with partial compaction we might be merging the combination of some old executeAt with a later partial status
         RedundantStatus redundant = redundantBefore.status(txnId, input == FULL && saveStatus.known.is(ApplyAtKnown) ? executeAt : null, route);
-        Invariants.require(redundant.none(NOT_OWNED),"Command %s that is being loaded is not owned by this shard on route %s", txnId, route);
+        Invariants.require(redundant.none(NOT_OWNED), "Command %s that is being loaded is not owned by this shard on route %s", txnId, route);
+
+        if (redundant.all(LOG_UNAVAILABLE))
+            return logUnavailable(input);
 
         if (redundant.none(LOCALLY_REDUNDANT))
             return NO;
@@ -196,7 +200,7 @@ public enum Cleanup
         Invariants.paranoid(redundant.all(SHARD_APPLIED));
 
         if (!redundant.all(LOCALLY_DURABLE_TO_DATA_STORE))
-            return truncateWithOutcome(txnId, input, redundant, min);
+            return truncateWithOutcome(txnId, input, redundant, min, participants);
 
         HasOutcome test = durability.allShards();
         if (saveStatus.compareTo(Vestigial) >= 0)
@@ -211,7 +215,7 @@ public enum Cleanup
             test = Durability.HasOutcome.max(test, durableBefore.min(txnId, participants.route()));
 
         if (test != Universal)
-            return truncateWithOutcome(txnId, input, redundant, min);
+            return truncateWithOutcome(txnId, input, redundant, min, participants);
 
         if (redundant.all(GC_BEFORE))
             return erase(txnId, min);
@@ -230,20 +234,31 @@ public enum Cleanup
         if (isCovering && txnId.isSyncPoint() && participants.owns().isEmpty())
         {
             RedundantStatus redundant = redundantBefore.status(txnId, null, participants.touches());
+            if (redundant.all(LOG_UNAVAILABLE))
+                return logUnavailable(input);
             if (redundant.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
                 return vestigial(txnId);
         }
 
         RedundantStatus ownStatus = redundantBefore.status(txnId, null, participants.owns());
+        if (ownStatus.all(LOG_UNAVAILABLE))
+            return logUnavailable(input);
         return cleanupUndecided(txnId, ownStatus, isCovering);
     }
 
-    private static Cleanup cleanupIfUndecidedWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundantStatus)
+    private static Cleanup logUnavailable(Input input)
+    {
+        if (input == FULL)
+            throw new LogUnavailableException();
+        return ERASE;
+    }
+
+    private static Cleanup cleanupIfUndecidedWithFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, RedundantStatus redundant)
     {
         if (input == PARTIAL || saveStatus.hasBeen(PreCommitted))
             return NO;
 
-        return cleanupUndecided(txnId, redundantStatus, true);
+        return cleanupUndecided(txnId, redundant, true);
     }
 
     private static Cleanup cleanupUndecided(TxnId txnId, RedundantStatus ownStatus, boolean isCoveringRoute)
@@ -296,10 +311,19 @@ public enum Cleanup
         return INVALIDATE;
     }
 
-    private static Cleanup truncateWithOutcome(TxnId txnId, Input input, RedundantStatus status, Cleanup atLeast)
+    private static Cleanup truncateWithOutcome(TxnId txnId, Input input, RedundantStatus status, Cleanup atLeast, StoreParticipants participants)
     {
-        return atLeast.compareTo(TRUNCATE_WITH_OUTCOME) > 0 ? atLeast : input == PARTIAL || !status.all(LOCALLY_DEFUNCT)
-                                                                        ? TRUNCATE_WITH_OUTCOME : TRUNCATE;
+        if (atLeast.compareTo(TRUNCATE_WITH_OUTCOME) >= 0)
+            return atLeast;
+        if (input == PARTIAL)
+            return TRUNCATE_WITH_OUTCOME;
+        if (status.all(LOCALLY_DEFUNCT))
+            return TRUNCATE;
+        // TODO (expected): tighten constraints when stillExecutes is null (this means undecided; should be handled elsewhere but confirm)
+        Participants<?> stillExecutes = participants.stillExecutes();
+        if (stillExecutes != null && stillExecutes.isEmpty())
+            return TRUNCATE;
+        return TRUNCATE_WITH_OUTCOME;
     }
 
     private static Cleanup truncate(TxnId txnId, Cleanup atLeast)

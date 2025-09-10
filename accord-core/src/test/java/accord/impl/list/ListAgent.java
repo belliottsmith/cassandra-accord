@@ -24,7 +24,6 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
@@ -33,6 +32,7 @@ import java.util.function.LongSupplier;
 import javax.annotation.Nullable;
 
 import accord.api.CoordinatorEventListener;
+import accord.api.OwnershipEventListener;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Result;
 import accord.api.Scheduler;
@@ -47,8 +47,10 @@ import accord.impl.basic.NodeSink;
 import accord.impl.basic.Packet;
 import accord.impl.basic.SimulatedFault;
 import accord.impl.mock.Network;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.PreLoadContext;
+import accord.local.LogUnavailableException;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.ReplyContext;
@@ -74,14 +76,14 @@ import static com.google.common.base.Functions.identity;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class ListAgent implements InMemoryAgent, CoordinatorEventListener
+public class ListAgent implements InMemoryAgent, CoordinatorEventListener, OwnershipEventListener
 {
     final Scheduler scheduler;
     final RandomSource rnd;
     final long timeout;
     final Consumer<Throwable> onFailure;
     final Consumer<Runnable> retryBootstrap;
-    final BiConsumer<Timestamp, Ranges> onStale;
+    final OwnershipEventListener ownershipEventListener;
     final IntSupplier coordinationDelays;
     final IntSupplier progressDelays;
     final IntSupplier timeoutDelays;
@@ -90,14 +92,14 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     final NodeSink.TimeoutSupplier timeoutSupplier;
     final Int2ObjectHashMap<Snapshotter<Snapshot>> snapshotters = new Int2ObjectHashMap<>();
 
-    public ListAgent(Scheduler scheduler, RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, BiConsumer<Timestamp, Ranges> onStale, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time, NodeSink.TimeoutSupplier timeoutSupplier)
+    public ListAgent(Scheduler scheduler, RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, OwnershipEventListener ownershipEventListener, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time, NodeSink.TimeoutSupplier timeoutSupplier)
     {
         this.scheduler = scheduler;
         this.rnd = rnd;
         this.timeout = timeout;
         this.onFailure = onFailure;
         this.retryBootstrap = retryBootstrap;
-        this.onStale = onStale;
+        this.ownershipEventListener = ownershipEventListener;
         this.timeoutSupplier = timeoutSupplier;
         this.coordinationDelays = coordinationDelays;
         this.progressDelays = progressDelays;
@@ -132,9 +134,9 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     }
 
     @Override
-    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+    public OwnershipEventListener ownershipEvents()
     {
-        retryBootstrap.accept(retry);
+        return this;
     }
 
     @Override
@@ -146,10 +148,23 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener
     @Override
     public void onStale(Timestamp staleSince, Ranges ranges)
     {
-        onStale.accept(staleSince, ranges);
+        ownershipEventListener.onStale(staleSince, ranges);
     }
 
-    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class));
+    @Override
+    public void onSuccessfulBootstrap(CommandStore commandStore, int attempt, long epoch, Ranges ranges)
+    {
+        ownershipEventListener.onSuccessfulBootstrap(commandStore, attempt, epoch, ranges);
+    }
+
+    @Override
+    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+    {
+        retryBootstrap.accept(retry);
+        ownershipEventListener.onFailedBootstrap(attempt, phase, ranges, retry, failure);
+    }
+
+    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class, LogUnavailableException.class));
     @Override
     public void onUncaughtException(Throwable t)
     {

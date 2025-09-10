@@ -165,11 +165,11 @@ class Updating
         // we don't insert anything before prunedBeforeById (we LoadPruned instead), so we can simply bump it by 0 or 1
         int newPrunedBeforeById = advanceByIdIndex(cfk.prunedBeforeById, insertPos, updatePos);
         Invariants.paranoid(cfk.prunedBeforeById < 0 || newById[newPrunedBeforeById].equals(byId[cfk.prunedBeforeById]));
-        int newMaxAppliedPreBootstrapWriteById = updateMaxAppliedPreBootstrapWriteById(newInfo, insertPos, curInfo == null, cfk, byId, additions, additionCount);
+        int newMaxAppliedUnreadyWriteById = updateMaxAppliedUnreadyWriteById(newInfo, insertPos, curInfo == null, cfk, byId, additions, additionCount);
         long newMaxHlc = updateMaxUniqueHlc(cfk, newInfo, command);
 
         cachedTxnIds().forceDiscard(additions, additionAndPrunedCount);
-        return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
+        return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
     }
 
     static int advanceByIdIndex(int curIndex, TxnInfo[] byId, int insertPos, int updatePos, TxnId[] additions, int additionCount)
@@ -233,14 +233,14 @@ class Updating
         for (int i = 0 ; i < additionsBeforeOldUndecided ; ++i)
         {
             TxnId addition = additions[i];
-            if (!cfk.mayExecute(addition) || cfk.isPreBootstrap(addition))
+            if (!cfk.mayExecute(addition) || cfk.isUnready(addition))
                 continue;
 
             min = addition;
             break;
         }
 
-        if ((min == null || min.compareTo(newInfo) > 0) && newInfo.compareTo(COMMITTED) < 0 && cfk.mayExecute(newInfo) && !cfk.isPreBootstrap(newInfo))
+        if ((min == null || min.compareTo(newInfo) > 0) && newInfo.compareTo(COMMITTED) < 0 && cfk.mayExecute(newInfo) && !cfk.isUnready(newInfo))
             min = newInfo;
 
         if (min != null && cur != null && cur.compareTo(min) < 0)
@@ -261,31 +261,31 @@ class Updating
         return newIndex;
     }
 
-    static int updateMaxAppliedPreBootstrapWriteById(TxnInfo newInfo, int insertPos, boolean inserted, CommandsForKey cfk, TxnInfo[] byId, TxnId[] additions, int additionCount)
+    static int updateMaxAppliedUnreadyWriteById(TxnInfo newInfo, int insertPos, boolean inserted, CommandsForKey cfk, TxnInfo[] byId, TxnId[] additions, int additionCount)
     {
-        int curIndex = cfk.maxAppliedPreBootstrapWriteById;
-        if (!newInfo.mayExecute() && newInfo.is(APPLIED) && newInfo.is(Write) && cfk.isPreBootstrap(newInfo) && newInfo.executeAt.compareTo(cfk.bounds.bootstrappedAt) > 0
+        int curIndex = cfk.maxAppliedUnreadyWriteById;
+        if (!newInfo.mayExecute() && newInfo.is(APPLIED) && newInfo.is(Write) && cfk.isUnready(newInfo) && newInfo.executeAt.compareTo(cfk.bounds.readyAt) > 0
             && (curIndex < 0 || newInfo.executeAt.compareTo(byId[curIndex].executeAt) > 0))
             return advanceByIdIndexByAdditionsOnly(insertPos, newInfo, additions, additionCount);
         return advanceByIdIndex(curIndex, byId, insertPos, inserted, additions, additionCount);
     }
 
-    static int recomputeMaxAppliedPreBootstrapWriteById(QuickBounds bounds, TxnInfo[] newById, int maxIndex)
+    static int recomputeMaxAppliedUnreadyWriteById(QuickBounds bounds, TxnInfo[] newById, int maxIndex)
     {
         maxIndex = Math.min(maxIndex, newById.length);
-        int newMaxAppliedPreBootstrapWriteById = -1;
+        int newMaxAppliedUnreadyWriteById = -1;
         for (int i = 0 ; i < maxIndex ; ++i)
-            newMaxAppliedPreBootstrapWriteById = maybeUpdateMaxAppliedPreBootstrapWriteById(bounds, newById, newMaxAppliedPreBootstrapWriteById, i);
-        return newMaxAppliedPreBootstrapWriteById;
+            newMaxAppliedUnreadyWriteById = maybeUpdateMaxAppliedUnreadyWriteById(bounds, newById, newMaxAppliedUnreadyWriteById, i);
+        return newMaxAppliedUnreadyWriteById;
     }
 
-    static int maybeUpdateMaxAppliedPreBootstrapWriteById(QuickBounds bounds, TxnInfo[] byId, int newMaxAppliedPreBootstrapWriteById, int i)
+    static int maybeUpdateMaxAppliedUnreadyWriteById(QuickBounds bounds, TxnInfo[] byId, int newMaxAppliedUnreadyWriteById, int i)
     {
         TxnInfo txn = byId[i];
-        if (!txn.mayExecute() && txn.is(APPLIED) && txn.isWrite() && CommandsForKey.isPreBootstrap(txn, bounds) && txn.executeAt.compareTo(bounds.bootstrappedAt) > 0
-            && (newMaxAppliedPreBootstrapWriteById < 0 || txn.executeAt.compareTo(byId[newMaxAppliedPreBootstrapWriteById].executeAt) > 0))
+        if (!txn.mayExecute() && txn.is(APPLIED) && txn.isWrite() && CommandsForKey.isUnready(txn, bounds) && txn.executeAt.compareTo(bounds.readyAt) > 0
+            && (newMaxAppliedUnreadyWriteById < 0 || txn.executeAt.compareTo(byId[newMaxAppliedUnreadyWriteById].executeAt) > 0))
             return i;
-        return newMaxAppliedPreBootstrapWriteById;
+        return newMaxAppliedUnreadyWriteById;
     }
 
     static Object computeInfoAndAdditions(CommandsForKey cfk, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, Command command)
@@ -495,10 +495,10 @@ class Updating
 
         int newPrunedBeforeById = advanceByIdIndex(cfk.prunedBeforeById, pos, curInfo == null);
         Invariants.paranoid(cfk.prunedBeforeById < 0 || newById[newPrunedBeforeById].equals(byId[cfk.prunedBeforeById]));
-        int newMaxAppliedPreBootstrapWriteById = updateMaxAppliedPreBootstrapWriteById(newInfo, pos, curInfo == null, cfk, byId, NO_INFOS, 0);
+        int newMaxAppliedUnreadyWriteById = updateMaxAppliedUnreadyWriteById(newInfo, pos, curInfo == null, cfk, byId, NO_INFOS, 0);
 
         long newMaxHlc = updateMaxUniqueHlc(cfk, newInfo, command);
-        return cfk.update(newById, newMinUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
+        return cfk.update(newById, newMinUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
     }
 
     /**
@@ -800,7 +800,7 @@ class Updating
                 return newMaxAppliedWriteByExecuteAt;
             }
         }
-        else if (newInfo.is(APPLIED) || (cfk.isPreBootstrap(newInfo) && pos - 1 == maxAppliedWriteByExecuteAt))
+        else if (newInfo.is(APPLIED) || (cfk.isUnready(newInfo) && pos - 1 == maxAppliedWriteByExecuteAt))
         {
             return maybeAdvanceMaxAppliedAndCheckForLinearizabilityViolations(cfk, pos, newInfo.kind(), newInfo);
         }
@@ -1060,7 +1060,7 @@ class Updating
                 if (newById == null) newById = byId;
                 TxnInfo[] newCommittedByExecuteAt = cfk.committedByExecuteAt;
                 int newMinUndecidedById = cfk.minUndecidedById;
-                int newMaxAppliedPreBootstrapWriteById = cfk.maxAppliedPreBootstrapWriteById;
+                int newMaxAppliedUnreadyWriteById = cfk.maxAppliedUnreadyWriteById;
                 Object[] newLoadingPruned = cfk.loadingPruned;
                 TxnId[] prunedIds = NO_TXNIDS;
                 int clearMissingCount = missingCount;
@@ -1092,7 +1092,7 @@ class Updating
                         // we can safely use missing[prunedIndex] here because we only fill missing with transactions for which we manage execution
                         if (minUndecided != null)
                             newMinUndecidedById = Arrays.binarySearch(newById, minUndecided);
-                        newMaxAppliedPreBootstrapWriteById = advanceByIdIndex(newMaxAppliedPreBootstrapWriteById, byId, Integer.MAX_VALUE, false, missing, missingCount);
+                        newMaxAppliedUnreadyWriteById = advanceByIdIndex(newMaxAppliedUnreadyWriteById, byId, Integer.MAX_VALUE, false, missing, missingCount);
                     }
                 }
                 cachedTxnIds().discard(missing, clearMissingCount);
@@ -1119,7 +1119,7 @@ class Updating
                 {
                     int prunedBeforeById = cfk.prunedBeforeById;
                     Invariants.require(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
-                    newCfk = new CommandsForKey(cfk.key(), cfk.bounds, newById, newMinUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged, true);
+                    newCfk = new CommandsForKey(cfk.key(), cfk.bounds, newById, newMinUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged, true);
                 }
 
                 CommandsForKeyUpdate result = newCfk;

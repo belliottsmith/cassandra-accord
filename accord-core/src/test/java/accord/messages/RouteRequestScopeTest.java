@@ -34,7 +34,7 @@ import static accord.impl.IntKey.keys;
 import static accord.impl.IntKey.range;
 import static accord.impl.IntKey.scope;
 
-public class TxnRequestScopeTest
+public class RouteRequestScopeTest
 {
     @Test
     void createDisjointScopeTest()
@@ -48,14 +48,14 @@ public class TxnRequestScopeTest
         Topologies.Multi topologies = new Topologies.Multi((TopologySorter.StaticSorter)(a, b, s)->0, topology2, topology1);
 
         // 3 remains a member across both topologies, so can process requests without waiting for latest topology data
-        Assertions.assertEquals(scope(150), ((KeyRoute)TxnRequest.computeScope(id(3), topologies, route)).toParticipants());
-        Assertions.assertEquals(1, TxnRequest.computeWaitForEpoch(id(3), topologies, route));
+        Assertions.assertEquals(scope(150), ((KeyRoute) RouteRequest.computeScope(id(3), topologies, route)).toParticipants());
+        Assertions.assertEquals(1, RouteRequest.computeWaitForEpoch(id(3), topologies, route));
 
         // 1 leaves the shard, and 4 joins, so both need the latest information
-        Assertions.assertEquals(scope(150), ((KeyRoute)TxnRequest.computeScope(id(1), topologies, route)).toParticipants());
-        Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(1), topologies, route));
-        Assertions.assertEquals(scope(150), ((KeyRoute)TxnRequest.computeScope(id(4), topologies, route)).toParticipants());
-        Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(4), topologies, route));
+        Assertions.assertEquals(scope(150), ((KeyRoute) RouteRequest.computeScope(id(1), topologies, route)).toParticipants());
+        Assertions.assertEquals(2, RouteRequest.computeWaitForEpoch(id(1), topologies, route));
+        Assertions.assertEquals(scope(150), ((KeyRoute) RouteRequest.computeScope(id(4), topologies, route)).toParticipants());
+        Assertions.assertEquals(2, RouteRequest.computeWaitForEpoch(id(4), topologies, route));
     }
 
     @Test
@@ -76,9 +76,9 @@ public class TxnRequestScopeTest
 
         Topologies.Multi topologies = new Topologies.Multi((TopologySorter.StaticSorter)(a,b,s)->0, topology2, topology1);
 
-        Assertions.assertEquals(scope(150, 250), ((PartialKeyRoute)TxnRequest.computeScope(id(1), topologies, route)).toParticipants());
-        Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(1), topologies, route));
-        Assertions.assertEquals(scope(150, 250), ((PartialKeyRoute)TxnRequest.computeScope(id(4), topologies, route)).toParticipants());
-        Assertions.assertEquals(2, TxnRequest.computeWaitForEpoch(id(4), topologies, route));
+        Assertions.assertEquals(scope(150, 250), ((PartialKeyRoute) RouteRequest.computeScope(id(1), topologies, route)).toParticipants());
+        Assertions.assertEquals(2, RouteRequest.computeWaitForEpoch(id(1), topologies, route));
+        Assertions.assertEquals(scope(150, 250), ((PartialKeyRoute) RouteRequest.computeScope(id(4), topologies, route)).toParticipants());
+        Assertions.assertEquals(2, RouteRequest.computeWaitForEpoch(id(4), topologies, route));
     }
 }

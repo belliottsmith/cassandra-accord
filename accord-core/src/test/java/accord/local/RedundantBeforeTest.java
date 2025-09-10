@@ -44,8 +44,8 @@ import org.assertj.core.api.Assertions;
 
 import static accord.impl.IntKey.routing;
 import static accord.local.RedundantStatus.ONLY_LE_MASK;
-import static accord.local.RedundantStatus.PRE_BOOTSTRAP_MERGE_MASK;
-import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
+import static accord.local.RedundantStatus.UNREADY_MERGE_MASK;
+import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.RedundantStatus.selectOrCreate;
 import static accord.local.RedundantStatus.toAll;
 
@@ -65,7 +65,7 @@ public class RedundantBeforeTest
     static class Unmerged extends RedundantStatus
     {
         final int insertCounter;
-        Unmerged(int encoded, int insertCounter)
+        Unmerged(long encoded, int insertCounter)
         {
             super(encoded);
             this.insertCounter = insertCounter;
@@ -195,20 +195,15 @@ public class RedundantBeforeTest
         else return e.getValue().mergedLt;
     }
 
-    private static int merge(int a, int b)
-    {
-        return a | b;
-    }
-
     private static SomeStatus merge(SomeStatus a, SomeStatus b)
     {
-        return RedundantStatus.selectOrCreate(merge(a.encoded, b.encoded), a, b);
+        return RedundantStatus.selectOrCreate(a.encoded | b.encoded, a, b);
     }
 
     private static SomeStatus filter(SomeStatus a, SomeStatus history)
     {
-        if (history.is(PRE_BOOTSTRAP_OR_STALE))
-            return selectOrCreate((short) (a.encoded & PRE_BOOTSTRAP_MERGE_MASK), a, history);
+        if (history.is(UNREADY))
+            return selectOrCreate((short) (a.encoded & UNREADY_MERGE_MASK), a, history);
         return a;
     }
 

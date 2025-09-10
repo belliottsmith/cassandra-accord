@@ -35,7 +35,7 @@ import accord.messages.GetDurableBefore;
 import accord.messages.GetDurableBefore.DurableBeforeReply;
 import accord.messages.SetGloballyDurable;
 import accord.topology.Topology;
-import accord.utils.Invariants;
+
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public class GlobalDurability implements Callback<Object>
@@ -110,7 +110,6 @@ public class GlobalDurability implements Callback<Object>
      */
     synchronized void start()
     {
-        Invariants.require(!stop); // cannot currently restart safely
         long nowMicros = node.elapsed(MICROSECONDS);
         long scheduleAt = computeNextGlobalSyncTime(nowMicros);
         scheduled = node.scheduler().selfRecurring(this::run, scheduleAt - nowMicros, MICROSECONDS);

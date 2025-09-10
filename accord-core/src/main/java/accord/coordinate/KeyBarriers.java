@@ -25,8 +25,8 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.RoutingKey;
 import accord.local.CommandSummaries;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.durability.DurabilityService.SyncLocal;
@@ -38,9 +38,9 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.topology.Topologies;
-import accord.utils.MapReduce;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
+import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 
@@ -86,9 +86,11 @@ public class KeyBarriers
         }
     }
 
-    public static AsyncChain<Found> find(Node node, Timestamp min, RoutingKey key, SyncLocal syncLocal, SyncRemote syncRemote)
+    public static AsyncResult<Found> find(Node node, Timestamp min, RoutingKey key, SyncLocal syncLocal, SyncRemote syncRemote)
     {
-        return node.commandStores().mapReduce((PreLoadContext.Empty) () -> "Key Barrier", RoutingKeys.of(key), min.epoch(), Long.MAX_VALUE, new Find(min, key, syncLocal, syncRemote));
+        Find find = new Find(min, key, syncLocal, syncRemote);
+        node.commandStores().mapReduceConsume(min.epoch(), Long.MAX_VALUE, find);
+        return find.result;
     }
 
     /*
@@ -98,8 +100,9 @@ public class KeyBarriers
      * For Applied we can return success immediately with the executeAt epoch. For PreApplied we can add
      * a listener for when it transitions to Applied and then return success.
      */
-    static class Find extends AsyncResults.AbstractResult<Found> implements MapReduce<SafeCommandStore, Found>, CommandSummaries.AllCommandVisitor
+    static class Find extends MapReduceConsumeCommandStores<RoutingKeys, Found> implements CommandSummaries.AllCommandVisitor
     {
+        final AsyncResults.SettableByCallback<Found> result = new AsyncResults.SettableByCallback<>();
         final Timestamp min;
         final RoutingKey find;
         final SyncLocal syncLocal;
@@ -108,6 +111,7 @@ public class KeyBarriers
 
         Find(Timestamp min, RoutingKey find, SyncLocal syncLocal, SyncRemote syncRemote)
         {
+            super(RoutingKeys.of(find));
             this.min = min;
             this.find = find;
             this.syncLocal = syncLocal;
@@ -115,13 +119,19 @@ public class KeyBarriers
         }
 
         @Override
-        public Found apply(SafeCommandStore safeStore)
+        public Found applyInternal(SafeCommandStore safeStore)
         {
             // Barriers are trying to establish that committed transactions are applied before the barrier (or in this case just minEpoch)
             // so all existing transaction types should ensure that at this point. An earlier txnid may have an executeAt that is after
             // this barrier or the transaction we listen on and that is fine
-            safeStore.visit(RoutingKeys.of(find), TxnId.NONE, Ws, STARTED_AFTER, min, IGNORE, this);
+            safeStore.visit(scope, TxnId.NONE, Ws, STARTED_AFTER, min, IGNORE, this);
             return found;
+        }
+
+        @Override
+        protected Found refuseInternal(SafeCommandStore safeStore)
+        {
+            return null;
         }
 
         @Override
@@ -146,6 +156,25 @@ public class KeyBarriers
         public Found reduce(Found o1, Found o2)
         {
             throw illegalState("Should not be possible to find multiple transactions");
+        }
+
+        @Nullable
+        @Override
+        public TxnId primaryTxnId()
+        {
+            return null;
+        }
+
+        @Override
+        public String reason()
+        {
+            return "Find existing transaction";
+        }
+
+        @Override
+        public void accept(Found result, Throwable failure)
+        {
+            this.result.accept(result, failure);
         }
     }
 

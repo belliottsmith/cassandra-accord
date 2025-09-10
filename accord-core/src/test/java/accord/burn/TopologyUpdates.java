@@ -21,7 +21,6 @@ package accord.burn;
 import accord.api.AsyncExecutor;
 import accord.api.TestableConfigurationService;
 import accord.local.Node;
-import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
 import accord.utils.Invariants;
@@ -30,12 +29,10 @@ import org.agrona.collections.Long2ObjectHashMap;
 
 import java.util.*;
 import java.util.function.Function;
-import java.util.function.Predicate;
 
 public class TopologyUpdates
 {
     private final Long2ObjectHashMap<Map<Node.Id, Ranges>> pendingSyncTopologies = new Long2ObjectHashMap<>();
-    private final Long2ObjectHashMap<Map<Node.Id, Ranges>> pendingBootstrap = new Long2ObjectHashMap<>();
 
     Function<Node.Id, AsyncExecutor> executors;
     public TopologyUpdates(Function<Node.Id, AsyncExecutor> executors)
@@ -54,7 +51,6 @@ public class TopologyUpdates
             nodeToNewRanges.put(node, newRanges);
         }
         pendingSyncTopologies.put(update.epoch(), nodeToNewRanges);
-        pendingBootstrap.put(update.epoch(), new HashMap<>(nodeToNewRanges));
         return MessageTask.begin(originator, nodes, executors.apply(originator.id()), "TopologyNotify:" + update.epoch(), (node, from, onDone) -> {
             long nodeEpoch = node.epoch();
             if (nodeEpoch + 1 < update.epoch())
@@ -81,18 +77,6 @@ public class TopologyUpdates
         });
     }
 
-    public synchronized void bootstrapComplete(Node originator, long epoch)
-    {
-        if (pendingBootstrap.isEmpty())
-            return;
-
-        Map<Node.Id, Ranges> pending = pendingBootstrap.get(epoch);
-        Invariants.require(pending != null && pending.remove(originator.id()) != null);
-
-        if (pending.isEmpty())
-            pendingBootstrap.remove(epoch);
-    }
-
     public synchronized void epochClosed(Node originator, Collection<Node.Id> cluster, Ranges ranges, long epoch)
     {
         executors.apply(originator.id()).execute(() -> {
@@ -111,16 +95,6 @@ public class TopologyUpdates
                 onDone.accept(true);
             });
         });
-    }
-
-    public boolean isPending(Range range, Node.Id id)
-    {
-        Predicate<Map<Node.Id, Ranges>> test = map -> {
-            Ranges rs = map.get(id);
-            return rs != null && rs.intersects(range);
-        };
-        return pendingSyncTopologies.values().stream().anyMatch(test)
-               || pendingBootstrap.values().stream().anyMatch(test);
     }
 
     public int pendingTopologies()

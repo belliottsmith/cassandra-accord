@@ -60,7 +60,7 @@ import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.PreApplied;
 
-public class Apply extends TxnRequest<ApplyReply>
+public class Apply extends RouteRequest<ApplyReply>
 {
     public static final Factory FACTORY = Apply::new;
     public static class SerializationSupport
@@ -132,13 +132,13 @@ public class Apply extends TxnRequest<ApplyReply>
     public Cancellable submit()
     {
         if (flags.contains(READY_TO_EXECUTE) && fastWritesMayBypassSafeStore() && kind == Kind.Maximal && !txnId.isSyncPoint())
-            return node.mapReduceConsumeLocal(scope, minEpoch, maxEpoch, this::applyDirect, this, this);
+            return node.commandStores().mapReduceConsume(minEpoch, maxEpoch, this.overrideWithSynchronousApply(this::applyDirect));
 
-        return node.mapReduceConsumeLocal(this, minEpoch, maxEpoch, this);
+        return node.commandStores().mapReduceConsume(minEpoch, maxEpoch, this);
     }
 
     @Override
-    public ApplyReply apply(SafeCommandStore safeStore)
+    public ApplyReply applyInternal(SafeCommandStore safeStore)
     {
         Route<?> route = bestRoute();
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, maxEpoch);
@@ -209,7 +209,7 @@ public class Apply extends TxnRequest<ApplyReply>
         PartialDeps deps = this.deps;
         Writes writes = this.writes;
         Result result = this.result;
-        if (isCancelled()) // check cancellation after reading nullable fields
+        if (ifDoneExpectCancelled()) // check cancellation after reading nullable fields
             return null;
 
         return apply(newSaveStatus, safeStore, participants, ballot, txn, txnId, executeAt, deps, bestRoute(), writes, result);
@@ -217,7 +217,6 @@ public class Apply extends TxnRequest<ApplyReply>
 
     public static ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
     {
-
         return apply(PreApplied, safeStore, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
     }
 

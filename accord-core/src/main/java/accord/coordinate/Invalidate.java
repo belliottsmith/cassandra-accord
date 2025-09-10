@@ -282,14 +282,41 @@ public class Invalidate extends AbstractCoordination<Outcome, InvalidateReply, I
     {
         // TODO (desired): merge with FetchData.InvalidateOnDone
         // TODO (desired): when sending to network, register a callback for when local application of commitInvalidate message ahs been performed, so no need to special-case
-        node.forEachLocal(PreLoadContext.contextFor(txnId, "Local Commit Invalidate"), reportTo.refine(txnId, null, commitTo), safeStore -> {
-            // TODO (expected): consid
-            StoreParticipants participants = StoreParticipants.notAccept(safeStore, commitTo, txnId);
-            Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), commitTo);
-        }).begin((s, f) -> {
-            callback.accept(INVALIDATED, null);
-            if (f != null) // TODO (required): consider exception handling more carefully: should we catch these prior to passing to callbacks?
-                node.agent().onUncaughtException(f);
+        node.commandStores().mapReduceConsume(reportTo, new MapReduceConsumeCommandStores<Participants<?>, Void>(commitTo)
+        {
+            @Override
+            public Void reduce(Void o1, Void o2)
+            {
+                return null;
+            }
+
+            @Override
+            public void accept(Void result, Throwable failure)
+            {
+                callback.accept(INVALIDATED, null);
+                if (failure != null) // TODO (required): consider exception handling more carefully: should we catch these prior to passing to callbacks?
+                    node.agent().onUncaughtException(failure);
+            }
+
+            @Override
+            public TxnId primaryTxnId()
+            {
+                return txnId;
+            }
+
+            @Override
+            public String reason()
+            {
+                return "Local Commit Invalidate";
+            }
+
+            @Override
+            protected Void applyInternal(SafeCommandStore safeStore)
+            {
+                StoreParticipants participants = StoreParticipants.notAccept(safeStore, commitTo, txnId);
+                Commands.commitInvalidate(safeStore, safeStore.get(txnId, participants), commitTo);
+                return null;
+            }
         });
     }
 

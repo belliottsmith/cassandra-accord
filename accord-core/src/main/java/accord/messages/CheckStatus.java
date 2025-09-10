@@ -65,6 +65,7 @@ import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtKnown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtProposed;
+import static accord.primitives.Known.Nothing;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.Durability;
 
@@ -79,12 +80,11 @@ import static accord.primitives.Status.Durability.HasDecision.DurablyStable;
 import static accord.primitives.Status.Durability.HasDecision.FastPathDecided;
 import static accord.primitives.Status.Stable;
 import static accord.primitives.Status.Truncated;
-import static accord.messages.TxnRequest.computeScope;
 import static accord.primitives.WithQuorum.HasQuorum;
 import static accord.primitives.Route.castToRoute;
 import static accord.primitives.Route.isRoute;
 
-public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
+public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatus.CheckStatusReply>
         implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, CheckStatus.CheckStatusReply>
 {
     public static class SerializationSupport
@@ -115,29 +115,26 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     }
 
     // query is usually a Route
-    public final Participants<?> query;
-    public final long sourceEpoch;
+    public final Participants<?> scope;
     public final IncludeInfo includeInfo;
     // if set, simply ensure the ballot on the command is equal or greater to this ballot
     public final @Nullable Ballot bumpBallot;
 
-    public CheckStatus(TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot)
+    public CheckStatus(TxnId txnId, Participants<?> scope, long sourceEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot)
     {
-        super(txnId);
+        super(txnId, scope, sourceEpoch);
         this.bumpBallot = bumpBallot;
-        Invariants.require(txnId.is(query.domain()));
-        this.query = query;
-        this.sourceEpoch = sourceEpoch;
+        Invariants.require(txnId.is(scope.domain()));
+        this.scope = scope;
         this.includeInfo = includeInfo;
     }
 
-    public CheckStatus(Id to, Topologies topologies, TxnId txnId, Participants<?> query, long sourceEpoch, IncludeInfo includeInfo, Ballot bumpBallot)
+    public CheckStatus(Id to, Topologies topologies, TxnId txnId, Participants<?> scope, long sourceEpoch, IncludeInfo includeInfo, Ballot bumpBallot)
     {
-        super(txnId);
+        super(txnId, scope, sourceEpoch);
         this.bumpBallot = bumpBallot;
-        if (isRoute(query)) this.query = computeScope(to, topologies, castToRoute(query), 0, Route::slice, Route::with);
-        else this.query = computeScope(to, topologies, (Participants) query, 0, Participants::slice, Participants::with);
-        this.sourceEpoch = sourceEpoch;
+        if (isRoute(scope)) this.scope = computeScope(to, topologies, castToRoute(scope), 0, Route::slice, Route::with);
+        else this.scope = computeScope(to, topologies, (Participants) scope, 0, Participants::slice, Participants::with);
         this.includeInfo = includeInfo;
     }
 
@@ -145,13 +142,13 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     public Cancellable submit()
     {
         // TODO (expected): only contact sourceEpoch
-        return node.mapReduceConsumeLocal(this, query, txnId.epoch(), sourceEpoch, this);
+        return node.commandStores().mapReduceConsume(txnId.epoch(), waitForEpoch, this);
     }
 
     @Override
-    public CheckStatusReply apply(SafeCommandStore safeStore)
+    public CheckStatusReply applyInternal(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.read(safeStore, query, txnId, sourceEpoch);
+        StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, waitForEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
 
@@ -190,9 +187,9 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
                 validFor = validFor.intersecting(command.participants().owns(), Minimal);
 
             KnownMap result = KnownMap.create(validFor, saveStatus.known);
-            // TODO (expected): consider this case more carefully - should we reply null for minOwned? Should we explicitly handle truncated states?
+            // TODO (required): consider this case more carefully - should we reply null for minOwned? Should we explicitly handle truncated states?
             if (validFor != query.owns())
-                result = KnownMap.merge(result, KnownMap.create(query.owns(), saveStatus.known.validForAll()));
+                result = KnownMap.merge(result, KnownMap.create(query.owns().without(validFor), saveStatus.known.validForAll()));
             return result;
         }
 
@@ -201,7 +198,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         if (known.deps().hasProposedOrDecidedDeps())
         {
             Invariants.require(command.participants().touches().containsAll(command.partialDeps().covering));
-            result = KnownMap.create(command.partialDeps().covering, new MinAndMaxKnown(null, Known.Nothing.with(saveStatus.known.deps())));
+            result = KnownMap.create(command.partialDeps().covering, new MinAndMaxKnown(null, Nothing.with(saveStatus.known.deps())));
             known = known.with(DepsUnknown);
         }
         if (known.definition() == DefinitionKnown && !txnId.isSystemTxn())
@@ -498,12 +495,12 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
 
         public Known maxKnown()
         {
-            return map.foldl(MinAndMaxKnown::nonNullOrMax, Known.Nothing, i -> false);
+            return map.foldl(MinAndMaxKnown::nonNullOrMax, Nothing, i -> false);
         }
 
         public Known maxKnown(Unseekables<?> query)
         {
-            return map.foldl(query, MinAndMaxKnown::nonNullOrMax, Known.Nothing, i -> false);
+            return map.foldl(query, MinAndMaxKnown::nonNullOrMax, Nothing, i -> false);
         }
 
         /**
@@ -521,7 +518,7 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
         public Known minKnown(Unseekables<?> query)
         {
             Known known = map.foldlWithDefault(query, MinAndMaxKnown::nonNullOrMin, MinAndMaxKnown.Nothing, null, i -> false);
-            return known == null ? Known.Nothing : known;
+            return known == null ? Nothing : known;
         }
 
         public Known minMaxKnown(RoutingKey key)
@@ -719,11 +716,5 @@ public class CheckStatus extends AbstractRequest<CheckStatus.CheckStatusReply>
     public MessageType type()
     {
         return CHECK_STATUS_REQ;
-    }
-
-    @Override
-    public long waitForEpoch()
-    {
-        return sourceEpoch;
     }
 }

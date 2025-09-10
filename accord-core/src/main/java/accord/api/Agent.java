@@ -27,10 +27,8 @@ import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.ReplyContext;
-import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Status.Phase;
-import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
@@ -44,9 +42,7 @@ public interface Agent extends UncaughtExceptionListener
 {
     default @Nullable Tracing trace(TxnId txnId, TraceEventType eventType) { return null; }
 
-    void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure);
-
-    void onStale(Timestamp staleSince, Ranges ranges);
+    OwnershipEventListener ownershipEvents();
 
     default CoordinatorEventListener coordinatorEvents()
     {

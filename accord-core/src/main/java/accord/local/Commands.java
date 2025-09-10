@@ -94,7 +94,7 @@ import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
-import static accord.local.RedundantStatus.Property.PRE_BOOTSTRAP_OR_STALE;
+import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.WAS_OWNED;
 import static accord.local.StoreParticipants.Filter.LOAD;
@@ -200,7 +200,7 @@ public class Commands
         }
 
         if (command.known().deps().hasProposedOrDecidedDeps()) participants = command.participants().supplement(participants);
-        else participants = participants.filter(UPDATE, safeStore, txnId, null);
+        else participants = participants.filter(UPDATE, safeStore, txnId, command.executeAtIfKnown()); // executeAt may be known if PreCommitted (without Definition)
 
         Validated validated = validate(safeStore, txnId, ballot, newSaveStatus, command, participants, participants.route(), txn, deps);
         Invariants.require(validated.compareTo(INSUFFICIENT) > 0);
@@ -455,7 +455,7 @@ public class Commands
         //                       information to execute in the eventual execution epoch (that they didn't know they needed when they were made stable)
 
         participants = participants.supplement(route);
-        participants = participants.filter(UPDATE, safeStore, txnId, null);
+        participants = participants.filter(UPDATE, safeStore, txnId, txnId);
         Validated validated = validate(safeStore, txnId, null, SaveStatus.Stable, command, participants, route, txn, deps);
         Invariants.require(validated.compareTo(INSUFFICIENT) > 0);
 
@@ -1097,6 +1097,7 @@ public class Commands
 
     private static boolean validateSafeToCleanup(RedundantBefore redundantBefore, Command command, @Nonnull StoreParticipants participants, boolean force)
     {
+        if (participants.stillTouches().isEmpty()) return true;
         if (command.hasBeen(Applied)) return true;
         if (!command.hasBeen(PreCommitted)) return true;
         if (participants.route() == null) return true;   // TODO (expected): tighten this e.g. with && participants.owns.isEmpty()
@@ -1110,7 +1111,8 @@ public class Commands
             return true;
         }
 
-        if (status.all(SHARD_APPLIED, LOCALLY_REDUNDANT) || status.all(LOCALLY_DEFUNCT))
+        // TODO (required): should be an additional property so we can track correctly on merge...?
+        if (status.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return true;
 
         if (force && participants.waitsOn() != null && participants.stillWaitsOn().isEmpty())
@@ -1119,8 +1121,10 @@ public class Commands
         return false;
     }
 
+    static int counter = 0;
     public static boolean maybeCleanup(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, @Nonnull StoreParticipants newParticipants)
     {
+        ++counter;
         StoreParticipants cleanupParticipants = newParticipants.filter(LOAD, safeStore, command.txnId(), command.executeAtIfKnown());
         Cleanup cleanup = shouldCleanup(FULL, safeStore, command, cleanupParticipants);
         if (cleanup == NO)
@@ -1362,7 +1366,7 @@ public class Commands
             boolean remove = status.all(LOCALLY_REDUNDANT);
             // TODO (required): consider this logic again, incl. whether it is even needed
             if (remove && waitingSafe.txnId().isSyncPoint() && depId.isSyncPoint())
-                remove = status.all(LOCALLY_SYNCED) || status.all(PRE_BOOTSTRAP_OR_STALE);
+                remove = status.all(LOCALLY_SYNCED) || status.all(UNREADY); // TODO (required): should be additional property for correct merge?
 
             if (!remove)
                 return ifNotRedundant;
@@ -1493,6 +1497,8 @@ public class Commands
             case UPDATE_TXN_KEEP_DEPS:
                 return upd.partialDeps();
             case UPDATE_TXN_MERGE_DEPS:
+                if (newDeps == null)
+                    return upd.partialDeps();
                 return upd.partialDeps().with(newDeps.intersecting(participants.stillTouches()));
             case UPDATE_TXN_AND_DEPS:
                 return prepareNewDeps(participants, newDeps);
@@ -1582,7 +1588,7 @@ public class Commands
         if (txnId.isSyncPoint() && expectKnown.is(DepsKnown))
         {
             Ranges missing = Ranges.ofSortedAndDeoverlapped(safeStore.redundantBefore().foldl(fullRoute, (Bounds b, List<Range> v, TxnId id) -> {
-                if (b.endEpoch < Long.MAX_VALUE && !b.isLocallyRetiredOrPreBootstrap(id))
+                if (b.endEpoch < Long.MAX_VALUE && !b.isLocallyRetiredOrUnready(id))
                     v.add(b.range);
                 return v;
             }, new ArrayList<>(), txnId).toArray(Range[]::new)).intersecting(fullRoute, Minimal).without(participants.stillWaitsOn());
@@ -1601,7 +1607,7 @@ public class Commands
         return adding == null ? required.isEmpty() : adding.covers(required);
     }
 
-    private static <V> boolean containsAll(Deps adding, Participants<?> required)
+    private static boolean containsAll(Deps adding, Participants<?> required)
     {
         return adding == null ? required.isEmpty() : adding.covers(required);
     }

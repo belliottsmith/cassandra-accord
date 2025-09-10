@@ -101,6 +101,11 @@ public interface ConfigurationService
             this.reads = reads;
         }
 
+        public AsyncResult<Void> metadata() { return metadata; }
+        public AsyncResult<Void> coordinate() { return coordinate; }
+        public AsyncResult<Void> data() { return data; }
+        public AsyncResult<Void> reads() { return reads; }
+
         public static EpochReady done(long epoch)
         {
             return new EpochReady(epoch, DONE, DONE, DONE, DONE);
@@ -187,8 +192,10 @@ public interface ConfigurationService
      * Called after this node learns of an epoch as part of the {@code Listener#onTopologyUpdate} call.
      * On invocation the system is not necessarily ready to process the epoch, and the BootstrapReady parameter
      * provides indications of when the bootstrap has completed various phases of setup.
+     *
+     * returns false is epoch has already been truncated
      */
-    void acknowledgeEpoch(EpochReady ready, boolean startSync);
+    boolean acknowledgeEpoch(EpochReady ready, boolean startSync);
 
     void reportEpochClosed(Ranges ranges, long epoch);
 
