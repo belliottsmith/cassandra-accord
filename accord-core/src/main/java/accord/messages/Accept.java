@@ -59,7 +59,7 @@ import static accord.primitives.Known.KnownDeps.DepsKnown;
 
 // TODO (low priority, efficiency): use different objects for send and receive, so can be more efficient
 //                                  (e.g. serialize without slicing, and without unnecessary fields)
-public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
+public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
 {
     public static class SerializerSupport
     {
@@ -100,10 +100,10 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     }
 
     @Override
-    public AcceptReply apply(SafeCommandStore safeStore)
+    public AcceptReply applyInternal(SafeCommandStore safeStore)
     {
         PartialDeps partialDeps = this.partialDeps;
-        if (isCancelled()) // check cancellation after reading nullable fields
+        if (ifDoneExpectCancelled()) // check cancellation after reading nullable fields
             return null; // we can't throw an exception here else we override any non-exceptional reply informing the reason
 
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch(), executeAt.epoch());
@@ -197,7 +197,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, executeAt.epoch(), this);
+        return node.commandStores().mapReduceConsume(minEpoch, executeAt.epoch(), this);
     }
 
     @Override
@@ -374,30 +374,28 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         }
     }
 
-    public static class NotAccept extends AbstractRequest<AcceptReply>
+    public static class NotAccept extends ParticipantsRequest<Participants<?>, AcceptReply>
     {
         public final Status status;
         public final Ballot ballot;
-        public final Participants<?> participants;
 
         public NotAccept(Status status, Ballot ballot, TxnId txnId, Participants<?> participants)
         {
-            super(txnId);
+            super(txnId, participants, txnId.epoch());
             this.status = status;
             this.ballot = ballot;
-            this.participants = participants;
         }
 
         @Override
         public Cancellable submit()
         {
-            return node.mapReduceConsumeLocal(this, participants, txnId.epoch(), txnId.epoch(), this);
+            return node.commandStores().mapReduceConsume(txnId.epoch(), txnId.epoch(), this);
         }
 
         @Override
-        public AcceptReply apply(SafeCommandStore safeStore)
+        public AcceptReply applyInternal(SafeCommandStore safeStore)
         {
-            StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
+            StoreParticipants participants = StoreParticipants.notAccept(safeStore, scope, txnId);
             SafeCommand safeCommand = safeStore.get(txnId, participants);
             AcceptOutcome outcome = Commands.notAccept(safeStore, safeCommand, status, ballot);
             switch (outcome)
@@ -432,19 +430,13 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
         @Override
         public String toString()
         {
-            return "NotAccept{kind: " + status + ", ballot:" + ballot + ", txnId:" + txnId + ", key:" + participants + '}';
+            return "NotAccept{kind: " + status + ", ballot:" + ballot + ", txnId:" + txnId + ", key:" + scope + '}';
         }
 
         @Override
         public String reason()
         {
             return status + "{" + txnId + '}';
-        }
-
-        @Override
-        public long waitForEpoch()
-        {
-            return txnId.epoch();
         }
     }
 }

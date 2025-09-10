@@ -370,7 +370,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     private final Int2ObjectHashMap<Ranges> pendingFetches = new Int2ObjectHashMap<>();
 
     @Override
-    public FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges delegate)
+    public FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges delegate, FetchKind kind)
     {
         int storeId = safeStore.commandStore().id();
         synchronized (this)

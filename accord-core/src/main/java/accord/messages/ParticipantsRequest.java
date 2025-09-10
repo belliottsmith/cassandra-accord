@@ -19,10 +19,8 @@
 package accord.messages;
 
 import java.util.function.BiFunction;
-
 import javax.annotation.Nullable;
 
-import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommandStore;
@@ -42,58 +40,14 @@ import accord.utils.async.Cancellable;
 import static accord.topology.Shard.Flag.MUST_WITNESS;
 import static accord.utils.Invariants.illegalArgument;
 
-public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, R>
+public abstract class ParticipantsRequest<P extends Participants<?>, R extends Reply> extends NoWaitRequest<P, R> implements Request, PreLoadContext, MapReduceConsume<SafeCommandStore, R>
 {
-    public static abstract class WithUnsynced<R extends Reply> extends TxnRequest<R>
-    {
-        public final long minEpoch; // TODO (low priority, clarity): can this just always be TxnId.epoch?
-
-        public WithUnsynced(Id to, Topologies topologies, TxnId txnId, Route<?> route)
-        {
-            this(to, topologies, txnId, route, latestRelevantEpochIndex(to, topologies, route));
-        }
-
-        public WithUnsynced(Id to, Topologies topologies, Route<?> route)
-        {
-            this(to, topologies, TxnId.NONE, route, latestRelevantEpochIndex(to, topologies, route));
-        }
-
-        protected WithUnsynced(Id to, Topologies topologies, TxnId txnId, Route<?> route, int startIndex)
-        {
-            super(to, topologies, route, txnId, startIndex);
-            this.minEpoch = topologies.oldestEpoch();
-        }
-
-        protected WithUnsynced(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch)
-        {
-            super(txnId, scope, waitForEpoch);
-            this.minEpoch = minEpoch;
-        }
-    }
-
-    public final Route<?> scope;
     public final long waitForEpoch;
 
-    public ReplyContext replyContext()
+    public ParticipantsRequest(TxnId txnId, P scope, long waitForEpoch)
     {
-        return replyContext;
-    }
-
-    public TxnRequest(Node.Id to, Topologies topologies, Route<?> route, TxnId txnId)
-    {
-        this(to, topologies, route, txnId, latestRelevantEpochIndex(to, topologies, route));
-    }
-
-    public TxnRequest(Node.Id to, Topologies topologies, Route<?> route, TxnId txnId, int startIndex)
-    {
-        this(txnId, computeScope(to, topologies, route, startIndex), computeWaitForEpoch(to, topologies, startIndex));
-    }
-
-    public TxnRequest(TxnId txnId, Route<?> scope, long waitForEpoch)
-    {
-        super(txnId);
+        super(txnId, scope);
         Invariants.require(!scope.isEmpty());
-        this.scope = scope;
         this.waitForEpoch = waitForEpoch;
     }
 
@@ -101,7 +55,7 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
      * The portion of the complete Route that this TxnRequest applies to. Should represent the complete
      * range owned by the target node for the involved epochs.
      */
-    public Route<?> scope()
+    public P scope()
     {
         return scope;
     }
@@ -125,8 +79,10 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
 
     protected abstract @Nullable Cancellable submit();
 
+    protected abstract R applyInternal(SafeCommandStore safeStore);
+
     // finds the first topology index that intersects with the node
-    protected static int latestRelevantEpochIndex(Node.Id node, Topologies topologies, Unseekables<?> route)
+    protected static int latestRelevantEpochIndex(Id node, Topologies topologies, Unseekables<?> route)
     {
         if (topologies.size() == 1)
             return 0;
@@ -171,12 +127,12 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
      * on the assumption that this might also mean some local shard rearrangement
      * (ignoring the case where the latest epochs do not intersect the keys at all)
      */
-    public static long computeWaitForEpoch(Node.Id node, Topologies topologies, Unseekables<?> scope)
+    public static long computeWaitForEpoch(Id node, Topologies topologies, Unseekables<?> scope)
     {
         return computeWaitForEpoch(node, topologies, latestRelevantEpochIndex(node, topologies, scope));
     }
 
-    public static long computeWaitForEpoch(Node.Id node, Topologies topologies, int startIndex)
+    public static long computeWaitForEpoch(Id node, Topologies topologies, int startIndex)
     {
         int i = Math.max(1, startIndex);
         int mi = topologies.size();
@@ -212,33 +168,33 @@ public abstract class TxnRequest<R extends Reply> extends AbstractRequest<R> imp
         return topologies.get(i - 1).epoch();
     }
 
-    public static Route<?> computeScope(Node.Id node, Topologies topologies, FullRoute<?> fullRoute)
+    public static Route<?> computeScope(Id node, Topologies topologies, FullRoute<?> fullRoute)
     {
         return computeScope(node, topologies, fullRoute, latestRelevantEpochIndex(node, topologies, fullRoute));
     }
 
-    public static Participants<?> computeScope(Node.Id node, Topologies topologies, Participants<?> participants)
+    public static Participants<?> computeScope(Id node, Topologies topologies, Participants<?> participants)
     {
         return computeScope(node, topologies, participants, latestRelevantEpochIndex(node, topologies, participants));
     }
 
-    public static Route<?> computeScope(Node.Id node, Topologies topologies, Route<?> route)
+    public static Route<?> computeScope(Id node, Topologies topologies, Route<?> route)
     {
         return computeScope(node, topologies, route, latestRelevantEpochIndex(node, topologies, route));
     }
 
-    public static Route<?> computeScope(Node.Id node, Topologies topologies, Route<?> route, int startIndex)
+    public static Route<?> computeScope(Id node, Topologies topologies, Route<?> route, int startIndex)
     {
         return computeScope(node, topologies, route, startIndex, Route::slice, Route::with);
     }
 
-    public static Participants<?> computeScope(Node.Id node, Topologies topologies, Participants<?> route, int startIndex)
+    public static Participants<?> computeScope(Id node, Topologies topologies, Participants<?> route, int startIndex)
     {
         return computeScope(node, topologies, route, startIndex, Participants::slice, Participants::with);
     }
 
     // TODO (low priority, clarity): move to Topologies
-    public static <I, O> O computeScope(Node.Id node, Topologies topologies, I keys, int startIndex, BiFunction<I, Ranges, O> slice, BiFunction<O, O, O> merge)
+    public static <I, O> O computeScope(Id node, Topologies topologies, I keys, int startIndex, BiFunction<I, Ranges, O> slice, BiFunction<O, O, O> merge)
     {
         Ranges last = null;
         O scope = null;

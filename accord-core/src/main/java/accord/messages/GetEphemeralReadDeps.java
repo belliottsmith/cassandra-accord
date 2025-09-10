@@ -37,7 +37,7 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
-public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralReadDeps.GetEphemeralReadDepsOk>
+public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeralReadDeps.GetEphemeralReadDepsOk>
 {
     public static final class SerializationSupport
     {
@@ -64,11 +64,11 @@ public class GetEphemeralReadDeps extends TxnRequest.WithUnsynced<GetEphemeralRe
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, executionEpoch, this);
+        return node.commandStores().mapReduceConsume(minEpoch, executionEpoch, this);
     }
 
     @Override
-    public GetEphemeralReadDepsOk apply(SafeCommandStore safeStore)
+    public GetEphemeralReadDepsOk applyInternal(SafeCommandStore safeStore)
     {
         long latestEpoch = Math.max(safeStore.node().epoch(), node.epoch());
 

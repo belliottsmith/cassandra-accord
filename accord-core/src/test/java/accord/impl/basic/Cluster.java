@@ -36,7 +36,6 @@ import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -56,6 +55,7 @@ import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.Journal;
 import accord.api.MessageSink;
+import accord.api.OwnershipEventListener;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.Scheduler.Scheduled;
@@ -80,6 +80,7 @@ import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
+import accord.local.LogUnavailableException;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.RedundantBefore;
@@ -100,7 +101,6 @@ import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
-import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
@@ -126,7 +126,6 @@ import static accord.local.Cleanup.INVALIDATE;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.StoreParticipants.Filter.LOAD;
-import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.utils.Invariants.Paranoia.LINEAR;
 import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 import static java.util.Collections.emptyMap;
@@ -234,7 +233,6 @@ public class Cluster
     final RandomSource random;
     final LinkConfig linkConfig;
     final Function<Id, Node> lookup;
-    final Function<Id, Journal> journalLookup;
     final PendingQueue pending;
     final Runnable checkFailures;
     final List<Runnable> onDone = new ArrayList<>();
@@ -245,14 +243,13 @@ public class Cluster
     BiFunction<Id, Id, Link> links;
     long droppedAt;
 
-    public Cluster(RandomSource random, MessageListener messageListener, Supplier<PendingQueue> queueSupplier, Runnable checkFailures, Function<Id, Node> lookup, Function<Id, Journal> journalLookup, IntSupplier rf, Consumer<Packet> responseSink)
+    public Cluster(RandomSource random, MessageListener messageListener, Supplier<PendingQueue> queueSupplier, Runnable checkFailures, Function<Id, Node> lookup, IntSupplier rf, Consumer<Packet> responseSink)
     {
         this.random = random;
         this.messageListener = messageListener;
         this.pending = queueSupplier.get();
         this.checkFailures = checkFailures;
         this.lookup = lookup;
-        this.journalLookup = journalLookup;
         this.responseSink = responseSink;
         this.linkConfig = defaultLinkConfig(random, rf);
         this.links = linkConfig.defaultLinks;
@@ -427,10 +424,8 @@ public class Cluster
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        TriFunction<BiConsumer<Timestamp, Ranges>, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, scheduler, timeoutSupplier) -> new ListAgent(scheduler, randomSupplier.get(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
-        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, randomSupplier.get(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
-            throw new IllegalAccessError("Global executor should never get a stale event");
-        }, () -> { throw new UnsupportedOperationException(); }, () -> { throw new UnsupportedOperationException(); }, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
+        TriFunction<OwnershipEventListener, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (ownershipEvents, scheduler, timeoutSupplier) -> new ListAgent(scheduler, randomSupplier.get(), 1000L, failures::add, retryBootstrap, ownershipEvents, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
+        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, randomSupplier.get(), 1000L, failures::add, retryBootstrap, OwnershipEventListener.FAIL, timeoutDelays, timeoutDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         TopologyFactory topologyFactory = new TopologyFactory(initialTopology.maxRf(), initialTopology.ranges().stream().toArray(Range[]::new))
         {
             @Override
@@ -590,7 +585,9 @@ public class Cluster
                     ++cmdCounter;
                     command = command.updateParticipants(command.participants().filter(LOAD, commandStore.unsafeGetRedundantBefore(), command.txnId(), command.executeAtIfKnown()));
                     // Journal will not have result persisted. This part is here for test purposes and ensuring that we have strict object equality.
-                    Command reconstructed = journal.loadCommand(commandStore.id(), command.txnId(), commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore());
+                    Command reconstructed = null;
+                    try { reconstructed = journal.loadCommand(commandStore.id(), command.txnId(), commandStore.unsafeGetRedundantBefore(), commandStore.durableBefore()); }
+                    catch (LogUnavailableException ignore) {}
                     if (reconstructed == null || reconstructed.saveStatus().hasBeen(Status.Truncated))
                         return;
 
@@ -622,7 +619,7 @@ public class Cluster
 
     public static Map<MessageType, Stats> run(Id[] nodes, int[] prefixes, MessageListener messageListener, Supplier<PendingQueue> queueSupplier,
                                               Function<Id, AsyncExecutor> nodeExecutorSupplier,
-                                              TriFunction<BiConsumer<Timestamp, Ranges>, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier,
+                                              TriFunction<OwnershipEventListener, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier,
                                               Runnable checkFailures, Consumer<Packet> responseSink,
                                               Supplier<RandomSource> randomSupplier,
                                               Supplier<TimeService> timeServiceSupplier,
@@ -636,7 +633,7 @@ public class Cluster
         try
         {
             RandomSource random = randomSupplier.get();
-            Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, nodeMap::get, journalMap::get, () -> topologyFactory.rf, responseSink);
+            Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, nodeMap::get, () -> topologyFactory.rf, responseSink);
             TopologyUpdates topologyUpdates = new TopologyUpdates(executorMap::get);
             TopologyRandomizer.Listener schemaApply = t -> {
                 for (Node node : nodeMap.values())
@@ -676,7 +673,7 @@ public class Cluster
                 @Override public long now() { return sinks.pending.nowInMillis(); }
                 @Override public TimeUnit units() { return MILLISECONDS; }
             };
-            TopologyRandomizer configRandomizer = new TopologyRandomizer(randomSupplier, prefixes, topology, topologyUpdates, nodeMap::get, schemaApply);
+            TopologyRandomizer topologyRandomizer = new TopologyRandomizer(randomSupplier, prefixes, topology, topologyUpdates, nodeMap::get, schemaApply);
             List<DurabilityService> durabilityServices = new ArrayList<>();
             List<Service> services = new ArrayList<>();
             for (Id id : nodes)
@@ -684,9 +681,9 @@ public class Cluster
                 ClusterScheduler scheduler = sinks.new ClusterScheduler(id.id);
                 MessageSink messageSink = sinks.create(id, timeouts);
                 TimeService timeService = timeServiceSupplier.get();
-                BiConsumer<Timestamp, Ranges> onStale = (sinceAtLeast, ranges) -> configRandomizer.onStale(id, sinceAtLeast, ranges);
+                OwnershipEventListener ownershipEventListener = topologyRandomizer.listener(id);
                 AsyncExecutor nodeExecutor = nodeExecutorSupplier.apply(id);
-                Agent agent = agentSupplier.apply(onStale, scheduler, timeouts);
+                Agent agent = agentSupplier.apply(ownershipEventListener, scheduler, timeouts);
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);
@@ -731,7 +728,7 @@ public class Cluster
             Runnable updateProgressLogConcurrency;
             {
                 updateProgressLogConcurrency = () -> {
-                    nodeMap.values().forEach(node -> node.commandStores().forEachCommandStore(cs -> cs.execute(() -> {
+                    nodeMap.values().forEach(node -> node.commandStores().forAllUnsafe(cs -> cs.execute(() -> {
                         ((TestProgressLog)cs.unsafeProgressLog()).config().concurrency = random.nextInt(8, 32);
                     })));
                 };
@@ -757,59 +754,98 @@ public class Cluster
                     updateProgressLogConcurrency.run();
             }, 5L, SECONDS);
 
-            Scheduled reconfigure = clusterScheduler.recurring(configRandomizer::maybeUpdateTopology, 1, SECONDS);
+            Scheduled reconfigure = clusterScheduler.recurring(topologyRandomizer::maybeUpdateTopology, 1, SECONDS);
 
             Purge purge = new Purge(clusterScheduler, random, nodesList, nodeMap, journalMap);
 
             Scheduled restart = clusterScheduler.recurring(() -> {
-                Id id = pickNodeNotBootstrapping(random, nodesList, nodeMap);
+                Id id = pickNodeNotBootstrapping(random, nodesList, topologyRandomizer);
                 if (id == null)
                     return;
 
-                CommandStores stores = nodeMap.get(id).commandStores();
+                Node node = nodeMap.get(id);
+                CommandStores stores = node.commandStores();
                 while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
 
-                trace.debug("Triggering store cleanup and journal replay for node " + id);
+                // TODO (expected): we include too many ranges here, including any that are retired
+                Ranges ranges = Ranges.of(Stream.of(node.commandStores().all()).flatMap(cs -> cs.unsafeGetRangesForEpoch().all().stream()).toArray(Range[]::new));
+                boolean rebootstrap = topologyFactory.rf > 2 && random.nextBoolean() && !topologyRandomizer.unsafeToRebootstrap(ranges);
+                trace.debug(String.format("Triggering %s for node %s",
+                                          rebootstrap ? "rebootstrap" : "bounce and journal replay",
+                                          id));
+
                 CommandsForKey.disableLinearizabilityViolationsReporting();
+                if (rebootstrap)
+                    topologyRandomizer.markRebootstrapping(node);
 
                 // Clean data and restore from snapshot
-                ListStore listStore = (ListStore) nodeMap.get(id).commandStores().dataStore();
+                ListStore listStore = (ListStore) node.commandStores().dataStore();
                 NavigableMap<RoutableKey, Timestamped<int[]>> prevData = listStore.copyOfCurrentData();
+                listStore.clear();
+
+                // We are simulating node restart, so its remote listeners will also be gone
+                ((DefaultRemoteListeners) node.remoteListeners()).clear();
                 Int2ObjectHashMap<NavigableMap<TxnId, Command>> beforeStores = copyCommands(stores.all());
 
-                listStore.clear();
-                // We are simulating node restart, so its remote listeners will also be gone
-                ((DefaultRemoteListeners) nodeMap.get(id).remoteListeners()).clear();
-                for (CommandStore store : stores.all())
-                {
-                    InMemoryCommandStore commandStore = (InMemoryCommandStore) store;
-                    commandStore.clear();
-                }
-
-                // Replay journal
                 Journal journal = journalMap.get(id);
-                List<? extends Journal.TopologyUpdate> list = journal.replayTopologies();
+
                 Journal.TopologyUpdate lastUpdate = null;
-                for (Journal.TopologyUpdate update : list)
                 {
-                    Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
-                    lastUpdate = update;
+                    Iterator<? extends Journal.TopologyUpdate> iter = journal.replayTopologies().iterator();
+                    while (iter.hasNext())
+                    {
+                        Journal.TopologyUpdate update = iter.next();
+                        Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
+                        lastUpdate = update;
+                    }
+
+                    // Reset and restore command store states
+                    for (CommandStore store : stores.all())
+                    {
+                        DelayedCommandStore store1 = ((DelayedCommandStore) store);
+                        CommandStores.RangesForEpoch beforeRestore = store1.unsafeGetRangesForEpoch();
+                        store1.unsafeClearForTesting();
+                        if (lastUpdate != null)
+                            store1.unsafeSetRangesForEpoch(lastUpdate.commandStores.get(store.id()));
+                        CommandStores.RangesForEpoch afterRestore = store1.unsafeGetRangesForEpoch();
+                        if (!beforeRestore.equals(afterRestore))
+                            Invariants.require(beforeRestore.equals(afterRestore));
+                    }
+
+                    if (lastUpdate != null)
+                        node.commandStores().resetTopology(lastUpdate);
                 }
 
-                if (lastUpdate != null)
-                    ((DelayedCommandStores) nodeMap.get(id).commandStores()).validateShardStateForTesting(lastUpdate);
+                if (rebootstrap)
+                {
+                    node.durability().stop();
 
-                listStore.restore();
-                for (CommandStore store : stores.all())
-                    ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
-                journal.replay(stores);
+                    // make sure to flush anything in flight before truncating journal
+                    ((InMemoryJournal)journal).dropAll();
+                    stores.rebootstrap(node).invoke(node.agent());
 
-                // Re-enable safety checks
-                while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
-                CommandsForKey.enableLinearizabilityViolationsReporting();
-                verifyConsistentRestore(beforeStores, stores.all());
-                // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
-                listStore.checkAtLeast(stores, prevData);
+                    while (sinks.drain(getPendingPredicate(id, stores.all())));
+
+                    CommandsForKey.enableLinearizabilityViolationsReporting();
+                    node.durability().start();
+                }
+                else
+                {
+                    if (lastUpdate != null)
+                        ((DelayedCommandStores) node.commandStores()).validateShardStateForTesting(lastUpdate);
+
+                    listStore.restore();
+                    for (CommandStore store : stores.all())
+                        ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
+                    journal.replay(stores);
+
+                    // Re-enable safety checks
+                    while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
+                    CommandsForKey.enableLinearizabilityViolationsReporting();
+                    verifyConsistentRestore(beforeStores, stores.all());
+                    // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
+                    listStore.checkAtLeast(stores, prevData);
+                }
                 trace.debug("Done with replay.");
             }, () -> random.nextInt(10, 30), SECONDS);
 
@@ -915,15 +951,14 @@ public class Cluster
         return result;
     }
 
-    private static Id pickNodeNotBootstrapping(RandomSource random, List<Id> ids, Map<Id, Node> nodeMap)
+    private static Id pickNodeNotBootstrapping(RandomSource random, List<Id> ids, TopologyRandomizer topologyRandomizer)
     {
         List<Id> remaining = new ArrayList<>(ids);
         while (!remaining.isEmpty())
         {
             int i = random.nextInt(remaining.size());
             Id id = remaining.get(i);
-            CommandStore[] stores = nodeMap.get(id).commandStores().all();
-            if (!Stream.of(stores).anyMatch(CommandStore::isBootstrapping))
+            if (!topologyRandomizer.isBootstrapping(id))
                 return id;
 
             remaining.set(i, remaining.get(remaining.size() - 1));
@@ -989,7 +1024,7 @@ public class Cluster
                         if (store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::shardAndLocallyRedundantBefore).compareTo(txnId) > 0)
                             continue;
 
-                        if (beforeCommand.participants().owns().isEmpty() && store.durableBefore().min(txnId).compareTo(Quorum) >= 0)
+                        if (beforeCommand.participants().owns().isEmpty() && store.durableBefore().min(txnId).compareTo(Status.Durability.HasOutcome.Quorum) >= 0)
                             continue;
 
                         if (!beforeCommand.saveStatus().hasBeen(Status.PreCommitted) && store.unsafeGetRedundantBefore().min(beforeCommand.participants().owns(), RedundantBefore.Bounds::locallyRedundantBefore).compareTo(txnId) > 0)

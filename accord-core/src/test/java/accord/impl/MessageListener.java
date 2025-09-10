@@ -25,7 +25,7 @@ import accord.messages.Message;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.Request;
 import accord.messages.SimpleReply;
-import accord.messages.TxnRequest;
+import accord.messages.RouteRequest;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
@@ -199,8 +199,8 @@ public interface MessageListener
 
         private static boolean containsAny(Request message)
         {
-            if (message instanceof TxnRequest<?>)
-                return txnIdFilter.contains(((TxnRequest<?>) message).txnId);
+            if (message instanceof RouteRequest<?>)
+                return txnIdFilter.contains(((RouteRequest<?>) message).txnId);
             // this includes txn that depend on the txn, should this limit for the first txnId?
             if (message instanceof PreLoadContext)
                 return ((PreLoadContext) message).txnIds().stream().anyMatch(txnIdFilter::contains);

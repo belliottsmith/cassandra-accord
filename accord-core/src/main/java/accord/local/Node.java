@@ -27,9 +27,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -68,29 +68,26 @@ import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
-import accord.messages.TxnRequest;
 import accord.primitives.Ballot;
 import accord.primitives.EpochSupplier;
 import accord.primitives.FullRoute;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Routables;
+import accord.primitives.RoutingKeys;
 import accord.primitives.Seekables;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.TxnId.Cardinality;
-import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.topology.TopologyManager;
 import accord.utils.DeterministicSet;
 import accord.utils.Invariants;
-import accord.utils.MapReduceConsume;
 import accord.utils.PersistentField;
 import accord.utils.PersistentField.Persister;
 import accord.utils.RandomSource;
-import accord.utils.Reduce;
 import accord.utils.SortedList;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncChain;
@@ -224,7 +221,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         this.durabilityService = new DurabilityService(this);
         // TODO (desired): make frequency configurable
-        scheduler.recurring(() -> commandStores.forEachCommandStore(store -> store.progressLog.maybeNotify()), 1, SECONDS);
+        scheduler.recurring(() -> commandStores.forAllUnsafe(store -> store.progressLog.maybeNotify()), 1, SECONDS);
         scheduler.recurring(timeouts::maybeNotify, 100, MILLISECONDS);
         configService.registerListener(this);
     }
@@ -556,51 +553,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return time.elapsed(timeUnit);
     }
 
-    public AsyncChain<Void> forEachLocal(PreLoadContext context, Unseekables<?> unseekables, long minEpoch, long maxEpoch, Consumer<SafeCommandStore> forEach)
-    {
-        return commandStores.forEach(context, unseekables, minEpoch, maxEpoch, forEach);
-    }
-
-    public AsyncChain<Void> forEachLocal(PreLoadContext context, StoreSelector selector, Consumer<SafeCommandStore> forEach)
-    {
-        return commandStores.forEach(context, selector, forEach);
-    }
-
-    public <T> Cancellable mapReduceConsumeLocal(TxnRequest<?> request, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
-    {
-        return commandStores.mapReduceConsume(request, request.scope(), minEpoch, maxEpoch, mapReduceConsume);
-    }
-
-    public <T> Cancellable mapReduceConsumeLocal(Unseekables<?> keys, long minEpoch, long maxEpoch, Function<? super CommandStore, AsyncChain<T>> map, Reduce<T, T> reduce, BiConsumer<? super T, Throwable> consume)
-    {
-        return commandStores.mapReduceConsume(keys, minEpoch, maxEpoch, map, reduce, consume);
-    }
-
-    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long atEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
-    {
-        return mapReduceConsumeLocal(context, key, atEpoch, atEpoch, mapReduceConsume);
-    }
-
-    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, RoutingKey key, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
-    {
-        return commandStores.mapReduceConsume(context, key, minEpoch, maxEpoch, mapReduceConsume);
-    }
-
-    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, Unseekables<?> keys, long minEpoch, long maxEpoch, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
-    {
-        return commandStores.mapReduceConsume(context, keys, minEpoch, maxEpoch, mapReduceConsume);
-    }
-
-    public <T> Cancellable mapReduceConsumeLocal(PreLoadContext context, StoreSelector selector, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
-    {
-        return commandStores.mapReduceConsume(context, selector, mapReduceConsume);
-    }
-
-    public <T> Cancellable mapReduceConsumeAllLocal(PreLoadContext context, MapReduceConsume<SafeCommandStore, T> mapReduceConsume)
-    {
-        return commandStores.mapReduceConsume(context, mapReduceConsume);
-    }
-
     // send to every node besides ourselves
     public void send(Topology topology, Request send)
     {
@@ -882,7 +834,19 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public AsyncChain<Void> updateMinHlc(long minHlc)
     {
-        return commandStores().forEach((PreLoadContext.Empty)() -> "Update Accord minHlc", safeStore -> safeStore.commandStore().updateMinHlc(minHlc));
+        // TODO (required): command stores that are not ready due to bootstrap need to refresh their min HLC on bootstrap completion
+        StoreSelector selector = snapshot -> Stream.of(snapshot.shards).map(sh -> sh.store).iterator();
+        return commandStores().mapReduce(selector, new MapReduceCommandStores<>(RoutingKeys.EMPTY)
+        {
+            @Override public Void reduce(Void o1, Void o2) { return null; }
+            @Override public TxnId primaryTxnId() { return null; }
+            @Override public String reason() { return "Update Min HLC"; }
+            @Override protected Void applyInternal(SafeCommandStore safeStore)
+            {
+                safeStore.commandStore().updateMinHlc(minHlc);
+                return null;
+            }
+        });
     }
 
     public Scheduler scheduler()

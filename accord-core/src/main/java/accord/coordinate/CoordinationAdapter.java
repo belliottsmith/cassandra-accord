@@ -208,7 +208,7 @@ public interface CoordinationAdapter<R>
             @Override
             public void stabiliseOnly(Node node, SequentialAsyncExecutor executor, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback)
             {
-                if (!node.topology().hasEpoch(executeAt.epoch()))
+                if (!node.topology().hasAtLeastEpoch(executeAt.epoch()))
                 {
                     node.withEpochAtLeast(executeAt.epoch(), executor, (success, fail) -> {
                         if (fail != null) callback.accept(null, fail);

@@ -24,18 +24,18 @@ import javax.annotation.Nullable;
 
 import accord.api.Tracing;
 import accord.local.Commands;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Known;
 import accord.messages.CheckStatus.CheckStatusOk;
 import accord.messages.CheckStatus.IncludeInfo;
+import accord.primitives.RoutingKeys;
 import accord.primitives.WithQuorum;
 import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
-import accord.utils.MapReduceConsume;
 
 import static accord.api.TraceEventType.FETCH;
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
@@ -99,8 +99,20 @@ public class FetchRoute extends CheckShards<Route<?>, Participants<?>>
             else
             {
                 StoreSelector selector = reportTo.refine(txnId, null, query);
-                node.mapReduceConsumeLocal(PreLoadContext.contextFor(txnId, "Report Route"), selector, new MapReduceConsume<>()
+                node.commandStores().mapReduceConsume(selector, new MapReduceConsumeCommandStores<>(RoutingKeys.EMPTY)
                 {
+                    @Override
+                    public TxnId primaryTxnId()
+                    {
+                        return txnId;
+                    }
+
+                    @Override
+                    public String reason()
+                    {
+                        return "Report Route";
+                    }
+
                     @Override
                     public void accept(Object result, Throwable failure)
                     {
@@ -108,7 +120,7 @@ public class FetchRoute extends CheckShards<Route<?>, Participants<?>>
                     }
 
                     @Override
-                    public Object apply(SafeCommandStore safeStore)
+                    public Object applyInternal(SafeCommandStore safeStore)
                     {
                         SafeCommand safeCommand = safeStore.ifInitialised(txnId);
                         if (safeCommand != null)

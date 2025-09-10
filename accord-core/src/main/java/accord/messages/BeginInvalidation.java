@@ -37,35 +37,32 @@ import static accord.primitives.Route.castToFullRoute;
 import static accord.primitives.Route.isFullRoute;
 import static accord.utils.Functions.mapReduceNonNull;
 
-public class BeginInvalidation extends AbstractRequest<BeginInvalidation.InvalidateReply> implements Request, PreLoadContext
+public class BeginInvalidation extends ParticipantsRequest<Participants<?>, BeginInvalidation.InvalidateReply> implements Request, PreLoadContext
 {
     public final Ballot ballot;
-    public final Participants<?> participants;
 
     public BeginInvalidation(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, Ballot ballot)
     {
-        super(txnId);
-        this.participants = participants.slice(topologies.computeRangesForNode(to));
+        super(txnId, participants.slice(topologies.computeRangesForNode(to)), txnId.epoch());
         this.ballot = ballot;
     }
 
     public BeginInvalidation(TxnId txnId, Participants<?> participants, Ballot ballot)
     {
-        super(txnId);
-        this.participants = participants;
+        super(txnId, participants, txnId.epoch());
         this.ballot = ballot;
     }
 
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, participants, txnId.epoch(), txnId.epoch(), this);
+        return node.commandStores().mapReduceConsume(txnId.epoch(), txnId.epoch(), this);
     }
 
     @Override
-    public InvalidateReply apply(SafeCommandStore safeStore)
+    public InvalidateReply applyInternal(SafeCommandStore safeStore)
     {
-        StoreParticipants participants = StoreParticipants.notAccept(safeStore, this.participants, txnId);
+        StoreParticipants participants = StoreParticipants.notAccept(safeStore, scope, txnId);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
         Ballot supersededBy;

@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.function.BiConsumer;
 import java.util.function.BiPredicate;
+import java.util.stream.Stream;
 
 /**
  * A simple array-based priority heap with intrusive elements permitting worst case logarithmic removals.
@@ -307,5 +308,10 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
             Arrays.fill(heap, size - removedCount, size, null);
             size -= removedCount;
         }
+    }
+
+    protected Stream<N> stream()
+    {
+        return Arrays.stream(heap, 0, size).map(n -> (N)n);
     }
 }

@@ -68,10 +68,7 @@ public class PackedKeyTracker
     static int roundCallbackBitSet(DefaultProgressLog instance, TxnId txnId, Node.Id from, Route<?> route, int callbackId, int roundIndex, int roundSize)
     {
         if (callbackId != roundIndex)
-        {
-            Invariants.require(callbackId / roundSize < roundIndex);
-            return 0; // stale callback for earlier round
-        }
+            return 0; // stale callback for earlier round OR different command store
 
         int start = roundSize * roundIndex;
         int end = Math.min((roundSize + 1) * roundIndex, route.size());

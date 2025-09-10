@@ -42,14 +42,14 @@ import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.PRUNED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.appliedBefore;
-import static accord.local.cfk.CommandsForKey.bootstrappedAt;
+import static accord.local.cfk.CommandsForKey.readyAt;
 import static accord.local.cfk.CommandsForKey.insertPos;
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.local.cfk.CommandsForKey.mayExecute;
 import static accord.local.cfk.CommandsForKey.redundantBefore;
 import static accord.local.cfk.CommandsForKey.reportLinearizabilityViolations;
 import static accord.local.cfk.Updating.nextUndecided;
-import static accord.local.cfk.Updating.recomputeMaxAppliedPreBootstrapWriteById;
+import static accord.local.cfk.Updating.recomputeMaxAppliedUnreadyWriteById;
 import static accord.local.cfk.Utils.removeRedundantMissing;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.Txn.Kind.Write;
@@ -191,7 +191,7 @@ public class Pruning
         if (BTree.isEmpty(loadingPruned))
             return false;
 
-        int startIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, bounds.bootstrappedAt);
+        int startIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, bounds.readyAt);
         int endIndex = BTree.ceilIndex(loadingPruned, Timestamp::compareTo, waitingExecuteAt);
         // TODO (desired): this is O(n.lg n), whereas we could import the accumulate function and perform in O(max(m, lg n))
         for (int i = startIndex; i < endIndex; ++i)
@@ -266,10 +266,10 @@ public class Pruning
                     newById[count++] = txn;
             }
             int newMinUndecidedById = nextUndecided(newById, 0, cfk);
-            int newMaxAppliedPreBootstrapWriteById = recomputeMaxAppliedPreBootstrapWriteById(cfk.bounds, newById, cfk.maxAppliedPreBootstrapWriteById);
+            int newMaxAppliedUnreadyWriteById = recomputeMaxAppliedUnreadyWriteById(cfk.bounds, newById, cfk.maxAppliedUnreadyWriteById);
             int newPrunedBeforeId = cfk.prunedBeforeById - prunedCount;
             return new CommandsForKey(cfk.key, cfk.bounds, false, newById,
-                                      newMinUndecidedById, newMaxAppliedPreBootstrapWriteById,
+                                      newMinUndecidedById, newMaxAppliedUnreadyWriteById,
                                       cfk.committedByExecuteAt, cfk.maxAppliedWriteByExecuteAt,
                                       cfk.maxUniqueHlc, cfk.loadingPruned, newPrunedBeforeId,
                                       cfk.unmanageds, true);
@@ -487,9 +487,9 @@ public class Pruning
 
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
-        int newMaxAppliedPreBootstrapWriteById = recomputeMaxAppliedPreBootstrapWriteById(cfk.bounds, newById, cfk.maxAppliedPreBootstrapWriteById);
+        int newMaxAppliedUnreadyWriteById = recomputeMaxAppliedUnreadyWriteById(cfk.bounds, newById, cfk.maxAppliedUnreadyWriteById);
         Invariants.require(newById[retainCount] == newPrunedBefore);
-        return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedById, newMaxAppliedPreBootstrapWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds, true);
+        return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds, true);
     }
 
     /**
@@ -535,11 +535,11 @@ public class Pruning
     {
         TxnId newAppliedBefore = appliedBefore(newBounds);
         TxnId newRedundantBefore = redundantBefore(newBounds);
-        TxnId newBootstrappedAt = bootstrappedAt(newBounds);
+        TxnId newReadyAt = readyAt(newBounds);
         TxnId prevRedundantBefore = redundantBefore(prevBounds);
-        TxnId prevBootstrappedAt = bootstrappedAt(prevBounds);
+        TxnId prevReadyAt = readyAt(prevBounds);
         Invariants.requireArgument(newRedundantBefore.compareTo(prevRedundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
-        Invariants.requireArgument(prevBootstrappedAt == null || newRedundantBefore.compareTo(prevBootstrappedAt) >= 0 || (newBootstrappedAt != null && newBootstrappedAt.compareTo(prevBootstrappedAt) >= 0), "Expect new RedundantBefore.Entry bootstrappedAt to be ahead of existing one");
+        Invariants.requireArgument(prevReadyAt == null || newRedundantBefore.compareTo(prevReadyAt) >= 0 || (newReadyAt != null && newReadyAt.compareTo(prevReadyAt) >= 0), "Expect new RedundantBefore.Entry readyAt to be ahead of existing one");
 
         TxnInfo[] newById = byId;
         int pos = insertPos(byId, newRedundantBefore);
@@ -549,7 +549,7 @@ public class Pruning
         {
             if (Invariants.isParanoid() && expectUpToDate && testParanoia(LINEAR, NONE, LOW))
             {
-                int startPos = prevBootstrappedAt == null ? 0 : insertPos(byId, prevBootstrappedAt);
+                int startPos = prevReadyAt == null ? 0 : insertPos(byId, prevReadyAt);
                 for (int i = startPos ; i < pos ; ++i)
                     Invariants.require((byId[i].isNot(COMMITTED) && byId[i].isNot(STABLE)) || !byId[i].mayExecute() || !reportLinearizabilityViolations(), "%s redundant; expected to be applied, undecided or to execute in a future epoch", byId[i]);
             }
@@ -610,7 +610,7 @@ public class Pruning
 
         if (newBounds.startEpoch != prevBounds.startEpoch
             || newBounds.endEpoch != prevBounds.endEpoch
-            || !newBounds.bootstrappedAt.equals(prevBounds.bootstrappedAt))
+            || !newBounds.readyAt.equals(prevBounds.readyAt))
         {
             for (int i = 0 ; i < newById.length ; ++i)
             {

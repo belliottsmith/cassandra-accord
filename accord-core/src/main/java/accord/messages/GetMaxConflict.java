@@ -35,7 +35,7 @@ import accord.utils.async.Cancellable;
 import static accord.messages.MessageType.StandardMessage.GET_MAX_CONFLICT_REQ;
 import static accord.messages.MessageType.StandardMessage.GET_MAX_CONFLICT_RSP;
 
-public class GetMaxConflict extends TxnRequest.WithUnsynced<GetMaxConflict.GetMaxConflictOk>
+public class GetMaxConflict extends RouteRequest.WithUnsynced<GetMaxConflict.GetMaxConflictOk>
 {
     public static final class SerializationSupport
     {
@@ -62,11 +62,11 @@ public class GetMaxConflict extends TxnRequest.WithUnsynced<GetMaxConflict.GetMa
     @Override
     public Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, executionEpoch, this);
+        return node.commandStores().mapReduceConsume(minEpoch, executionEpoch, this);
     }
 
     @Override
-    public GetMaxConflictOk apply(SafeCommandStore safeStore)
+    public GetMaxConflictOk applyInternal(SafeCommandStore safeStore)
     {
         Timestamp maxConflict = safeStore.commandStore().maxConflict(scope);
         return new GetMaxConflictOk(maxConflict, Math.max(safeStore.node().epoch(), node.epoch()));

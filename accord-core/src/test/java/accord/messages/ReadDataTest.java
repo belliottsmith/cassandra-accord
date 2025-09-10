@@ -165,8 +165,6 @@ class ReadDataTest
 
             ReplyContext replyContext = state.process();
 
-            Mockito.verifyNoInteractions(state.sink);
-
             state.apply();
             state.readResult.setSuccess(Mockito.mock(Data.class));
 
@@ -300,7 +298,7 @@ class ReadDataTest
         {
             AsyncResults.SettableResult<Void> writeResult = new AsyncResults.SettableResult<>();
             Write write = Mockito.mock(Write.class);
-            Mockito.when(write.apply(any(), any(), any(), any(), any())).thenReturn(writeResult.chain());
+            Mockito.when(write.apply(any(), any(), any(), any(), any())).thenAnswer(mock -> writeResult.chain());
             Writes writes = new Writes(txnId, executeAt, keys, write);
 
             forEach(store -> check(store.chain(PreLoadContext.contextFor(txnId, "Test"), safe -> {

@@ -25,14 +25,15 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
-import java.util.PriorityQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.basic.DelayedCommandStores.DelayedCommandStore.DelayedTask;
+import accord.utils.IntrusivePriorityHeap;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 
@@ -58,17 +59,23 @@ public class RandomDelayQueue implements PendingQueue
         }
     }
 
-    static class Item implements Comparable<Item>
+    static class Item extends IntrusivePriorityHeap.Node implements Comparable<Item>
     {
-        final long time;
-        final int seq;
+        long time;
+        int seq;
+        boolean submitted;
         final Pending item;
 
-        Item(long time, int seq, Pending item)
+        Item(Pending item)
+        {
+            this.item = item;
+        }
+
+        void submitting(long time, int seq)
         {
             this.time = time;
             this.seq = seq;
-            this.item = item;
+            submitted = true;
         }
 
         @Override
@@ -102,11 +109,27 @@ public class RandomDelayQueue implements PendingQueue
         }
     }
 
-    final PriorityQueue<Item> queue = new PriorityQueue<>();
+    static class Queue extends IntrusivePriorityHeap<Item>
+    {
+        @Override public int compare(Item o1, Item o2) { return o1.compareTo(o2); }
+        @Override protected void append(Item node) { super.append(node); }
+        @Override protected void remove(Item node) { super.remove(node); }
+        @Override protected boolean contains(Item node) { return super.contains(node); }
+        @Override protected void clear() { super.clear(); }
+        @Override protected Stream<Item> stream() { return super.stream(); }
+        Item poll()
+        {
+            ensureHeapified();
+            return pollNode();
+        }
+    }
+
+    final Queue queue = new Queue();
+
     private final LongSupplier jitterMillis;
     long now;
     int seq;
-    final IdentityHashMap<Pending, Boolean> preregistered = new IdentityHashMap<>();
+    final IdentityHashMap<Pending, Item> preregistered = new IdentityHashMap<>();
     int recurring;
 
     public RandomDelayQueue(RandomSource random)
@@ -125,40 +148,60 @@ public class RandomDelayQueue implements PendingQueue
         add(item, 0, TimeUnit.NANOSECONDS);
     }
 
-    @Override
-    public void addNoDelay(Pending item)
+    private Item prepareToSubmit(Pending submitting, long time, int seq)
     {
-        if (null == preregistered.remove(item) && isRecurring(item))
-            ++recurring;
-        queue.add(new Item(now, seq++, item));
+        Item item = preregistered.get(submitting);
+        if (item == null)
+        {
+            item = new Item(submitting);
+            preregistered.put(submitting, item);
+            if (isRecurring(submitting))
+                ++recurring;
+        }
+        Invariants.require(!item.submitted);
+        item.submitting(time, seq);
+        return item;
     }
 
     @Override
-    public void add(Pending item, long delay, TimeUnit units)
+    public void addNoDelay(Pending add)
+    {
+        Item item = prepareToSubmit(add, now, seq++);
+        queue.append(item);
+    }
+
+    @Override
+    public void add(Pending add, long delay, TimeUnit units)
     {
         if (delay < 0)
             throw illegalArgument("Delay must be positive or 0, but given " + delay);
-        if (null == preregistered.remove(item) && isRecurring(item))
-            ++recurring;
-        queue.add(new Item(now + units.toMillis(delay) + jitterMillis.getAsLong(), seq++, item));
+        Item item = prepareToSubmit(add, now + units.toMillis(delay) + jitterMillis.getAsLong(), seq++);
+        queue.append(item);
     }
 
     @Override
     public void preregister(Pending item)
     {
-        if (null != preregistered.put(item, true))
-            throw new IllegalStateException();
+        if (null != preregistered.put(item, new Item(item)))
+            throw illegalState();
         if (isRecurring(item))
             ++recurring;
     }
 
     @Override
-    public boolean remove(Pending item)
+    public boolean remove(Pending remove)
     {
-        if (!queue.removeIf(i -> i.item == item) && preregistered.remove(item) == null)
+        Item item = preregistered.get(remove);
+        if (item == null)
             return false;
 
-        if (isRecurring(item))
+        Invariants.require(!item.submitted || queue.contains(item));
+
+        preregistered.remove(remove);
+        if (queue.contains(item))
+            queue.remove(item);
+
+        if (isRecurring(remove))
             --recurring;
         return true;
     }
@@ -170,6 +213,7 @@ public class RandomDelayQueue implements PendingQueue
         if (item == null)
             return null;
 
+        Invariants.require(item == preregistered.remove(item.item));
         if (isRecurring(item.item))
             --recurring;
 
@@ -180,8 +224,9 @@ public class RandomDelayQueue implements PendingQueue
     @Override
     public List<Pending> drain(Predicate<Pending> toDrain)
     {
-        List<Item> items = new ArrayList<>(queue);
-        queue.clear();
+        List<Item> items = new ArrayList<>(queue.size());
+        for (Item i = queue.poll(); i != null ; i = queue.poll())
+            items.add(i);
         List<Pending> ret = new ArrayList<>();
         for (Item item : items)
         {
@@ -190,10 +235,11 @@ public class RandomDelayQueue implements PendingQueue
                 if (isRecurring(item.item))
                     --recurring;
                 ret.add(item.item);
+                preregistered.remove(item.item);
             }
             else
             {
-                queue.add(item);
+                queue.append(item);
             }
         }
         return ret;
@@ -214,7 +260,7 @@ public class RandomDelayQueue implements PendingQueue
     @Override
     public boolean hasNonRecurring()
     {
-        return recurring != queue.size() + preregistered.size();
+        return recurring != preregistered.size();
     }
 
     @Override
@@ -233,10 +279,10 @@ public class RandomDelayQueue implements PendingQueue
         protected abstract void added(Pending pending, long delay);
 
         @Override
-        public void add(Pending item, long delay, TimeUnit units)
+        public void add(Pending add, long delay, TimeUnit units)
         {
-            added(item, units.toNanos(delay));
-            super.add(item, delay, units);
+            added(add, units.toNanos(delay));
+            super.add(add, delay, units);
         }
     }
 

@@ -210,4 +210,10 @@ public class DeterministicSet<T> extends AbstractSet<T>
             cur = cur.next;
         }
     }
+
+    public void clear()
+    {
+        lookup.clear();
+        head.prev = head.next = head;
+    }
 }

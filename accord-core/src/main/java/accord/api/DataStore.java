@@ -38,6 +38,11 @@ import accord.utils.async.AsyncResult;
  */
 public interface DataStore
 {
+    enum FetchKind
+    {
+        Image, Sync
+    }
+
     interface StartingRangeFetch
     {
         /**
@@ -117,8 +122,11 @@ public interface DataStore
     /**
      * Initiate a bulk fetch of the requested ranges from the queried node, ensuring that the snapshot reflects
      * data at least as of the provided SyncPoint.
+     *
+     * If RequestKind#Sync is used, fetches only a minimal subset of data, assuming there has been some data locally
+     * (it is to up store's implementer to know how to achieve this)
      */
-    FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges callback);
+    FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges callback, FetchKind kind);
 
     /**
      * Logical fsync-like operation: anything written to the store prior to the invocation of this method

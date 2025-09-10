@@ -67,7 +67,7 @@ import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 
-public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.RecoverReply>
+public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.RecoverReply>
 {
     public static class SerializationSupport
     {
@@ -107,11 +107,11 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
     @Override
     protected Cancellable submit()
     {
-        return node.mapReduceConsumeLocal(this, minEpoch, executeAtOrTxnIdEpoch, this);
+        return node.commandStores().mapReduceConsume(minEpoch, executeAtOrTxnIdEpoch, this);
     }
 
     @Override
-    public RecoverReply apply(SafeCommandStore safeStore)
+    public RecoverReply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAtOrTxnIdEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
@@ -373,6 +373,7 @@ public class BeginRecovery extends TxnRequest.WithUnsynced<BeginRecovery.Recover
 
                     case IS_NOT_COORD_DEP:
                         Invariants.requireArgument(testTxnId.is(PrivilegedCoordinatorWithDeps));
+                        // TODO (expected): if we are the original coordinator and we know we cannot fast path commit then we should not include this in the reply
                         ensureLaterCoordRejects().add(keyOrRange, testTxnId);
                 }
             }

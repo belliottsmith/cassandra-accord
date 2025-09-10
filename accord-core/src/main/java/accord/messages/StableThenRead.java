@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
 import accord.local.LoadKeys;
+import accord.local.LogUnavailableException;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -83,7 +84,7 @@ public class StableThenRead extends ReadData
     }
 
     @Override
-    public CommitOrReadNack apply(SafeCommandStore safeStore)
+    public CommitOrReadNack applyInternal(SafeCommandStore safeStore)
     {
         Route<?> route = this.route == null ? (Route)scope : this.route;
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
@@ -98,10 +99,17 @@ public class StableThenRead extends ReadData
         if (participants.executes().isEmpty())
             return null;
 
-        CommitOrReadNack reply = super.apply(safeStore, safeCommand, participants);
+        CommitOrReadNack reply = super.applyInternal(safeStore, safeCommand, participants);
         if (outcome == CommitOutcome.InsufficientEpochs)
             return new CommitOrReadNack(InsufficientEpochs, Commit.insufficientEpoch(safeStore, safeCommand, txnId, route));
         return reply;
+    }
+
+    @Override
+    protected CommitOrReadNack refuseInternal(SafeCommandStore safeStore)
+    {
+        // cannot commit, so should not reply implying we have done so, even with an unavailable exception (as may incorrectly infer quorum stability)
+        throw new LogUnavailableException();
     }
 
     @Override

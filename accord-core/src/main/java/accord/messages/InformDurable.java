@@ -45,7 +45,7 @@ import static accord.api.ProtocolModifiers.Toggles.informOfDurability;
 import static accord.messages.MessageType.StandardMessage.INFORM_DURABLE_REQ;
 import static accord.messages.SimpleReply.Ok;
 
-public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
+public class InformDurable extends RouteRequest<Reply> implements PreLoadContext
 {
     public static class SerializationSupport
     {
@@ -123,11 +123,11 @@ public class InformDurable extends TxnRequest<Reply> implements PreLoadContext
     public Cancellable submit()
     {
         // TODO (expected): do not load from disk to perform this update, just write a delta to any journal
-        return node.mapReduceConsumeLocal(this, scope, minEpoch, maxEpoch, this);
+        return node.commandStores().mapReduceConsume(minEpoch, maxEpoch, this);
     }
 
     @Override
-    public Reply apply(SafeCommandStore safeStore)
+    public Reply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, maxEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);

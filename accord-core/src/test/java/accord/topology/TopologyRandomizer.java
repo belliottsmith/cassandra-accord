@@ -28,7 +28,9 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
+import java.util.function.BiPredicate;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
@@ -38,16 +40,20 @@ import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.OwnershipEventListener;
 import accord.burn.TopologyUpdates;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.PrefixedIntHashKey.Hash;
 import accord.impl.PrefixedIntHashKey.PrefixedIntRoutingKey;
+import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.durability.DurabilityService;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
+import accord.primitives.Txn;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -55,10 +61,15 @@ import org.agrona.collections.IntHashSet;
 
 import static accord.burn.BurnTestBase.HASH_RANGE_END;
 import static accord.burn.BurnTestBase.HASH_RANGE_START;
+import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
+import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 
 // TODO (testing): add change replication factor
 public class TopologyRandomizer
 {
+    // TODO (expected): relax this once we can recover from availability loss
+    public static final int MIN_RF = 3;
+
     public interface Listener
     {
         void onUpdate(Topology topology);
@@ -88,7 +99,8 @@ public class TopologyRandomizer
 
     private final RandomSource random;
     private final List<Topology> epochs = new ArrayList<>();
-    private final Function<Id, Node> nodeLookup;
+    private final @Nullable Function<Id, Node> nodeLookup;
+    private final Map<Id, Ranges> bootstrapping = new HashMap<>();
     private final ConcurrentLinkedQueue<Integer> newPrefixes = new ConcurrentLinkedQueue<>();
     // TODO (required): remove this restriction, we should be able to replicate previously owned ranges just fine
     private final Map<Id, Ranges> previouslyReplicated = new HashMap<>();
@@ -136,6 +148,17 @@ public class TopologyRandomizer
             int idx = random.nextInt(values().length);
             return values()[idx];
         }
+    }
+
+    public boolean isBootstrapping(Node.Id node)
+    {
+        return bootstrapping.containsKey(node);
+    }
+
+    public void markRebootstrapping(Node node)
+    {
+        Ranges ranges = node.topology().currentLocal().ranges();
+        bootstrapping.merge(node.id(), ranges, Ranges::with);
     }
 
     private static Shard[] updateBoundary(Shard[] shards, RandomSource random)
@@ -340,6 +363,7 @@ public class TopologyRandomizer
             Arrays.sort(result);
             nodes = result;
         }
+
         int rf;
         if (nodes.length <= 3)
         {
@@ -348,11 +372,11 @@ public class TopologyRandomizer
         else
         {
             float chance = random.nextFloat();
-            if (chance < 0.2f)      { rf = random.nextInt(2, Math.min(9, nodes.length)); }
-            else if (chance < 0.4f) { rf = 3; }
-            else if (chance < 0.7f) { rf = Math.min(5, nodes.length); }
-            else if (chance < 0.8f) { rf = Math.min(7, nodes.length); }
-            else                    { rf = Math.min(9, nodes.length); }
+            if (chance < 0.2f)       { rf = random.nextInt(MIN_RF, Math.min(random.nextInt(5, 9), nodes.length)); }
+            else if (chance < 0.4f)  { rf = 3; }
+            else if (chance < 0.7f)  { rf = Math.min(5, nodes.length); }
+            else if (chance < 0.95f) { rf = Math.min(7, nodes.length); }
+            else                     { rf = Math.min(9, nodes.length); }
         }
         List<Shard> result = new ArrayList<>(shards.length + nodes.length);
         result.addAll(Arrays.asList(shards));
@@ -439,6 +463,7 @@ public class TopologyRandomizer
         updateTopology();
     }
 
+    private int counter = 0;
     public synchronized Topology updateTopology()
     {
         Topology current = epochs.get(epochs.size() - 1);
@@ -451,13 +476,13 @@ public class TopologyRandomizer
         state.newPrefixes = newPrefixes;
         while (remainingMutations > 0 && rejectedMutations < 10)
         {
+            ++counter;
             UpdateType type = UpdateType.kind(random);
             state.shards = newShards;
             Shard[] testShards = type.apply(state, random);
             Arrays.sort(testShards, (a, b) -> a.range.compareTo(b.range));
-            if (!everyShardHasOverlaps(oldShards, testShards)
-                || reassignsRanges(current, testShards, previouslyReplicated)
-            )
+            if (!everyShardHasQuorumOverlaps(oldShards, testShards)
+                || reassignsRanges(current, testShards, previouslyReplicated))
             {
                 ++rejectedMutations;
             }
@@ -476,13 +501,10 @@ public class TopologyRandomizer
         Map<Id, Ranges> nextAdditions = getAdditions(current, nextTopology);
         for (Map.Entry<Id, Ranges> entry : nextAdditions.entrySet())
         {
-            Ranges previous = previouslyReplicated.getOrDefault(entry.getKey(), Ranges.EMPTY);
-            Ranges added = entry.getValue();
-            Ranges merged = previous.with(added).mergeTouching();
-            previouslyReplicated.put(entry.getKey(), merged);
+            previouslyReplicated.merge(entry.getKey(), entry.getValue(), (a, b) -> a.union(MERGE_ADJACENT, b));
+            bootstrapping.merge(entry.getKey(), entry.getValue(), Ranges::with);
         }
 
-//        logger.debug("topology update to: {} from: {}", nextTopology, current);
         epochs.add(nextTopology);
         listener.onUpdate(nextTopology);
 
@@ -495,15 +517,43 @@ public class TopologyRandomizer
         return nextTopology;
     }
 
-    private boolean everyShardHasOverlaps(Shard[] in, Shard[] out)
+    // TODO (expected): relax this to checking only that we have fewer than maxFailures intersections
+    public boolean unsafeToRebootstrap(Ranges ranges)
+    {
+        for (Ranges test : bootstrapping.values())
+        {
+            if (ranges.intersects(test))
+                return true;
+        }
+        return false;
+    }
+
+    private boolean everyShardHasQuorumOverlaps(Shard[] in, Shard[] out)
+    {
+        return testChanges(in, out, (iv, ov) -> {
+            // TODO (expected): support availability loss and recovery, and minority quorums
+            int common = (int) ov.nodes.stream().filter(iv::contains).count();
+            int commonBootstrap = (int) ov.nodes.stream().filter(iv::contains).filter(id -> {
+                Ranges ranges = bootstrapping.getOrDefault(id, Ranges.EMPTY);
+                return ranges.intersects(iv.range) || ranges.intersects(ov.range);
+            }).count();
+            int inBootstrap = (int) iv.nodes.stream().filter(id -> bootstrapping.getOrDefault(id, Ranges.EMPTY).intersects(iv.range)).count();
+            return inBootstrap <= iv.maxFailures && commonBootstrap + (ov.rf - common) <= ov.maxFailures;
+        });
+    }
+
+    private boolean testChanges(Shard[] in, Shard[] out, BiPredicate<Shard, Shard> consumer)
     {
         int i = 0, o = 0;
         while (i < in.length && o < out.length)
         {
             Shard iv = in[i];
             Shard ov = out[o];
-            if (ov.nodes.stream().filter(iv::contains).allMatch(id -> topologyUpdates.isPending(ov.range, id)))
-                return false;
+            if (ov != iv)
+            {
+                if (!consumer.test(iv, ov))
+                    return false;
+            }
             int c = iv.range.end().compareTo(ov.range.end());
             if (c <= 0) ++i;
             if (c >= 0) ++o;
@@ -511,16 +561,45 @@ public class TopologyRandomizer
         return true;
     }
 
-    public void onStale(Id id, Timestamp sinceAtLeast, Ranges ranges)
+    public OwnershipEventListener listener(Id id)
     {
-        int epoch = (int) sinceAtLeast.epoch();
-        Invariants.require(epochs.get(epoch).nodeLookup.get(id.id).ranges.containsAll(ranges));
-        while (++epoch < epochs.size())
+        return new OwnershipEventListener()
         {
-            ranges = ranges.slice(epochs.get(epoch).nodeLookup.get(id.id).ranges, Routables.Slice.Minimal);
-            if (ranges.isEmpty())
-                return;
-        }
-        Invariants.illegalState("Stale ranges: " + ranges + ", but "+ id + " still replicates these ranges");
+            @Override
+            public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+            {
+            }
+
+            @Override
+            public void onSuccessfulBootstrap(CommandStore commandStore, int attempt, long epoch, Ranges ranges)
+            {
+                Node node = nodeLookup.apply(id);
+                node.durability().sync("Rebootstrap", Txn.Kind.ExclusiveSyncPoint, ranges, NoLocal, DurabilityService.SyncRemote.Quorum, 100L, TimeUnit.DAYS)
+                    .flatMap(ignore -> commandStore.awaitVisibility(epoch, ranges))
+                    .invoke((success, fail) -> {
+                        Invariants.require(fail == null);
+                        bootstrapping.compute(id, (ignore, rs) -> {
+                            Invariants.require(rs != null && rs.intersects(ranges));
+                            rs = rs.without(ranges);
+                            return rs.isEmpty() ? null : rs;
+                        });
+                    });
+            }
+
+            @Override
+            public void onStale(Timestamp sinceAtLeast, Ranges ranges)
+            {
+                int epoch = (int) sinceAtLeast.epoch();
+                Invariants.require(epochs.get(epoch).nodeLookup.get(id.id).ranges.containsAll(ranges));
+                while (++epoch < epochs.size())
+                {
+                    ranges = ranges.slice(epochs.get(epoch).nodeLookup.get(id.id).ranges, Routables.Slice.Minimal);
+                    if (ranges.isEmpty())
+                        return;
+                }
+                Invariants.illegalState("Stale ranges: " + ranges + ", but "+ id + " still replicates these ranges");
+            }
+        };
     }
+
 }

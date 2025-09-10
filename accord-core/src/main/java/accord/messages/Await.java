@@ -22,8 +22,7 @@ import java.util.Collection;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.function.Consumer;
-import java.util.function.Predicate;
+import java.util.function.BiPredicate;
 
 import javax.annotation.Nullable;
 
@@ -36,9 +35,10 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.PreLoadContext;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Ballot;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.primitives.Participants;
@@ -47,13 +47,14 @@ import accord.primitives.Status.Durability;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
-import accord.utils.MapReduceConsume;
 import accord.utils.UnhandledEnum;
+import accord.utils.async.Cancellable;
 
+import static accord.messages.Await.Until.CommittedOrNotFastPathCommit;
 import static accord.messages.MessageType.StandardMessage.ASYNC_AWAIT_COMPLETE_REQ;
 import static accord.messages.MessageType.StandardMessage.AWAIT_REQ;
 import static accord.messages.MessageType.StandardMessage.AWAIT_RSP;
-import static accord.messages.TxnRequest.computeScope;
+import static accord.messages.RouteRequest.computeScope;
 import static accord.primitives.Status.Durability.HasDecisionOrOutcome.None;
 import static accord.primitives.Status.Durability.HasDecisionOrOutcome.DurablyStable;
 import static accord.primitives.Status.Durability.HasDecisionOrOutcome.DurablyPreApplied;
@@ -67,7 +68,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
  *
  * TODO (desired): return an OK message indicating we're waiting synchronously
  */
-public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>, PreLoadContext, LocalListeners.ComplexListener, Timeouts.Timeout
+public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> implements Request, LocalListeners.ComplexListener, Timeouts.Timeout
 {
     public static class SerializerSupport
     {
@@ -96,7 +97,10 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
          * This is used for transactions that may have used the coordinator optimisation.
          * TODO (expected): why is additionallyUnblockedBy not set?
          */
-        CommittedOrNotFastPathCommit(SaveStatus.Committed, None, null),
+        CommittedOrNotFastPathCommit(SaveStatus.Committed, None, (self, command) -> command.txnId().hasPrivilegedCoordinator()
+                                                                                    && command.txnId().node.equals(self)
+                                                                                    && !command.promised().equals(Ballot.ZERO)
+        ),
 
         /**
          * Wait for the transaction to be Committed.
@@ -146,14 +150,14 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         private static final Until[] lookupByOrdinal = values();
         public final SaveStatus requiredSaveStatus;
         public final Durability.HasDecisionOrOutcome requiredDurability;
-        public final @Nullable Predicate<SaveStatus> additionallyUnblockedBy;
+        public final @Nullable BiPredicate<Node.Id, Command> additionallyUnblockedBy;
 
         Until(SaveStatus requiredSaveStatus, Durability.HasDecisionOrOutcome requiredDurability)
         {
             this(requiredSaveStatus, requiredDurability, null);
         }
 
-        Until(SaveStatus requiredSaveStatus, Durability.HasDecisionOrOutcome requiredDurability, @Nullable Predicate<SaveStatus> additionallyUnblockedBy)
+        Until(SaveStatus requiredSaveStatus, Durability.HasDecisionOrOutcome requiredDurability, @Nullable BiPredicate<Node.Id, Command> additionallyUnblockedBy)
         {
             this.requiredSaveStatus = requiredSaveStatus;
             this.requiredDurability = requiredDurability;
@@ -189,7 +193,6 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
     }
 
     public final TxnId txnId;
-    public final Participants<?> scope;
     public final Until until;
     public final long minAwaitEpoch, maxAwaitEpoch;
     public final int callbackId; // < 0 means synchronous await
@@ -215,10 +218,10 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 
     public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, Until until, int callbackId, boolean notifyProgressLog)
     {
+        super(computeScope(to, topologies, participants));
         this.txnId = txnId;
         this.callbackId = callbackId;
         this.notifyProgressLog = notifyProgressLog;
-        this.scope = computeScope(to, topologies, participants);
         this.until = until;
         this.maxAwaitEpoch = topologies.currentEpoch();
         this.minAwaitEpoch = topologies.oldestEpoch();
@@ -232,8 +235,8 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
 
     public Await(TxnId txnId, Participants<?> scope, Until until, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
     {
+        super(scope);
         this.txnId = txnId;
-        this.scope = scope;
         this.until = until;
         this.minAwaitEpoch = minAwaitEpoch;
         this.maxAwaitEpoch = maxAwaitEpoch;
@@ -248,17 +251,19 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         this.node = node;
         this.replyTo = replyToNode;
         this.replyContext = replyContext;
-        node.mapReduceConsumeLocal(this, scope, minAwaitEpoch, maxAwaitEpoch, this);
+        // TODO (expected): integrate with cancellation
+        node.commandStores().mapReduceConsume(minAwaitEpoch, maxAwaitEpoch, this);
     }
 
     @Override
-    public Void apply(SafeCommandStore safeStore)
+    public Void applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minAwaitEpoch, txnId, maxAwaitEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         Command command = safeCommand.current();
         Invariants.require(minAwaitEpoch >= txnId.epoch());
-        if (command.saveStatus().compareTo(until.requiredSaveStatus) >= 0)
+        if (command.saveStatus().compareTo(until.requiredSaveStatus) >= 0
+            || (until == CommittedOrNotFastPathCommit && node.id().equals(txnId.node) && !command.promised().equals(Ballot.ZERO)))
         {
             onNotWaiting(safeStore, safeCommand);
             return null;
@@ -424,7 +429,7 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         Command command = safeCommand.current();
         SaveStatus saveStatus = command.saveStatus();
         return saveStatus.compareTo(until.requiredSaveStatus) >= 0
-               || (until.additionallyUnblockedBy != null && until.additionallyUnblockedBy.test(saveStatus));
+               || (until.additionallyUnblockedBy != null && until.additionallyUnblockedBy.test(node.id(), command));
     }
 
     protected void onUnavailable()
@@ -441,18 +446,14 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         node.reply(replyTo, replyContext, unavailable ? AwaitOk.Unavailable : AwaitOk.Ready, null);
     }
 
-    public static class AsyncAwaitComplete implements Request, PreLoadContext, Consumer<SafeCommandStore>
+    public static class AsyncAwaitComplete extends RouteRequest<Reply>
     {
-        public final TxnId txnId;
-        public final Route<?> route; // at least those Routable we registered with
         public final SaveStatus newStatus;
         public final int callbackId;
-        transient Node.Id from;
 
         public AsyncAwaitComplete(TxnId txnId, Route<?> route, SaveStatus newStatus, int callbackId)
         {
-            this.txnId = txnId;
-            this.route = Invariants.requireArgument(route, route != null);
+            super(txnId, route, txnId.epoch());
             this.newStatus = newStatus;
             this.callbackId = callbackId;
         }
@@ -463,11 +464,11 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
             return ASYNC_AWAIT_COMPLETE_REQ;
         }
 
+        @Nullable
         @Override
-        public void process(Node node, Id from, ReplyContext replyContext)
+        protected Cancellable submit()
         {
-            this.from = from;
-            node.forEachLocal(this, route, txnId.epoch(), Long.MAX_VALUE, this);
+            return node.commandStores().mapReduceConsume(txnId.epoch(), Long.MAX_VALUE, this);
         }
 
         @Nullable
@@ -484,14 +485,26 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         }
 
         @Override
-        public void accept(SafeCommandStore safeStore)
+        protected void acceptInternal(Reply reply, Throwable failure)
+        {
+        }
+
+        @Override
+        public Reply reduce(Reply o1, Reply o2)
+        {
+            return null;
+        }
+
+        @Override
+        public Reply applyInternal(SafeCommandStore safeStore)
         {
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
             if (safeCommand == null || safeCommand.current().saveStatus() == SaveStatus.Uninitialised)
-                return;
+                return null;
 
-            Commands.updateRoute(safeStore, safeCommand, route);
-            safeStore.progressLog().remoteCallback(safeStore, safeCommand, newStatus, callbackId, from);
+            Commands.updateRoute(safeStore, safeCommand, scope);
+            safeStore.progressLog().remoteCallback(safeStore, safeCommand, newStatus, callbackId, node.id());
+            return null;
         }
 
         @Override
@@ -499,10 +512,10 @@ public class Await implements Request, MapReduceConsume<SafeCommandStore, Void>,
         {
             return "AsyncAwaitComplete{" +
                    "txnId=" + txnId +
-                   ", route=" + route +
+                   ", route=" + scope +
                    ", newStatus=" + newStatus +
                    ", callbackId=" + callbackId +
-                   ", from=" + from +
+                   ", from=" + node.id() +
                    '}';
         }
     }

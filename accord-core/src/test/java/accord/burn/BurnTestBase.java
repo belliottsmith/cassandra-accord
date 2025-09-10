@@ -48,7 +48,6 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -64,6 +63,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Key;
+import accord.api.OwnershipEventListener;
 import accord.api.ProtocolModifiers.Toggles;
 import accord.api.ProtocolModifiers.Toggles.FastExec;
 import accord.api.Scheduler;
@@ -96,7 +96,6 @@ import accord.messages.Reply;
 import accord.primitives.Keys;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
-import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
@@ -104,6 +103,7 @@ import accord.primitives.TxnId.FastPath;
 import accord.primitives.TxnId.MediumPath;
 import accord.topology.Shard;
 import accord.topology.Topology;
+import accord.topology.TopologyRandomizer;
 import accord.utils.DefaultRandom;
 import accord.utils.Gen;
 import accord.utils.Gens;
@@ -454,10 +454,8 @@ public class BurnTestBase
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        TriFunction<BiConsumer<Timestamp, Ranges>, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (onStale, scheduler, timeoutSupplier) -> new ListAgent(scheduler, random.fork(), 1000L, failures::add, retryBootstrap, onStale, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
-        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, random.fork(), 1000L, failures::add, retryBootstrap, (i1, i2) -> {
-            throw new IllegalAccessError("Global executor should enver get a stale event");
-        }, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
+        TriFunction<OwnershipEventListener, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (ownershipEventListener, scheduler, timeoutSupplier) -> new ListAgent(scheduler, random.fork(), 1000L, failures::add, retryBootstrap, ownershipEventListener, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
+        SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, random.fork(), 1000L, failures::add, retryBootstrap, OwnershipEventListener.FAIL, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         Verifier verifier = createVerifier(keyCount * prefixCount);
 
         MessageListener listener = MessageListener.get();
@@ -704,11 +702,11 @@ public class BurnTestBase
             List<Id> clients = generateIds(true, 1 + random.nextInt(4));
             int rf;
             float chance = random.nextFloat();
-            if (chance < 0.2f)      { rf = random.nextInt(2, 9); }
-            else if (chance < 0.4f) { rf = 3; }
-            else if (chance < 0.7f) { rf = 5; }
-            else if (chance < 0.8f) { rf = 7; }
-            else                    { rf = 9; }
+            if (chance < 0.2f)       { rf = random.nextInt(TopologyRandomizer.MIN_RF, random.nextInt(5, 9)); }
+            else if (chance < 0.4f)  { rf = 3; }
+            else if (chance < 0.7f)  { rf = 5; }
+            else if (chance < 0.95f) { rf = 7; }
+            else                     { rf = 9; }
 
             List<Id> nodes = generateIds(false, random.nextInt(rf, rf * 3));
 

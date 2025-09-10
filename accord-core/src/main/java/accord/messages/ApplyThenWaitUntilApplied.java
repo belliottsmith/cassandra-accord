@@ -41,7 +41,7 @@ import accord.topology.Topologies;
 import accord.utils.UnhandledEnum;
 
 import static accord.messages.MessageType.StandardMessage.APPLY_THEN_WAIT_UNTIL_APPLIED_REQ;
-import static accord.messages.TxnRequest.computeScope;
+import static accord.messages.RouteRequest.computeScope;
 
 /*
  * Used by local and global inclusive sync points to effect the sync point at each node
@@ -106,7 +106,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     }
 
     @Override
-    public CommitOrReadNack apply(SafeCommandStore safeStore)
+    public CommitOrReadNack applyInternal(SafeCommandStore safeStore)
     {
         PartialTxn txn = this.txn;
         PartialDeps deps = this.deps;
@@ -133,7 +133,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
                 // things were applied
                 break;
         }
-        return super.apply(safeStore);
+        return super.applyInternal(safeStore);
     }
 
     @Override

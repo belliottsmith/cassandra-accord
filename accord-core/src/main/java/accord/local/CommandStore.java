@@ -19,7 +19,9 @@
 package accord.local;
 
 import java.util.AbstractMap.SimpleImmutableEntry;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Set;
@@ -40,11 +42,15 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.ConfigurationService.EpochReady;
 import accord.api.DataStore;
+import accord.api.DataStore.FetchKind;
 import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.impl.AbstractAsyncExecutor;
+import accord.coordinate.CoordinateMaxConflict;
+import accord.local.CommandStores.BootstrapRangeAction;
 import accord.local.CommandStores.RangesForEpoch;
+import accord.local.PreLoadContext.Empty;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.primitives.Ranges;
@@ -55,21 +61,28 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
+import accord.utils.Reduce;
+import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.AsyncResults.SettableByCallback;
 import accord.utils.async.Cancellable;
+import accord.utils.async.AsyncResults.SettableResult;
 import org.agrona.collections.LongHashSet;
 
 import static accord.api.ConfigurationService.EpochReady.DONE;
+import static accord.api.DataStore.FetchKind.Image;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_DURABLE;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_DATA_STORE_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.LOG_UNAVAILABLE_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.QUORUM_APPLIED_ONLY;
-import static accord.local.RedundantStatus.SomeStatus.PRE_BOOTSTRAP_ONLY;
+import static accord.local.RedundantStatus.SomeStatus.UNREADY_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.SHARD_APPLIED_ONLY;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -101,7 +114,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         // TODO (desired): can better encapsulate by accepting only the newRangesForEpoch and deriving the add/remove ranges
         public void add(long epoch, RangesForEpoch newRangesForEpoch, Ranges addRanges)
         {
-            RedundantBefore addRedundantBefore = RedundantBefore.create(addRanges, epoch, Long.MAX_VALUE, TxnId.minForEpoch(epoch), PRE_BOOTSTRAP_ONLY);
+            RedundantBefore addRedundantBefore = RedundantBefore.create(addRanges, epoch, Long.MAX_VALUE, TxnId.minForEpoch(epoch), UNREADY_ONLY);
             update(newRangesForEpoch, addRedundantBefore);
         }
 
@@ -148,10 +161,11 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     private MaxDecidedRX maxDecidedRX = MaxDecidedRX.EMPTY;
     private int maxConflictsUpdates = 0;
     protected RangesForEpoch rangesForEpoch;
+    protected @Nullable Ranges refuses;
 
     /**
      * safeToRead is related to RedundantBefore, but a distinct concept.
-     * While bootstrappedAt defines the txnId bounds we expect to maintain data for locally,
+     * While readyAt defines the txnId bounds we expect to maintain data for locally,
      * safeToRead defines executeAt bounds we can safely participate in transaction execution for.
      * safeToRead is defined by the no-op transaction we execute after a bootstrap is initiated,
      * and creates a global bound before which we know we have complete data from our bootstrap.
@@ -167,19 +181,19 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
     @Nullable private RejectBefore rejectBefore;
 
-    static class WaitingOnSync
+    static class WaitingOnVisibility
     {
-        final AsyncResults.SettableResult<Void> whenDone;
+        final SettableResult<Void> whenDone;
         final Ranges allRanges;
         Ranges waitingOn, waitingOnDurable;
 
-        WaitingOnSync(AsyncResults.SettableResult<Void> whenDone, Ranges ranges)
+        WaitingOnVisibility(SettableResult<Void> whenDone, Ranges ranges)
         {
             this.whenDone = whenDone;
             this.allRanges = this.waitingOn = this.waitingOnDurable = ranges;
         }
     }
-    private final TreeMap<Long, WaitingOnSync> waitingOnSync = new TreeMap<>();
+    private final TreeMap<Long, WaitingOnVisibility> waitingOnVisibility = new TreeMap<>();
 
     protected CommandStore(int id,
                            NodeCommandStoreService node,
@@ -212,6 +226,20 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public Agent agent()
     {
         return agent;
+    }
+
+    public void unsafeClearForTesting()
+    {
+        progressLog.clear();
+        bootstraps.clear();
+        rangesForEpoch = null;
+        bootstrapBeganAt = emptyBootstrapBeganAt();
+        redundantBefore = RedundantBefore.EMPTY;
+        maxConflicts = MaxConflicts.EMPTY;
+        maxDecidedRX = MaxDecidedRX.EMPTY;
+        safeToRead = emptySafeToRead();
+        listeners.clear();
+        waitingOnVisibility.clear();
     }
 
     public void updateRangesForEpoch(SafeCommandStore safeStore)
@@ -252,7 +280,8 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         return maxDecidedRX;
     }
 
-    final void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
+    @VisibleForTesting
+    public final void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         rangesForEpoch = nonNull(newRangesForEpoch);
     }
@@ -337,6 +366,21 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
     }
 
+    protected void unsafeRefuseRequests(Ranges refuse)
+    {
+        Invariants.require(refuses == null || !refuses.intersects(refuse));
+        if (refuses == null) refuses = refuse;
+        else refuses = refuses.with(refuse);
+    }
+
+    protected void unsafeAcceptRequests(Ranges accept)
+    {
+        Invariants.require(refuses != null && refuses.containsAll(accept));
+        refuses = refuses.without(accept);
+        if (refuses.isEmpty())
+            refuses = null;
+    }
+
     /**
      * This method may be invoked on a non-CommandStore thread
      */
@@ -387,11 +431,11 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     protected int dumpCounter = 0;
 
-    protected void updateMaxConflicts(Command prev, Command updated)
+    protected void updateMaxConflicts(Command prev, Command updated, boolean force)
     {
         Timestamp executeAt = updated.executeAt();
         if (executeAt == null) return;
-        if (prev != null && prev.executeAt() != null && prev.executeAt().compareToStrict(executeAt) >= 0) return;
+        if (prev != null && prev.executeAt() != null && prev.executeAt().compareToStrict(executeAt) >= 0 && !force) return;
         executeAt = executeAt.flattenUniqueHlc(); // this is what guarantees a bootstrap recipient can compute uniqueHlc safely
         MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.participants().hasTouched(), executeAt);
         updateMaxConflicts(executeAt, updatedMaxConflicts);
@@ -521,22 +565,112 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      * So, the outer future's success is sufficient for the topology to be acknowledged, and the inner future for the
      * bootstrap to be complete.
      */
-    final Supplier<EpochReady> bootstrapper(Node node, Ranges newRanges, long epoch)
+    final Supplier<EpochReady> bootstrapper(Node node, Ranges newRanges, long epoch, BootstrapRangeAction action)
     {
-        return () -> {
-            AsyncResult<EpochReady> metadata = submit((PreLoadContext.Empty) () -> "New Epoch", safeStore -> {
-                Bootstrap bootstrap = new Bootstrap(node, this, epoch, newRanges);
-                bootstraps.add(bootstrap);
-                bootstrap.start(safeStore);
-                return new EpochReady(epoch, null, null, bootstrap.data, bootstrap.reads);
-            });
+        switch (action)
+        {
+            default: throw new UnhandledEnum(action);
+            case NO_BOOTSTRAP:
+                return () -> {
+                    AsyncResult<Void> done = execute((Empty) () -> "Initialise New Epoch", (safeStore) -> {
+                        // Merge in a base for any ranges that needs to be covered
+                        Ranges newBootstrapRanges = newRanges;
+                        for (Ranges existing : bootstrapBeganAt.values())
+                            newBootstrapRanges = newBootstrapRanges.without(existing);
+                        if (!newBootstrapRanges.isEmpty())
+                            safeStore.setBootstrapBeganAt(bootstrap(TxnId.NONE, newBootstrapRanges, bootstrapBeganAt));
+                        safeStore.setSafeToRead(purgeAndInsert(safeToRead, TxnId.NONE, newRanges));
+                        markExclusiveSyncPointDecided(safeStore, TxnId.NONE, newRanges);
+                    });
 
-            AsyncResult<Void> readyToCoordinate = readyToCoordinate(newRanges, epoch);
-            return new EpochReady(epoch, metadata.map(ignore -> null),
-                readyToCoordinate,
-                metadata.flatMap(e -> e.data),
-                metadata.flatMap(e -> e.reads));
-        };
+                    return new EpochReady(epoch, done, done, done, done);
+                };
+            case SAFE_BOOTSTRAP:
+                return () -> epochReadyAfterBootstrap(newRanges, epoch, startSafeBootstrap(node, newRanges, epoch));
+
+            case UNSAFE_BOOTSTRAP:
+                return () -> epochReadyAfterBootstrap(newRanges, epoch, startUnsafeBootstrap(node, newRanges, epoch, Image));
+        }
+    }
+
+    private EpochReady epochReadyAfterBootstrap(Ranges newRanges, long epoch, AsyncResult<EpochReady> bootstrap)
+    {
+        AsyncResult<Void> readyToCoordinate = readyToCoordinate(newRanges, epoch);
+        return new EpochReady(epoch, bootstrap.map(ignore -> null),
+                              readyToCoordinate,
+                              bootstrap.flatMap(e -> e.data),
+                              bootstrap.flatMap(e -> e.reads));
+    }
+
+    private AsyncResult<EpochReady> startSafeBootstrap(Node node, Ranges newRanges, long epoch)
+    {
+        return submit((Empty) () -> "New Epoch", safeStore -> {
+            Bootstrap bootstrap = new Bootstrap(node, this, epoch, newRanges);
+            bootstraps.add(bootstrap);
+            bootstrap.start(safeStore);
+            return new EpochReady(epoch, null, null, bootstrap.data, bootstrap.reads);
+        });
+    }
+
+    /**
+     * Rebootstraps some of the ranges for the command store. It follows steps similar to what
+     * bootstrap would go through, with two differences:
+     *
+     *   * Marks pre-rebootstrap transactions with LOCALLY_LOST status, which means the node can not
+     *     safely participate in pre-rebootstrap transactions, _even_ if they're coming after the node is
+     *     done bootstrapping.
+     *   * Marks the store as rebootstrapping, which will preclude rebootstrapping node from responding
+     *     to PreAccept, Accept, and BeginRecovery and computing dependencies while node is being rebootstrapped,
+     *     and ranges aren't ready to coordinate.
+     */
+    protected AsyncResult<EpochReady> startUnsafeBootstrap(Node node, Ranges ranges, long epoch, FetchKind fetch)
+    {
+        return submit((Empty) () -> "Refuse Requests for " + fetch + " Bootstrap", safeStore -> {
+            unsafeRefuseRequests(ranges);
+            safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
+            return new EpochReady(epoch, new SettableResult<>(), readyToCoordinate(ranges, epoch), new SettableByCallback<>(), new SettableByCallback<>());
+        }).invoke((success, fail) -> {
+            if (fail != null) logger.error("Fatal error initiating {} bootstrap for {}", this, fetch, fail);
+            else rebootstrap(node, ranges, epoch, 1, success, fetch);
+        });
+    }
+
+    private void rebootstrap(Node node, Ranges ranges, long epoch, int attempt, EpochReady ready, FetchKind fetch)
+    {
+        CoordinateMaxConflict
+        .maxConflict(node, ranges)
+        .recover(fail -> {
+            agent.ownershipEvents().onFailedBootstrap(attempt, "Fetch Max Conflict (to mark log safe at)", ranges, () -> rebootstrap(node, ranges, epoch, attempt + 1, ready, fetch), fail);
+            return AsyncChains.failure(fail);
+        }).flatMap(success -> chain((Empty) () -> "Initiate Unsafe " + fetch + " Bootstrap", safeStore -> {
+            node.uniqueNow(success.hlc()); // ensure we pick a higher timestamp than the maximum conflict we found globally
+            // Mark unsafe to read first
+
+            Ranges remaining = ranges.slice(rangesForEpoch.currentRanges());
+            if (remaining.isEmpty())
+            {
+                logger.info("Terminating unsafe {} bootstrap process for {} as no active ranges", fetch, this);
+                return AsyncChains.success(null);
+            }
+
+            Bootstrap bootstrap = new Bootstrap(node, this, epoch, remaining, fetch);
+            bootstraps.add(bootstrap);
+            // If rebootstrap can grab a later timestamp for subsequent attempts, but this timestamp is enough for us
+            // to establish which transactions, for which ranges the node can safely participate in).
+            TxnId unreadyBefore = bootstrap.start(safeStore);
+            safeStore.unsafeUpsertRedundantBefore(RedundantBefore.create(ranges, unreadyBefore, LOG_UNAVAILABLE_ONLY));
+            updateMaxConflicts(ranges, unreadyBefore);
+            // TODO (desired): we could start accepting non-dep requests here
+            ((AsyncResult.Settable<Void>)ready.metadata).setSuccess(null);
+            bootstrap.data.invoke((SettableByCallback<Void>)ready.data);
+            bootstrap.reads.invoke((SettableByCallback<Void>)ready.reads);
+            ready.coordinate.invokeIfSuccess(() -> {
+                execute((Empty)() -> "Accept Dependency Requests", safeStore0 -> {
+                    unsafeAcceptRequests(remaining);
+                });
+            });
+            return null;
+        })).begin(agent);
     }
 
     /**
@@ -560,11 +694,11 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
         TxnId minForEpoch = TxnId.minForEpoch(epoch);
         Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
-        AsyncResults.SettableResult<Void> whenDone = new AsyncResults.SettableResult<>();
-        WaitingOnSync sync = new WaitingOnSync(whenDone, remaining);
-        synchronized (waitingOnSync)
+        SettableResult<Void> whenDone = new SettableResult<>();
+        WaitingOnVisibility sync = new WaitingOnVisibility(whenDone, remaining);
+        synchronized (waitingOnVisibility)
         {
-            Invariants.require(waitingOnSync.put(epoch, sync) == null);
+            Invariants.require(waitingOnVisibility.put(epoch, sync) == null);
         }
         ensureReadyToCoordinate(epoch, ranges);
         return whenDone;
@@ -584,8 +718,8 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
                     if (!retired.isEmpty())
                     {
                         logger.info("Failed to close epoch {} for ranges {} on store {}, but some are retired; marking these as synced.", epoch, ranges, id, fail);
-                        execute((PreLoadContext.Empty)() -> "Mark Retired Ranges Synced", safeStore -> {
-                            markSyncedInternal(safeStore, epoch, retired, "(Retired)");
+                        execute((Empty)() -> "Mark Retired Ranges Synced", safeStore -> {
+                            markVisibleInternal(safeStore, epoch, retired, "(Retired)");
                         });
                     }
                     else if (remaining.isEmpty())
@@ -604,7 +738,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     Supplier<EpochReady> unbootstrap(long epoch, Ranges removedRanges)
     {
         return () -> {
-            AsyncResult<Void> done = submit((PreLoadContext.Empty) () -> "Unbootstrap", safeStore -> {
+            AsyncResult<Void> done = submit((Empty) () -> "Unbootstrap", safeStore -> {
                 for (Bootstrap prev : bootstraps)
                 {
                     Ranges abort = prev.allValid.slice(removedRanges, Minimal);
@@ -628,7 +762,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         safeStore.setBootstrapBeganAt(bootstrap(globalSyncId, ranges, bootstrapBeganAt));
         safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
         updateMaxConflicts(ranges, globalSyncId);
-        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, PRE_BOOTSTRAP_ONLY);
+        RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, Long.MIN_VALUE, Long.MAX_VALUE, globalSyncId, UNREADY_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
     }
 
@@ -650,7 +784,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         if (locallyRedundantBefore.compareTo(globalSyncId) < 0)
         {
             // TODO (expected): if bootstrapping only part of the range, mark the rest for GC; or relax this as can safely GC behind bootstrap
-            TxnId maxBootstrap = safeStore.redundantBefore().max(slicedRanges, Bounds::maxBootstrappedAt);
+            TxnId maxBootstrap = safeStore.redundantBefore().max(slicedRanges, Bounds::maxReadyAt);
             if (maxBootstrap.compareTo(globalSyncId) >= 0)
                 logger.info("Ignoring markShardDurable for a point we are bootstrapping. Bootstrapping: {}, Global: {}, Ranges: {}", maxBootstrap, globalSyncId, slicedRanges);
             else
@@ -674,15 +808,43 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         listeners.clearBefore(this, clearWaitingBefore);
     }
 
-    protected final Ranges isWaitingOnSync(TxnId syncId, Ranges ranges)
+    public AsyncResult<Void> awaitVisibility(long epoch, Ranges ranges)
     {
-        synchronized (waitingOnSync)
+        synchronized (waitingOnVisibility)
         {
-            if (waitingOnSync.isEmpty())
+            if (waitingOnVisibility.isEmpty())
+                return AsyncResults.success(null);
+
+            List<AsyncResult<Void>> awaiting = new ArrayList<>();
+            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
+            {
+                if (e.getKey() > epoch)
+                    break;
+
+                Ranges remaining = e.getValue().waitingOn;
+                Ranges intersecting = remaining.slice(ranges, Minimal);
+                if (!intersecting.isEmpty())
+                {
+                    awaiting.add(e.getValue().whenDone);
+                    ranges = ranges.without(intersecting);
+                }
+            }
+
+            if (awaiting.isEmpty())
+                return AsyncResults.success(null);
+            return AsyncResults.reduce(awaiting, Reduce.toNull());
+        }
+    }
+
+    protected final Ranges isWaitingOnVisibility(TxnId syncId, Ranges ranges)
+    {
+        synchronized (waitingOnVisibility)
+        {
+            if (waitingOnVisibility.isEmpty())
                 return Ranges.EMPTY;
 
             Ranges waitingOn = Ranges.EMPTY;
-            for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
                 if (e.getKey() > syncId.epoch())
                     break;
@@ -700,14 +862,14 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
     }
 
-    protected final void markSyncing(TxnId syncId, Ranges ranges)
+    protected final void markingVisible(TxnId syncId, Ranges ranges)
     {
-        synchronized (waitingOnSync)
+        synchronized (waitingOnVisibility)
         {
-            if (waitingOnSync.isEmpty())
+            if (waitingOnVisibility.isEmpty())
                 return;
 
-            for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
                 if (e.getKey() > syncId.epoch())
                     break;
@@ -719,14 +881,14 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
     }
 
-    protected final void unmarkSyncing(TxnId syncId, Ranges ranges)
+    protected final void cancelMarkingVisible(TxnId syncId, Ranges ranges)
     {
-        synchronized (waitingOnSync)
+        synchronized (waitingOnVisibility)
         {
-            if (waitingOnSync.isEmpty())
+            if (waitingOnVisibility.isEmpty())
                 return;
 
-            for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
                 if (e.getKey() > syncId.epoch())
                     break;
@@ -738,23 +900,23 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
     }
 
-    protected final void markSynced(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
+    protected final void markVisible(SafeCommandStore safeStore, TxnId syncId, Ranges ranges)
     {
         Invariants.require(syncId.is(VisibilitySyncPoint));
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
-        markSyncedInternal(safeStore, syncId.epoch(), ranges, syncId);
+        markVisibleInternal(safeStore, syncId.epoch(), ranges, syncId);
     }
 
-    private void markSyncedInternal(SafeCommandStore safeStore, long epoch, Ranges ranges, Object describe)
+    private void markVisibleInternal(SafeCommandStore safeStore, long epoch, Ranges ranges, Object describe)
     {
-        synchronized (waitingOnSync)
+        synchronized (waitingOnVisibility)
         {
-            if (waitingOnSync.isEmpty())
+            if (waitingOnVisibility.isEmpty())
                 return;
 
             LongHashSet remove = null;
-            for (Map.Entry<Long, WaitingOnSync> e : waitingOnSync.entrySet())
+            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
                 if (e.getKey() > epoch)
                     break;
@@ -782,7 +944,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
                 }
             }
             if (remove != null)
-                remove.forEach(waitingOnSync::remove);
+                remove.forEach(waitingOnVisibility::remove);
         }
     }
 
@@ -803,7 +965,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         if (ranges.isEmpty())
             return;
 
-        agent.onStale(staleSince, ranges);
+        agent.ownershipEvents().onStale(staleSince, ranges);
 
         RedundantBefore addRedundantBefore = RedundantBefore.createStale(ranges, staleUntilAtLeast);
         safeStore.upsertRedundantBefore(addRedundantBefore);
@@ -821,7 +983,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     Supplier<EpochReady> initialise(long epoch, Ranges ranges)
     {
         return () -> {
-            AsyncResult<Void> done = execute((PreLoadContext.Empty) () -> "Initialise New Epoch", (safeStore) -> {
+            AsyncResult<Void> done = execute((Empty) () -> "Initialise New Epoch", (safeStore) -> {
                 // Merge in a base for any ranges that needs to be covered
                 Ranges newBootstrapRanges = ranges;
                 for (Ranges existing : bootstrapBeganAt.values())
@@ -880,7 +1042,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     {
         if (safeToRead.values().stream().anyMatch(r -> r.intersects(ranges)))
         {
-            execute((PreLoadContext.Empty) () -> "Mark Unsafe To Read", safeStore -> {
+            execute((Empty) () -> "Mark Unsafe To Read", safeStore -> {
                 safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
             }, agent);
         }
@@ -893,7 +1055,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     final synchronized void markSafeToRead(Timestamp forBootstrapAt, Timestamp at, Ranges ranges)
     {
-        execute((PreLoadContext.Empty) () -> "Mark Safe To Read", safeStore -> {
+        execute((Empty) () -> "Mark Safe To Read", safeStore -> {
             // TODO (required): handle weird edge cases like newer at having a lower HLC than prior existing at, but higher epoch
             Ranges validatedSafeToRead = redundantBefore.validateSafeToRead(forBootstrapAt, ranges);
             safeStore.setSafeToRead(purgeAndInsert(safeToRead, at, validatedSafeToRead));
@@ -901,20 +1063,16 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }, agent);
     }
 
-    public static ImmutableSortedMap<TxnId, Ranges> bootstrap(TxnId at, Ranges ranges, NavigableMap<TxnId, Ranges> bootstrappedAt)
+    public static ImmutableSortedMap<TxnId, Ranges> bootstrap(TxnId at, Ranges ranges, NavigableMap<TxnId, Ranges> readyAt)
     {
         Invariants.requireArgument(!ranges.isEmpty());
         if (at == TxnId.NONE)
         {
-            for (Ranges rs : bootstrappedAt.values())
+            for (Ranges rs : readyAt.values())
                 Invariants.require(!ranges.intersects(rs));
         }
-        else
-        {
-            bootstrappedAt.floorEntry(at).getValue().containsAll(ranges);
-        }
         // if we're bootstrapping these ranges, then any period we previously owned the ranges for is effectively invalidated
-        return purgeAndInsert(bootstrappedAt, at, ranges);
+        return purgeAndInsert(readyAt, at, ranges);
     }
 
     private static <T extends Timestamp> ImmutableSortedMap<T, Ranges> purgeAndInsert(NavigableMap<T, Ranges> in, T insertAt, Ranges insert)
