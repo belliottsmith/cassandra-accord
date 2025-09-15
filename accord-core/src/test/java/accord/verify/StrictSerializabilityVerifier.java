@@ -251,7 +251,7 @@ public class StrictSerializabilityVerifier implements Verifier
          */
         Step successor;
 
-        // the highest point we MUST have witnessed this step
+        // the highest point we MUST have witnessed this step (i.e. if it is absent after this, it's a bug)
         int witnessedUntil = Integer.MIN_VALUE;
         // the highest possible time the write for this step could have occurred
         int writtenBefore = Integer.MAX_VALUE;
@@ -857,8 +857,11 @@ public class StrictSerializabilityVerifier implements Verifier
         {
             if (bufWrites[k] >= 0 && bufReads[k] == null)
             {
-                int i = Arrays.binarySearch(registers[k].sequence, bufWrites[k]);
-                if (i >= 0) bufNewPeerSteps[k] = i + 1;
+                int[] sequence = registers[k].sequence;
+                int i = sequence.length - 1;
+                while (i >= 0 && sequence[i] != bufWrites[k])
+                    --i;
+                if (i >= 0) bufNewPeerSteps[k] = i + 1; // TODO (expected): is this peer step correct?
                 else bufUnknownSteps[k] = new UnknownStepHolder(description, bufWrites[k], start, end, new Step(k, Integer.MAX_VALUE, keyCount, bufWrites[k]));
                 hasUnknownSteps |= i < 0;
             }
