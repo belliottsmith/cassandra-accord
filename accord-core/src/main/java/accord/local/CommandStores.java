@@ -21,6 +21,7 @@ package accord.local;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -580,11 +581,15 @@ public abstract class CommandStores implements AsyncExecutorFactory
             this.shards = shards;
             this.byId = new Int2IntHashMap(shards.length, Hashing.DEFAULT_LOAD_FACTOR, -1);
             int count = 0;
+            int prevId = -1;
             for (int i = 0 ; i < shards.length ; ++i)
             {
                 ShardHolder shard = shards[i];
-                byId.put(shard.store.id(), i);
+                int id = shard.store.id;
+                Invariants.require(id > prevId);
+                byId.put(id, i);
                 count += shard.ranges.all().size();
+                prevId = id;
             }
             class RangeAndIndex
             {
@@ -1042,6 +1047,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             shards[i++] = new ShardHolder(supplier.create(e.getKey(), holder), e.getValue());
             maxId = Math.max(maxId, e.getKey());
         }
+        Arrays.sort(shards, Comparator.comparingInt(shard -> shard.store.id));
 
         nextId = maxId + 1;
         loadSnapshot(new Snapshot(shards, update.global.forNode(supplier.node.id()).trim(), update.global));

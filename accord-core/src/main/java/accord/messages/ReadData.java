@@ -297,7 +297,7 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     {
         synchronized (this)
         {
-            if (state != State.PENDING)
+            if (!isPending())
                 return null;
 
             Command command = safeCommand.current();
@@ -435,6 +435,9 @@ public abstract class ReadData implements PreLoadContext, Request, MapReduceCons
     public void accept(CommitOrReadNack reply, Throwable failure)
     {
         partialTxn = null;
+        if (!isPending() && reply == null && failure == null)
+            return; // cancelled
+
         // Unless failed always ack to indicate setup has completed otherwise the counter never gets to -1
         if ((reply == null || !reply.isFinal()) && failure == null)
         {

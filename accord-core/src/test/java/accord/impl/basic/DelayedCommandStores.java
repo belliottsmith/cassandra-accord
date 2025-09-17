@@ -20,6 +20,7 @@ package accord.impl.basic;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -114,6 +115,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             ShardHolder shard = new ShardHolder(commandStore, e.getValue());
             shards[i++] = shard;
         }
+        Arrays.sort(shards, Comparator.comparingInt(shard -> shard.store.id()));
 
         loadSnapshot(new Snapshot(shards, lastUpdate.global.forNode(nodeId()).trim(), lastUpdate.global));
     }

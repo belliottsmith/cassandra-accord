@@ -190,6 +190,8 @@ public class Main
                           DurableBefore.NOOP_PERSISTER, journal);
             CountDownLatch latch = new CountDownLatch(1);
             on.unsafeStart().invoke(latch::countDown);
+            try { latch.await(); }
+            catch (InterruptedException e) { throw new RuntimeException(e); }
             err.println("Initialized node " + init.self);
             err.flush();
             sink.send(packet.src, new Body(Type.init_ok, Body.SENTINEL_MSG_ID, init.msg_id));

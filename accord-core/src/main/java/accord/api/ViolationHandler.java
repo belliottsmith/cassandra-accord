@@ -19,9 +19,15 @@
 package accord.api;
 
 import java.util.function.Supplier;
+
 import javax.annotation.Nullable;
 
+import accord.local.Command;
+import accord.local.SafeCommandStore;
+import accord.local.StoreParticipants;
 import accord.primitives.Participants;
+import accord.primitives.Route;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
@@ -29,15 +35,45 @@ import static accord.utils.Invariants.illegalState;
 
 public interface ViolationHandler
 {
-    default void onViolation(String message, Participants<?> participants, @Nullable TxnId notWitnessed, @Nullable Timestamp notWitnessedExecuteAt, @Nullable TxnId by, @Nullable Timestamp byEexecuteAt) { throw illegalState(message); }
+    /**
+     * For use by implementations to decide what to do about timestamp inconsistency, i.e. two different timestamps
+     * committed for the same transaction. This is a protocol consistency violation, potentially leading to non-linearizable
+     * histories. In test cases this is used to fail the transaction, whereas in real systems this likely will be used for
+     * reporting the violation, as it is no more correct at this point to refuse the operation than it is to complete it.
+     *
+     * Should throw an exception if the inconsistent timestamp should not be applied
+     */
+    default void onTimestampViolation(@Nullable SafeCommandStore safeStore, Command command, Participants<?> otherParticipants, @Nullable Route<?> otherRoute, Timestamp otherExecuteAt) { throw illegalState(timestampViolationMessage(safeStore, command, otherParticipants, otherRoute, otherExecuteAt)); }
+    default void onTimestampViolation(@Nullable SafeCommandStore safeStore, Command command, StoreParticipants otherParticipants, Timestamp otherExecuteAt) { onTimestampViolation(safeStore, command, otherParticipants.owns(), otherParticipants.route(), otherExecuteAt); }
+
+    default void onDependencyViolation(Participants<?> participants, TxnId notWitnessed, Timestamp notWitnessedExecuteAt, TxnId by, Timestamp byExecuteAt) { throw illegalState(dependencyViolationMessage(participants, notWitnessed, notWitnessedExecuteAt, by, byExecuteAt)); }
+
+    static String timestampViolationMessage(@Nullable SafeCommandStore safeStore, Command command, Participants<?> otherParticipants, @Nullable Route<?> otherRoute, Timestamp otherExecuteAt)
+    {
+        String message = "Linearizability violation for " + command.txnId() + " on " + otherParticipants + (otherRoute != null && otherRoute.size() != otherParticipants.size() ? " (" + otherRoute + ')' : "") + ": "
+               + command.txnId() + " has already been " + (command.is(Status.Invalidated) ? " invalidated " : " committed with timestamp " + command.executeAt())
+               + " and is now being " + (otherExecuteAt.equals(Timestamp.NONE) ? " invalidated)" : " committed with timestamp " + otherExecuteAt);
+        if (safeStore != null)
+        {
+            message += ". RedundantBefore={";
+            Participants<?> participants = Participants.merge(Participants.merge(otherParticipants, (Participants)otherRoute), command.route());
+            message += safeStore.redundantBefore().foldlWithBounds(participants, (b, m, s, e) -> (m.isEmpty() ? "[" : ", [") + s + ',' + e + "]:" + b, "", ignore -> false) + '}';
+        }
+        return message;
+    }
+
+    static String dependencyViolationMessage(Participants<?> participants, TxnId notWitnessed, Timestamp notWitnessedExecuteAt, TxnId by, Timestamp byExecuteAt)
+    {
+        return "Linearizability violation on " + participants + ": "
+               + notWitnessed + " is committed to execute (at " + notWitnessedExecuteAt + ") before "
+               + by + " that should witness it but has already applied (at " + byExecuteAt + ')';
+
+    }
+
     class ViolationHandlerHolder
     {
         private static volatile Supplier<ViolationHandler> global = () -> new ViolationHandler() {};
-        public static ViolationHandler get()
-        {
-            Supplier<ViolationHandler> supplier = global;
-            return supplier == null ? null : supplier.get();
-        }
+        public static ViolationHandler get() { return global.get(); }
         public static void set(Supplier<ViolationHandler> agent) { global = agent; }
     }
 }

@@ -74,12 +74,21 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
                 return units.convert(registeredAt, MICROSECONDS);
             }
 
-            // expects lock to already be held
-            void cancelUnsafe()
+            void cancelAlreadyRemovedWithLock()
             {
-                if (isInHeap())
-                    timeouts.remove(this);
+                super.cancelWithLock();
                 cancelInFlight = true;
+            }
+
+            @Override
+            protected boolean cancelWithLock()
+            {
+                if (!super.cancelWithLock())
+                    return false;
+
+                callbacks.remove(callbackId);
+                cancelInFlight = true;
+                return true;
             }
 
             @Override
@@ -214,7 +223,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
                         return null;
 
                     if (remove)
-                        registered.cancelUnsafe();
+                        registered.cancelAlreadyRemovedWithLock();
                     Invariants.require(registered.to.equals(from));
                 }
                 finally

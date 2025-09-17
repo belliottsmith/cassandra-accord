@@ -153,7 +153,8 @@ public class Apply extends TxnRequest<ApplyReply>
         deps = null;
         writes = null;
         result = null;
-        super.acceptInternal(reply, failure);
+        if (reply != null || failure != null) super.acceptInternal(reply, failure);
+        else Invariants.require(isCancelled());
     }
 
     class ApplyLink extends AsyncChains.FlatMapLink<Void, ApplyReply>
@@ -210,7 +211,7 @@ public class Apply extends TxnRequest<ApplyReply>
         Writes writes = this.writes;
         Result result = this.result;
         if (isCancelled()) // check cancellation after reading nullable fields
-            throw new CancellationException();
+            return null;
 
         return apply(newSaveStatus, safeStore, participants, ballot, txn, txnId, executeAt, deps, bestRoute(), writes, result);
     }
@@ -257,6 +258,9 @@ public class Apply extends TxnRequest<ApplyReply>
     @Override
     public ApplyReply reduce(ApplyReply a, ApplyReply b)
     {
+        if (a == null || b == null)
+            return a != null ? a : b;
+
         int c = a.kind.compareTo(b.kind);
         if (c > 0 || (c == 0 && a.kind != InsufficientEpochs)) return a;
         else if (c < 0) return b;

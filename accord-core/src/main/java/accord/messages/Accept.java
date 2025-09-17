@@ -105,7 +105,7 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     {
         PartialDeps partialDeps = this.partialDeps;
         if (isCancelled()) // check cancellation after reading nullable fields
-            throw new CancellationException();
+            return null; // we can't throw an exception here else we override any non-exceptional reply informing the reason
 
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch(), executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
@@ -206,7 +206,8 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
     {
         // finished processing, null out large objects
         partialDeps = null;
-        super.acceptInternal(reply, failure);
+        if (reply != null || failure != null) super.acceptInternal(reply, failure);
+        else Invariants.require(isCancelled());
     }
 
     @Override
@@ -327,6 +328,8 @@ public class Accept extends TxnRequest.WithUnsynced<Accept.AcceptReply>
 
         public static AcceptReply reduce(AcceptReply r1, AcceptReply r2)
         {
+            if (r1 == null || r2 == null)
+                return r1 != null ? r1 : r2;
             AcceptOutcome o1 = r1.outcome(), o2 = r2.outcome();
             AcceptOutcome o = o1.compareTo(o2) >= 0 ? o1 : o2;
             Deps deps = r1.deps == null ? r2.deps : r2.deps == null ? r1.deps : r1.deps.with(r2.deps);

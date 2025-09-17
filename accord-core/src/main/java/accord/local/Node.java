@@ -880,11 +880,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return coordinationAdapters.get(txnId, kind);
     }
 
-    public void updateMinHlc(long minHlc)
+    public AsyncChain<Void> updateMinHlc(long minHlc)
     {
-        commandStores().forEach((commandStore, ranges) -> {
-            commandStore.updateMinHlc(minHlc);
-        });
+        return commandStores().forEach((PreLoadContext.Empty)() -> "Update Accord minHlc", safeStore -> safeStore.commandStore().updateMinHlc(minHlc));
     }
 
     public Scheduler scheduler()
