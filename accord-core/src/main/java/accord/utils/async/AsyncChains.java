@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Callable;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
@@ -556,7 +557,7 @@ public class AsyncChains
         return new ImmediateFailure<>(failure);
     }
 
-    public static AsyncChain<Void> ofRunnable(Runnable run)
+    public static AsyncChain<Void> chain(Runnable run)
     {
         return new Head<>()
         {
@@ -569,7 +570,7 @@ public class AsyncChains
         };
     }
 
-    public static <V> AsyncChain<V> ofCallable(Callable<V> call)
+    public static <V> AsyncChain<V> chain(Callable<V> call)
     {
         return new Head<>()
         {
@@ -578,6 +579,54 @@ public class AsyncChains
             {
                 AsyncCallbacks.callAndCallback(call, callback);
                 return null;
+            }
+        };
+    }
+
+    public static AsyncChain<Void> chain(AsyncExecutor executor, Runnable run)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super Void, Throwable> callback)
+            {
+                return executor.execute(new AsyncCallbacks.RunAndCallback(run, callback));
+            }
+        };
+    }
+
+    public static <V> AsyncChain<V> chain(AsyncExecutor executor, Callable<V> call)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super V, Throwable> callback)
+            {
+                return executor.execute(new AsyncCallbacks.CallAndCallback<>(call, callback));
+            }
+        };
+    }
+
+    public static <V> AsyncChain<V> flatChain(AsyncExecutor executor, Callable<? extends AsyncChain<V>> call)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super V, Throwable> callback)
+            {
+                return executor.execute(new AsyncCallbacks.FlatCallAndCallback<>(call, callback));
+            }
+        };
+    }
+
+    public static <V> AsyncChain<V> chain(Executor executor, Callable<V> call)
+    {
+        return new AsyncChains.Head<>()
+        {
+            @Override
+            protected @Nullable Cancellable start(BiConsumer<? super V, Throwable> callback)
+            {
+                return AsyncCallbacks.execute(executor, new AsyncCallbacks.CallAndCallback<>(call, callback));
             }
         };
     }

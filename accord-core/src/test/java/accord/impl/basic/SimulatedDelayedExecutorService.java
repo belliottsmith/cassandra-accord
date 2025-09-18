@@ -29,11 +29,31 @@ import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nullable;
 
 import accord.api.Agent;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public class SimulatedDelayedExecutorService extends TaskExecutorService implements ScheduledExecutorService
 {
+    @Override
+    public AsyncChain<Void> chain(Runnable run)
+    {
+        return AsyncChains.chain(this, run);
+    }
+
+    @Override
+    public <V> AsyncChain<V> chain(Callable<V> call)
+    {
+        return AsyncChains.chain(this, call);
+    }
+
+    @Override
+    public <V> AsyncChain<V> flatChain(Callable<? extends AsyncChain<V>> call)
+    {
+        return AsyncChains.flatChain(this, call);
+    }
+
     public static class RegularTask<T> extends Task<T>
     {
         private final Object owner;

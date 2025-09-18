@@ -32,7 +32,7 @@ import com.google.common.collect.Lists;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import accord.api.AsyncExecutor;
+import accord.impl.AbstractAsyncExecutor;
 import accord.utils.Reduce;
 import org.assertj.core.api.AbstractThrowableAssert;
 import org.mockito.ArgumentCaptor;
@@ -81,7 +81,7 @@ public class AsyncChainsTest
         ResultCallback<Integer> finalCallback = new ResultCallback<>();
         ResultCallback<Integer> intermediateCallback = new ResultCallback<>();
 
-        AsyncChain<Integer> chain = AsyncChains.ofCallable(() -> 5);
+        AsyncChain<Integer> chain = AsyncChains.chain(() -> 5);
         chain = chain.invoke(intermediateCallback);
 
         chain = chain.map(i -> i + 2);
@@ -139,7 +139,7 @@ public class AsyncChainsTest
     @Test
     void beginSeesException()
     {
-        AsyncExecutor rejecting = ignore -> { throw new RejectedExecutionException(); };
+        AbstractAsyncExecutor rejecting = ignore -> { throw new RejectedExecutionException(); };
         rejecting.chain(() -> 42)
                 .map(i -> i + 1)
                 .begin((success, failure) -> {

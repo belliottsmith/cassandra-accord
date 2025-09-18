@@ -35,8 +35,8 @@ import com.google.common.collect.Iterators;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import accord.api.AsyncExecutor;
 import accord.burn.TopologyUpdates;
+import accord.impl.AbstractAsyncExecutor;
 import accord.impl.PrefixedIntHashKey;
 import accord.local.Node;
 import accord.primitives.Range;
@@ -389,7 +389,7 @@ public class TopologyManagerTest
     void fuzz()
     {
         Gen<Topology> firstTopology = AccordGens.topologys(Gens.longs().between(1, 1024)); // limit the epochs between 1-1024, so it is easier to tell the difference while in a debugger
-        AsyncExecutor executor = command -> { throw new IllegalStateException("Attempted to perform async operation"); };
+        AbstractAsyncExecutor executor = command -> { throw new IllegalStateException("Attempted to perform async operation"); };
 
         qt().withExamples(20).check(rs -> {
             int[] prefixes = IntStream.generate(rs::nextInt).limit(10).toArray();

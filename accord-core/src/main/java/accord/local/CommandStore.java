@@ -43,6 +43,7 @@ import accord.api.DataStore;
 import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
+import accord.impl.AbstractAsyncExecutor;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
@@ -79,7 +80,7 @@ import static accord.utils.Invariants.nonNull;
 /**
  * Single threaded internal shard of accord transaction metadata
  */
-public abstract class CommandStore implements SequentialAsyncExecutor
+public abstract class CommandStore implements AbstractAsyncExecutor, SequentialAsyncExecutor
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandStore.class);
 

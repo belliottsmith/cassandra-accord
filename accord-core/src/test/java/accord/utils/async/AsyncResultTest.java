@@ -27,7 +27,7 @@ import java.util.function.BiConsumer;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
-import accord.api.AsyncExecutor;
+import accord.impl.AbstractAsyncExecutor;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -162,7 +162,7 @@ public class AsyncResultTest
     void mapWithExecutorTest()
     {
         AtomicBoolean executorUsed = new AtomicBoolean(false);
-        AsyncExecutor testExecutor = task -> {
+        AbstractAsyncExecutor testExecutor = task -> {
             executorUsed.set(true);
             task.run();
         };
@@ -349,7 +349,7 @@ public class AsyncResultTest
     @Test
     void propagateExceptionsTest()
     {
-        AsyncExecutor rejecting = ignore -> { throw new RejectedExecutionException(); };
+        AbstractAsyncExecutor rejecting = ignore -> { throw new RejectedExecutionException(); };
         AsyncResult<Integer> source = AsyncResults.success(42);
         
         AsyncResult<String> mapped = source.map(i -> "value: " + i, rejecting);

@@ -20,6 +20,8 @@ package accord.utils.async;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -200,5 +202,24 @@ public class AsyncCallbacks
         v.begin(receiver);
     }
 
-
+    public static Cancellable execute(Executor executor, RunOrFail runOrFail)
+    {
+        try
+        {
+            if (executor instanceof ExecutorService)
+            {
+                Future<?> future = ((ExecutorService) executor).submit(runOrFail);
+                return () -> future.cancel(false);
+            }
+            else
+            {
+                executor.execute(runOrFail);
+            }
+        }
+        catch (Throwable t)
+        {
+            runOrFail.fail(t);
+        }
+        return null;
+    }
 }

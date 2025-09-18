@@ -660,7 +660,17 @@ public class StoreParticipants
 
     public static StoreParticipants all(Route<?> route)
     {
-        return new StoreParticipants(route, route, false);
+        return all(route, false);
+    }
+
+    public static StoreParticipants all(Route<?> route, SaveStatus saveStatus)
+    {
+        return all(route, !saveStatus.known.isExecuteAtKnown());
+    }
+
+    public static StoreParticipants all(Route<?> route, boolean executesIsNull)
+    {
+        return new StoreParticipants(route, route, executesIsNull);
     }
 
     public static long computeFetchLowEpoch(SafeCommandStore safeStore, TxnId txnId, Command command)

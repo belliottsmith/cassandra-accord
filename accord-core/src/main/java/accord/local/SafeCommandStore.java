@@ -531,7 +531,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             }));
         });
 
-        AsyncChains.ofRunnable(() -> commandStore.markSyncing(syncId, waitingOn))
+        AsyncChains.chain(() -> commandStore.markSyncing(syncId, waitingOn))
                    .flatMap(ignore -> AsyncChains.reduce(async, Reduce.toNull(), null))
                    .begin((success, fail) -> {
                        if (fail == null) commandStore.execute((PreLoadContext.Empty)() -> "Mark Synced", safeStore0 -> commandStore.markSynced(safeStore0, syncId, waitingOn));
