@@ -164,6 +164,11 @@ public interface ProgressLog
                 case CanApply: return Await.Until.CanApply;
             }
         }
+
+        public static BlockedUntil max(BlockedUntil a, BlockedUntil b)
+        {
+            return a.compareTo(b) >= 0 ? a : b;
+        }
     }
 
     /**

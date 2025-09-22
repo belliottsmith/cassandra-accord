@@ -203,7 +203,6 @@ public class RedundantStatus
 
     private static final Coverage[] COVERAGE_TO_STRING = new Coverage[] { ALL, SOME };
     public static final RedundantStatus NONE = new RedundantStatus(0);
-    public static final RedundantStatus UNREADY_ONLY = toAll(oneSlow(UNREADY));
     public static final RedundantStatus NOT_OWNED_ONLY = toAll(oneSlow(NOT_OWNED));
 
     public static final RedundantStatus WAS_OWNED_ONLY = toAll(oneSlow(WAS_OWNED));

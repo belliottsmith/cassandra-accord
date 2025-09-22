@@ -21,6 +21,7 @@ package accord.impl.basic;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
@@ -29,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import accord.burn.random.FrequentLargeRange;
@@ -36,6 +38,7 @@ import accord.impl.basic.DelayedCommandStores.DelayedCommandStore.DelayedTask;
 import accord.utils.IntrusivePriorityHeap;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
+import accord.utils.Threads;
 
 import static accord.impl.basic.RecurringPendingRunnable.isRecurring;
 import static accord.utils.Invariants.illegalArgument;
@@ -269,14 +272,35 @@ public class RandomDelayQueue implements PendingQueue
         return queue.stream().map(i -> i.item).iterator();
     }
 
-    public abstract static class MonitoringQueue extends RandomDelayQueue
+    public abstract static class ValidatingQueue extends RandomDelayQueue
     {
-        public MonitoringQueue(RandomSource random)
+        static final boolean VALIDATE_STACK_TRACES = false;
+        int counter = 0;
+
+        public ValidatingQueue(RandomSource random)
         {
             super(random);
         }
 
-        protected abstract void added(Pending pending, long delay);
+        protected abstract void added(String st, Pending pending, long delay);
+        private void added(Pending pending, long delay)
+        {
+            ++counter;
+            String st = "";
+            if (VALIDATE_STACK_TRACES)
+            {
+                st = Threads.prettyPrintStackTrace(Thread.currentThread(), true, "\n");
+                st = st.replaceAll("(RecordingRandom|ReplayRandom|BurnTest(Base|)[^\\n]+(record|replay|main)|ReplayQueue|RecordingQueue)[^\\n]+(\\n|$)", "" + '\n');
+            }
+            added(st, pending, delay);
+        }
+
+        @Override
+        public void preregister(Pending item)
+        {
+            added(item, -1);
+            super.preregister(item);
+        }
 
         @Override
         public void add(Pending add, long delay, TimeUnit units)
@@ -292,7 +316,7 @@ public class RandomDelayQueue implements PendingQueue
         final long[] delays = new long[2];
         int waiting = 0;
 
-        class ReconcilingQueue extends MonitoringQueue
+        class ReconcilingQueue extends ValidatingQueue
         {
             final int id;
 
@@ -303,13 +327,13 @@ public class RandomDelayQueue implements PendingQueue
             }
 
             @Override
-            protected void added(Pending pending, long delay)
+            protected void added(String st, Pending pending, long delay)
             {
-                reconcile(pending, delay, id);
+                reconcile(st, pending, delay, id);
             }
         }
 
-        synchronized void reconcile(Pending item, long delay, int id)
+        synchronized void reconcile(String st, Pending item, long delay, int id)
         {
             pendings[id] = item;
             delays[id] = delay;
@@ -365,14 +389,15 @@ public class RandomDelayQueue implements PendingQueue
         }
     }
 
-    public static class RecordingQueue extends MonitoringQueue
+    public static class RecordingQueue extends ValidatingQueue
     {
         final DataOutputStream out;
 
-        synchronized public void added(Pending item, long delay)
+        synchronized public void added(String st, Pending item, long delay)
         {
             try
             {
+                out.writeUTF(st);
                 out.writeLong(delay);
                 out.writeUTF(print(item));
             }
@@ -389,18 +414,28 @@ public class RandomDelayQueue implements PendingQueue
         }
     }
 
-    public static class ReplayQueue extends MonitoringQueue
+    public static class ReplayQueue extends ValidatingQueue
     {
         final DataInputStream in;
+        final ArrayDeque<String> recent = new ArrayDeque<>();
 
-        synchronized public void added(Pending item, long delay)
+        synchronized public void added(String st, Pending item, long delay)
         {
             try
             {
+                String testSt = in.readUTF();
                 long testDelay = in.readLong();
                 String testString = in.readUTF();
+                Invariants.require(!VALIDATE_STACK_TRACES || testSt.equals(st));
                 Invariants.require(testDelay == delay);
                 Invariants.require(testString.equals(print(item)));
+                recent.add(testSt);
+                recent.add(testString);
+                if (recent.size() > 20)
+                {
+                    recent.poll();
+                    recent.poll();
+                }
             }
             catch (IOException e)
             {
@@ -415,15 +450,17 @@ public class RandomDelayQueue implements PendingQueue
         }
     }
 
-
+    private static final Pattern NORMALISE = Pattern.compile("\\$[0-9]+(/0x[0-9a-f]+)?(@[0-9a-f]+)?( |$)");
     private static String print(Pending pending)
     {
         if (pending instanceof Packet)
             return pending.toString();
-        if (pending instanceof DelayedTask)
-            return ((DelayedTask<?>) pending).owner().toString();
-        if (pending instanceof RecurringPendingRunnable && ((RecurringPendingRunnable) pending).delay instanceof Cluster.ConstantLongSupplier)
-            return ((RecurringPendingRunnable) pending).delay.toString();
-        return "";
+        String result = pending.toString();
+        result = NORMALISE.matcher(result).replaceAll("");
+        if (pending.origin() instanceof Packet)
+            result = pending.origin() + ":" + result;
+        else if (pending instanceof DelayedTask)
+            result = ((DelayedTask<?>) pending).owner() + ":" + result;
+        return result;
     }
 }

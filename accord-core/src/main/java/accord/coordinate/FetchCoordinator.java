@@ -139,6 +139,7 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
     final SortedListMap<Node.Id, State> stateMap;
     final List<State> states = new ArrayList<>();
 
+    private Ranges remaining;
     private Ranges success = Ranges.EMPTY;
     private Ranges needed;
     private int inflight;
@@ -146,7 +147,7 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
     protected FetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, FetchRanges fetchRanges)
     {
         super(node, executor, syncPoint.syncId, syncPoint.route);
-        this.ranges = ranges;
+        this.ranges = remaining = ranges;
         this.syncPoint = syncPoint;
         this.fetchRanges = fetchRanges;
         // TODO (expected): prioritise nodes that were members in the "prior" epoch also
@@ -202,7 +203,14 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
     {
         needed = trySendMore(states, needed);
         if (needed.isEmpty())
+        {
+            if (success.containsAll(remaining))
+            {
+                setDone();
+                onDone(success, failures);
+            }
             return;
+        }
 
         exhausted(needed);
         if (inflight > 0)
@@ -217,6 +225,12 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
     protected void exhausted(Ranges exhausted)
     {
         fetchRanges.fail(exhausted, Exhausted.exhausted(node.agent(), syncPoint.syncId, null, exhausted));
+    }
+
+    protected void abort(Ranges abort)
+    {
+        needed = needed.without(abort);
+        remaining = remaining.without(abort);
     }
 
     // this method can be completely overridden by an implementing class, which may simply call contact()
@@ -287,8 +301,7 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
             return;
 
         state.slow(ranges);
-        needed = needed.with(ranges);
-        trySendMore();
+        retry(ranges);
     }
 
     protected void unavailable(Node.Id to, Ranges ranges)
@@ -305,7 +318,13 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
         if (state.inflight.isEmpty())
             --inflight;
 
-        needed = needed.with(waitingOn);
+        retry(waitingOn);
+    }
+
+    private void retry(Ranges ranges)
+    {
+        ranges = ranges.slice(remaining, Minimal);
+        needed = needed.with(ranges);
         trySendMore();
     }
 
@@ -315,9 +334,9 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
             return;
 
         failures = FailureAccumulator.append(failures, failure);
-
         unavailable(to, ranges);
     }
+
     protected void fail(Node.Id to, Throwable failure)
     {
         if (isDone())
@@ -330,7 +349,7 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
         if (!state.inflight.isEmpty())
             --inflight;
         Invariants.require(!state.waitingOn.intersects(success));
-        needed = needed.with(state.waitingOn);
+        needed = needed.with(state.waitingOn.slice(remaining, Minimal));
         // TODO (desired): we don't need to fail all requests to this node, just the one we have a failure response for
         state.fail();
         trySendMore();

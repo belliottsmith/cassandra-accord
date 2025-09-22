@@ -34,6 +34,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
+import accord.api.VisibleForImplementation;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
@@ -51,6 +52,7 @@ import accord.utils.ArrayBuffers;
 import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.Invariants;
 import accord.utils.LogGroupTimers;
+import accord.utils.TinyEnumSet;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
 import org.agrona.collections.Long2ObjectHashMap;
@@ -58,9 +60,8 @@ import org.agrona.collections.Object2ObjectHashMap;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.NotBlocked;
-import static accord.impl.progresslog.CoordinatePhase.Decided;
-import static accord.impl.progresslog.CoordinatePhase.ReadyToExecute;
-import static accord.impl.progresslog.CoordinatePhase.Undecided;
+import static accord.impl.progresslog.HomePhase.Done;
+import static accord.impl.progresslog.HomePhase.Undecided;
 import static accord.impl.progresslog.Progress.NoneExpected;
 import static accord.impl.progresslog.Progress.Querying;
 import static accord.impl.progresslog.Progress.Queued;
@@ -102,6 +103,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         public Duration maxActiveRunTime = Duration.ofMinutes(5);
     }
 
+    public enum ModeFlag
+    {
+        CATCH_UP,
+        HOME_EXPECTS_LOCALLY_APPLIED,
+    }
+
     private static final Logger logger = LoggerFactory.getLogger(DefaultProgressLog.class);
 
     final Node node;
@@ -115,9 +122,6 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     /**
      * A collection of active callbacks (waiting remote replies) or submitted run invocations
      * (perhaps waiting load from disk, or for the CommandStore thread to be available).
-     *
-     * These callbacks are required to have hashCode() == txnId.hashCode() and equals(txnId) == true,
-     * so that we can manage overriding callbacks on the relevant TxnState.
      */
     // TODO (desired): replace this with a set that can lookup the matching item
     private final Object2ObjectHashMap<TxnId, PendingTask> pendingWaiting = new Object2ObjectHashMap<>();
@@ -131,12 +135,16 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     // The tasks whose timers have elapsed and are going to be run
     // The queue is drained here first before processing tasks so that tasks can modify the queue
+    // runBuffer[0...runBufferWaitingEndIndex) contains WaitingState invokers
+    // runBuffer[runBufferHomeLastIndex...runBuffer.length) contains HomeState invokers
     private Object[] runBuffer = EMPTY_RUN_BUFFER;
-    private int runBufferIndex, runBufferCount;
+    private int runBufferWaitingIndex, runBufferWaitingEndIndex, runBufferHomeIndex, runBufferHomeLastIndex;
+    private int activeHomeCount, activeWaitingCount;
     private RunInvoker[] awaitingEpochBuffer = EMPTY_AWAITING_EPOCH_BUFFER;
     private int awaitingEpochBufferCount;
     private boolean isAwaitingEpoch;
     private boolean processing;
+    private int modeFlags;
 
     private volatile boolean stopped;
     private Config config = new Config();
@@ -244,13 +252,23 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
     }
 
+    boolean isHomeDone(Command command)
+    {
+        return command.durability().isDurableOrInvalidated() && isHomeDoneIfDurable(command);
+    }
+
+    boolean isHomeDoneIfDurable(Command command)
+    {
+        return !homeExpectsLocallyApplied() || command.hasBeen(PreApplied);
+    }
+
     private TxnState updateHomeState(SafeCommandStore safeStore, @Nullable Command before, Command after, @Nullable TxnState state)
     {
         if (state != null && state.isHomeDone())
             return state;
 
         Route<?> route = after.route();
-        if (after.durability().isDurableOrInvalidated())
+        if (isHomeDone(after))
         {
             // command is durable, so we don't need to coordinate it - whether we're the home shard or not
             if (state != null)
@@ -268,16 +286,15 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (route == null)
             return state; // we don't know if we're the home shard
 
-        Invariants.require(!after.durability().isDurableOrInvalidated());
         TxnId txnId = after.txnId();
-        if (state == null || !state.isHomeInitialised())
+        if (state == null || state.isHomeUninitialised())
         {
             RoutingKey homeKey = route.homeKey();
             Ranges coordinateRanges = safeStore.coordinateRanges(txnId);
             if (!coordinateRanges.contains(homeKey))
             {
                 if (state != null)
-                    state.setHomeDone(this);
+                    state.clearHome(this);
                 return state;
             }
             if (state == null)
@@ -289,24 +306,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             state.set(safeStore, this, Undecided, Queued); // initialise
         }
 
-        CoordinatePhase phase = state.phase();
-        if (phase.compareTo(ReadyToExecute) < 0)
-        {
-            if (after.saveStatus().compareTo(SaveStatus.ReadyToExecute) >= 0)
-            {
-                state.home().atLeast(safeStore, this, ReadyToExecute, Queued);
-            }
-            else if (phase.compareTo(Decided) < 0)
-            {
-                // while we can infer that a command is durably decided by looking at Stable and accepted/commit ballots
-                // this doesn't tell us whether the Stable record is itself durable at other replicas.
-                // Since we currently gate further execution progress on the home shard's ability to execute, we want
-                // all shards to independently be able to reach Stable before we stop performing home shard progress work
-                // So, we rely exclusively on Durability information which records a coordinator's knowledge about a phase's durability
-                if (after.durability().isDurablyStable())
-                    state.home().atLeast(safeStore, this, Decided, NoneExpected);
-            }
-        }
+        state.maybeUpdatePhase(safeStore, this, after);
         return state;
     }
 
@@ -419,12 +419,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             debugDeleted.clear();
 
         runBuffer = EMPTY_RUN_BUFFER;
-        runBufferIndex = runBufferCount = 0;
+        runBufferWaitingIndex = runBufferWaitingEndIndex = runBufferHomeIndex = runBufferHomeLastIndex = 0;
     }
 
     private void clear(TxnState state)
     {
-        state.setHomeDone(this);
+        state.clearHome(this);
         state.setWaitingDone(this);
         Invariants.require(!state.isScheduled());
         remove(state.txnId);
@@ -503,7 +503,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         TxnState state = ensure(blockedBy.txnId());
         state.waiting().setBlockedUntil(safeStore, this, blockedUntil);
         // in case progress log hasn't been updated (e.g. bug on replay), force an update to the command's state since we're about to wait on it
-        if (!state.isHomeInitialised() && command.route() != null)
+        if (state.isHomeUninitialised() && command.route() != null)
             updateHomeState(safeStore, null, command, state);
     }
 
@@ -517,7 +517,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     void acceptIfNonEmptyRunBuffer(SafeCommandStore safeStore)
     {
-        if (runBufferIndex < runBufferCount)
+        if (runBufferWaitingIndex < runBufferWaitingEndIndex || runBufferHomeIndex > runBufferHomeLastIndex)
             accept(safeStore);
     }
 
@@ -553,38 +553,52 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
     }
 
+    private int runBufferWaitingCount() { return runBufferWaitingEndIndex - runBufferWaitingIndex; }
+    private int runBufferHomeCount() { return runBufferHomeIndex - runBufferHomeLastIndex; }
+    private int runBufferTotalCount() { return runBufferWaitingCount() + runBufferHomeCount(); }
+
     private void addToRunBuffer(RunInvoker readyToRun)
     {
-        if (runBufferCount == runBuffer.length)
+        if (runBufferWaitingEndIndex == runBufferHomeLastIndex)
         {
-            int newCount = runBufferCount - runBufferIndex;
-            Object[] newBuffer = cachedAny().get(Math.max(8, newCount * 2));
+            int newSize = Math.max(8, 2 * runBufferTotalCount());
+            Object[] newBuffer;
+            if (newSize <= runBuffer.length) newBuffer = runBuffer;
+            else newBuffer = cachedAny().get(newSize);
             replaceRunBuffer(newBuffer);
         }
-        runBuffer[runBufferCount++] = readyToRun;
+        if (readyToRun.runKind == Waiting) runBuffer[runBufferWaitingEndIndex++] = readyToRun;
+        else runBuffer[--runBufferHomeLastIndex] = readyToRun;
+    }
+
+    private void maybeShrinkRunBuffer()
+    {
+        if (runBuffer.length >= runBufferTotalCount() / 2 && runBuffer.length > 8)
+        {
+            int newCount = runBufferTotalCount();
+            Object[] newBuffer = new Object[Math.max(8, newCount + (newCount/2))];
+            replaceRunBuffer(newBuffer);
+        }
     }
 
     private void replaceRunBuffer(Object[] newBuffer)
     {
         Object[] prevBuffer = runBuffer;
-        int prevCount = runBufferCount;
-        int newCount = prevCount - runBufferIndex;
-        System.arraycopy(prevBuffer, runBufferIndex, newBuffer, 0, newCount);
-        runBuffer = newBuffer;
-        runBufferIndex = 0;
-        runBufferCount = newCount;
-        if (prevBuffer.length >= ArrayBuffers.MIN_BUFFER_SIZE)
-            cachedAny().forceDiscard(prevBuffer, prevCount);
-    }
-
-    private void maybeShrinkRunBuffer()
-    {
-        if (runBuffer.length <= (runBufferCount - runBufferIndex)/2)
+        int newWaitingCount = runBufferWaitingCount();
+        int newHomeCount = runBufferHomeCount(), newHomeEndIndex = newBuffer.length - newHomeCount;
+        System.arraycopy(prevBuffer, runBufferWaitingIndex, newBuffer, 0, newWaitingCount);
+        System.arraycopy(prevBuffer, runBufferHomeLastIndex, newBuffer, newHomeEndIndex, newHomeCount);
+        if (prevBuffer != newBuffer && prevBuffer.length >= ArrayBuffers.MIN_BUFFER_SIZE)
         {
-            int newCount = runBufferCount - runBufferIndex;
-            Object[] newBuffer = new Object[newCount + (newCount/2)];
-            replaceRunBuffer(newBuffer);
+            Arrays.fill(prevBuffer, runBufferWaitingIndex, runBufferWaitingEndIndex, null);
+            Arrays.fill(prevBuffer, runBufferHomeLastIndex, runBufferHomeIndex, null);
+            cachedAny().forceDiscard(prevBuffer, 0);
         }
+        runBuffer = newBuffer;
+        runBufferWaitingIndex = 0;
+        runBufferWaitingEndIndex = newWaitingCount;
+        runBufferHomeIndex = runBuffer.length;
+        runBufferHomeLastIndex = newHomeEndIndex;
     }
 
     private void rerunWithPendingEpoch()
@@ -666,30 +680,49 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     private void processRunBuffer(SafeCommandStore safeStore)
     {
-        while (runBufferIndex < runBufferCount)
+        //noinspection DataFlowIssue
+        safeStore = safeStore;
+        while (runBufferWaitingIndex != runBufferWaitingEndIndex || runBufferHomeIndex != runBufferHomeLastIndex)
         {
-            if (active.size() >= config.concurrency)
+            if (activeHomeCount + activeWaitingCount >= config.concurrency)
             {
                 maybeShrinkRunBuffer();
                 return;
             }
 
-            RunInvoker run = (RunInvoker) runBuffer[runBufferIndex];
+            final RunInvoker run;
+            boolean runHome = runBufferWaitingIndex == runBufferWaitingEndIndex || (activeHomeCount <= activeWaitingCount && runBufferHomeIndex > runBufferHomeLastIndex);
+            if (runHome)
+            {
+                run = (RunInvoker) runBuffer[--runBufferHomeIndex];
+                runBuffer[runBufferHomeIndex] = null;
+            }
+            else
+            {
+                run = (RunInvoker) runBuffer[runBufferWaitingIndex];
+                runBuffer[runBufferWaitingIndex] = null;
+                ++runBufferWaitingIndex;
+            }
+
             if (safeStore == null || !safeStore.canExecuteWith(run))
             {
                 maybeShrinkRunBuffer();
-                commandStore.execute(run, this);
+                commandStore.execute(run, safeStore0 -> {
+                    try { run.accept(safeStore0); }
+                    catch (Throwable t) { node.agent().onUncaughtException(t); }
+                    accept(safeStore0);
+                });
                 return;
             }
 
-            ++runBufferIndex;
             try { run.accept(safeStore); }
             catch (Throwable t) { node.agent().onUncaughtException(t); }
         }
 
         if (runBuffer.length > ArrayBuffers.MIN_BUFFER_SIZE)
-            cachedAny().forceDiscard(runBuffer, runBufferCount);
-        runBufferIndex = runBufferCount = 0;
+            cachedAny().forceDiscard(runBuffer, 0);
+        runBufferWaitingIndex = runBufferWaitingEndIndex = 0;
+        runBufferHomeIndex = runBufferHomeLastIndex = 0;
         runBuffer = EMPTY_RUN_BUFFER;
     }
 
@@ -805,6 +838,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         return pending(kind).containsKey(txnId);
     }
 
+    private void addActive(boolean isHome, int add)
+    {
+        if (isHome) activeHomeCount += add;
+        else activeWaitingCount += add;
+    }
+
     void start(CallbackInvoker<?, ?> invoker, Object debug)
     {
         // task is an arbitrary object to help debug, but must be non-null
@@ -812,11 +851,13 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (debug == null)
             debug = invoker;
         active.put(invoker.id, debug);
+        addActive(invoker.isHome, 1);
     }
 
     boolean complete(TxnStateKind kind, long id, TxnId txnId, PendingTask completing)
     {
         boolean stillActive = active.remove(id) != null;
+        if (stillActive) addActive(kind == Home, -1);
         return complete(kind, txnId, completing) && stillActive;
     }
 
@@ -829,9 +870,13 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     {
         PendingTask pending = pending(kind).remove(txnId);
         if (pending instanceof CallbackInvoker<?,?>)
-            active.remove(((CallbackInvoker<?, ?>) pending).id);
+        {
+            if (null != active.remove(((CallbackInvoker<?, ?>) pending).id))
+                addActive(kind == Home, -1);
+        }
     }
 
+    @VisibleForImplementation
     public void requeue(SafeCommandStore safeStore, TxnStateKind kind, TxnId txnId)
     {
         clearPendingAndActive(kind, txnId);
@@ -855,6 +900,41 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     {
         TxnState state = get(txnId);
         return state != null && !state.isWaitingDone();
+    }
+
+    @VisibleForImplementation
+    public void setMode(ModeFlag flag)
+    {
+        commandStore.execute((PreLoadContext.Empty)() -> "Set ProgressLog ModeFlag", safeStore -> {
+            modeFlags |= TinyEnumSet.encode(flag);
+            if (flag == ModeFlag.HOME_EXPECTS_LOCALLY_APPLIED)
+            {
+                for (TxnState state : BTree.<TxnState>iterable(stateMap))
+                {
+                    // clear the home state and let normal processing decide what to do
+                    if (state.homePhase() == Done)
+                        state.set(safeStore, this, Undecided, Queued);
+                }
+            }
+        });
+    }
+
+    @VisibleForImplementation
+    public void unsetMode(ModeFlag flag)
+    {
+        commandStore.executeMaybeImmediately(() -> {
+            modeFlags &= ~TinyEnumSet.encode(flag);
+        });
+    }
+
+    boolean isCatchingUp()
+    {
+        return TinyEnumSet.contains(modeFlags, ModeFlag.CATCH_UP);
+    }
+
+    boolean homeExpectsLocallyApplied()
+    {
+        return TinyEnumSet.contains(modeFlags, ModeFlag.HOME_EXPECTS_LOCALLY_APPLIED);
     }
 
     public void maybeNotify()
@@ -1019,9 +1099,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
 
         @Nonnull
-        public CoordinatePhase homePhase()
+        public HomePhase homePhase()
         {
-            return current.phase();
+            return current.homePhase();
         }
 
         @Nonnull

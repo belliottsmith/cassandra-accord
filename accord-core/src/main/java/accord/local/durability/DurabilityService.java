@@ -41,6 +41,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.Invariants;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
@@ -136,7 +137,10 @@ public class DurabilityService implements ConfigurationService.Listener
     {
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, local, remote, include, startedAt, timeoutAt)).result;
+        SortedArrayList<Node.Id> sortedInclude = include == null || include instanceof SortedArrayList<?>
+                                                 ? (SortedArrayList<Node.Id>) include
+                                                 : SortedArrayList.copyUnsorted(include, Node.Id[]::new);
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, local, remote, sortedInclude, startedAt, timeoutAt)).result;
     }
 
     public AsyncResult<Void> sync(Object requestedBy, SyncPoint<Range> syncPoint, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
@@ -219,7 +223,7 @@ public class DurabilityService implements ConfigurationService.Listener
     }
 
     @Override
-    public AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync)
+    public AsyncResult<Void> onTopologyUpdate(Topology topology)
     {
         shards.updateTopology(topology);
         global.updateTopology(topology);

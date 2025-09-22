@@ -44,7 +44,6 @@ import accord.utils.SortedListMap;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
 import static accord.coordinate.tracking.RequestStatus.Success;
-import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
@@ -154,14 +153,14 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     void onPreAccepted(Topologies topologies)
     {
         SortedListMap<Node.Id, PreAcceptOk> oks = finishOks();
-        Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
-        onPreAccepted(topologies, executeAt, oks);
+        onPreAccepted(topologies, oks);
     }
+
+    abstract void onPreAccepted(Topologies topologies, SortedListMap<Id, PreAcceptOk> oks);
 
     @Override
     public AbstractTracker<?> tracker()
     {
         return tracker;
     }
-    abstract void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Id, PreAcceptOk> oks);
 }

@@ -970,7 +970,7 @@ public class CommandsForKeyTest
                   null,
                   null,
                   ignore -> new ProgressLog.NoOpProgressLog(),
-                  ignore -> new DefaultLocalListeners(new DefaultRemoteListeners((a, b, c, d, e)->{}), DefaultNotifySink.INSTANCE),
+                  ignore -> new DefaultLocalListeners(null, new DefaultRemoteListeners((a, b, c, d, e)->{}), DefaultNotifySink.INSTANCE),
                   new EpochUpdateHolder());
             this.pruneInterval = pruneInterval;
             this.pruneHlcDelta = pruneHlcDelta;
@@ -1040,7 +1040,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+        public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Runnable fail, Throwable failure)
         {
             throw new UnsupportedOperationException();
         }

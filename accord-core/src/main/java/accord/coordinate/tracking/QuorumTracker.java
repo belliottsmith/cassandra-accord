@@ -18,6 +18,8 @@
 
 package accord.coordinate.tracking;
 
+import java.util.function.Function;
+
 import accord.local.Node;
 import accord.topology.Shard;
 import accord.topology.Topologies;
@@ -94,7 +96,12 @@ public class QuorumTracker extends SimpleTracker<QuorumTracker.QuorumShardTracke
 
     public QuorumTracker(Topologies topologies)
     {
-        super(topologies, QuorumShardTracker[]::new, QuorumShardTracker::new);
+        this(topologies, QuorumShardTracker::new);
+    }
+
+    QuorumTracker(Topologies topologies, Function<Shard, QuorumShardTracker> trackerFactory)
+    {
+        super(topologies, QuorumShardTracker[]::new, trackerFactory);
     }
 
     public RequestStatus recordSuccess(Node.Id node)

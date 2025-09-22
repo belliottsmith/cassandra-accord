@@ -36,7 +36,6 @@ import accord.api.RoutingKey;
 import accord.messages.BeginInvalidation;
 import accord.messages.BeginInvalidation.InvalidateReply;
 import accord.utils.Invariants;
-import accord.utils.SortedArrays;
 import accord.utils.SortedListMap;
 import accord.utils.UnhandledEnum;
 
@@ -94,16 +93,8 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
     @Override
     void start()
     {
-        SortedArrays.SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
-        if (contact == null)
-        {
-            finishOnExaustion();
-        }
-        else
-        {
-            super.start();
-            contact(to -> new BeginInvalidation(to, tracker.topologies(), txnId, scope, ballot));
-        }
+        super.start();
+        contact(to -> new BeginInvalidation(to, tracker.topologies(), txnId, scope, ballot));
     }
 
     @Override

@@ -18,6 +18,8 @@
 
 package accord.local;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
@@ -115,14 +117,14 @@ class Bootstrap
 
         TxnId start(SafeCommandStore safeStore)
         {
+            globalSyncId = node.nextTxnIdWithDefaultFlags(ExclusiveSyncPoint, Routable.Domain.Range);
+            Invariants.require(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
+
             if (valid.isEmpty())
             {
                 maybeComplete();
                 return globalSyncId;
             }
-
-            globalSyncId = node.nextTxnIdWithDefaultFlags(ExclusiveSyncPoint, Routable.Domain.Range);
-            Invariants.requireArgument(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
 
             if (!node.topology().hasEpoch(globalSyncId.epoch()))
             {
@@ -190,6 +192,9 @@ class Bootstrap
         @Override
         public synchronized StartingRangeFetch starting(Ranges ranges)
         {
+            if (!valid.containsAll(ranges))
+                throw new IllegalArgumentException();
+
             // mark all ranges unsafe to read
             // TODO (desired): if we have some ranges as safeToRead then we should really invalidate them immediately and not wait to execute under commandStore;
             //   could use synchronized to manage updates to these collections
@@ -275,11 +280,18 @@ class Bootstrap
             if (hasFailed)
                 accept(null, failure);
 
-            commandStore.agent().ownershipEvents().onFailedBootstrap(attempt, "PartialFetch", newFailures, () -> {
+            Runnable retry = () -> {
                 node.scheduler().selfRecurring(() -> {
-                    commandStore.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> { restart(safeStore, newFailures.slice(allValid, Minimal), attempt + 1); }, commandStore.agent());
+                    commandStore.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> {
+                        restart(safeStore, newFailures.slice(allValid, Minimal), attempt + 1);
+                    }, commandStore.agent());
                 }, 0L, TimeUnit.NANOSECONDS);
-            }, failure);
+            };
+            Runnable fail = () -> {
+                reads.tryFailure(failure);
+                data.tryFailure(failure);
+            };
+            commandStore.agent().ownershipEvents().onFailedBootstrap(attempt, "PartialFetch", newFailures, retry, fail, failure);
             Invariants.require(!newFailures.intersects(fetchedAndSafeToRead));
         }
 
@@ -300,13 +312,25 @@ class Bootstrap
             if (newDone.isEmpty())
                 return;
 
-            safeToReadAts.foldlWithInputAndBounds(newDone, (safeToReadAt, s, start, end, i, j) -> {
-                Ranges mark = s.slice(Ranges.of(start.rangeFactory().newRange(start, end)), Minimal);
-                commandStore.markSafeToRead(globalSyncId, safeToReadAt, mark);
-                return s;
-            }, newDone, i -> false);
-            fetchedAndSafeToRead = fetchedAndSafeToRead.with(newDone);
-            maybeComplete();
+            final Ranges safeToRead = newDone;
+            List<AsyncResult<Void>> marking = new ArrayList<>();
+            safeToReadAts.foldlWithInputAndBounds(newDone, (safeToReadAt, v, start, end, i, j) -> {
+                Ranges mark = safeToRead.slice(Ranges.of(start.rangeFactory().newRange(start, end)), Minimal);
+                marking.add(commandStore.markSafeToRead(globalSyncId, safeToReadAt, mark));
+                return v;
+            }, null, i -> false);
+
+            AsyncResults.allOf(marking).invoke((success, fail) -> {
+                if (fail != null) fail(ranges, fail);
+                else
+                {
+                    synchronized (this)
+                    {
+                        fetchedAndSafeToRead = fetchedAndSafeToRead.with(safeToRead.slice(valid, Minimal));
+                        maybeComplete();
+                    }
+                }
+            });
         }
 
         @Override
@@ -332,7 +356,7 @@ class Bootstrap
 
         void maybeComplete()
         {
-            Ranges retry;
+            Ranges missing;
             synchronized (this)
             {
                 if (completed)
@@ -344,18 +368,28 @@ class Bootstrap
                 // normalise fetched and fetchedAndSafeToRead against remaining valid ranges before completion
                 fetched = fetched.slice(valid, Minimal);
                 fetchedAndSafeToRead = fetchedAndSafeToRead.slice(valid, Minimal);
-                retry = valid.without(fetchedAndSafeToRead);
+                missing = valid.without(fetchedAndSafeToRead);
                 completed = true;
             }
 
             complete(this);
-            if (!retry.isEmpty())
+            if (!missing.isEmpty())
             {
-                commandStore.agent().ownershipEvents().onFailedBootstrap(attempt, "Fetch", retry, () -> {
+                Runnable retry = () -> {
                     node.scheduler().selfRecurring(() -> {
-                        commandStore.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> { restart(safeStore, retry, attempt + 1); }, node.agent());
+                        commandStore.execute((PreLoadContext.Empty) () -> "Restart Bootstrap", safeStore -> {
+                            restart(safeStore, missing, attempt + 1);
+                        }, node.agent());
                     }, 0L, TimeUnit.NANOSECONDS);
-                }, fetchOutcome);
+                };
+
+                Runnable fail = () -> {
+                    Throwable failure = fetchOutcome == null ? new RuntimeException("Unknown failure") : fetchOutcome;
+                    reads.tryFailure(failure);
+                    data.tryFailure(failure);
+                };
+
+                commandStore.agent().ownershipEvents().onFailedBootstrap(attempt, "Fetch", missing, retry, fail, fetchOutcome);
             }
             commandStore.agent().ownershipEvents().onSuccessfulBootstrap(commandStore, attempt, epoch, fetchedAndSafeToRead);
         }
@@ -369,6 +403,8 @@ class Bootstrap
     final AsyncResult.Settable<Void> data = AsyncResults.settable();
     final AsyncResult.Settable<Void> reads = AsyncResults.settable();
     final Set<Attempt> inProgress = new DeterministicIdentitySet<>();
+
+    final Ranges all;
 
     // TODO (expected): handle case where we clear these to empty; should trigger promise immediately
     Ranges allValid, remaining;
@@ -384,8 +420,7 @@ class Bootstrap
         this.node = node;
         this.commandStore = commandStore;
         this.epoch = epoch;
-        this.allValid = ranges;
-        this.remaining = ranges;
+        this.remaining = allValid = all = ranges;
     }
 
     TxnId start(SafeCommandStore safeStore0)

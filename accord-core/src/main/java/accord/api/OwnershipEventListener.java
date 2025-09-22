@@ -27,13 +27,13 @@ import static accord.utils.Invariants.illegalState;
 public interface OwnershipEventListener
 {
     default void onSuccessfulBootstrap(CommandStore commandStore, int attempt, long epoch, Ranges ranges) {}
-    void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure);
+    void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Runnable fail, Throwable failure);
     void onStale(Timestamp staleSince, Ranges ranges);
 
     OwnershipEventListener FAIL = new OwnershipEventListener()
     {
         @Override public void onSuccessfulBootstrap(CommandStore commandStore, int attempt, long epoch, Ranges ranges) { throw illegalState(); }
-        @Override public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure) { throw illegalState(); }
+        @Override public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Runnable fail, Throwable failure) { throw illegalState(); }
         @Override public void onStale(Timestamp staleSince, Ranges ranges) { throw illegalState(); }
     };
 }

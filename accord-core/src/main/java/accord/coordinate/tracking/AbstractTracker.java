@@ -19,6 +19,7 @@
 package accord.coordinate.tracking;
 
 import accord.api.TopologySorter;
+import accord.api.Tracing;
 import accord.local.Node.Id;
 import accord.topology.Shard;
 import accord.topology.Topologies;
@@ -34,7 +35,10 @@ import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 
+import javax.annotation.Nullable;
+
 import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.NoChange;
+import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.SendMore;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.utils.ArrayBuffers.cachedAny;
 
@@ -47,7 +51,7 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         SendMore(null),
         NoChange(RequestStatus.NoChange);
 
-        final RequestStatus result;
+        public final RequestStatus result;
 
         ShardOutcomes(RequestStatus result) {
             this.result = result;
@@ -64,13 +68,6 @@ public abstract class AbstractTracker<ST extends ShardTracker>
             if (this == Success)
                 return --tracker.waitingOnShards == 0 ? Success : NoChange;
             return this;
-        }
-
-        private RequestStatus toRequestStatus(AbstractTracker<?> tracker)
-        {
-            if (result != null)
-                return result;
-            return tracker.trySendMore();
         }
     }
 
@@ -128,8 +125,6 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         return topologies;
     }
 
-    protected RequestStatus trySendMore() { throw new UnsupportedOperationException(); }
-
     protected <T extends AbstractTracker<ST>, P>
     RequestStatus recordResponse(T self, Id node, BiFunction<? super ST, P, ? extends ShardOutcome<? super T>> function, P param)
     {
@@ -139,6 +134,18 @@ public abstract class AbstractTracker<ST extends ShardTracker>
     protected <T extends AbstractTracker<ST>, P>
     RequestStatus recordResponse(T self, Id node, BiFunction<? super ST, P, ? extends ShardOutcome<? super T>> function, P param, int topologyLimit)
     {
+        return toStatusOrTryAgain(recordResponseInternal(self, node, function, param, topologyLimit));
+    }
+
+    protected <T extends AbstractTracker<ST>, P>
+    ShardOutcomes recordResponseInternal(T self, Id node, BiFunction<? super ST, P, ? extends ShardOutcome<? super T>> function, P param)
+    {
+        return recordResponseInternal(self, node, function, param, topologies.size());
+    }
+
+    protected <T extends AbstractTracker<ST>, P>
+    ShardOutcomes recordResponseInternal(T self, Id node, BiFunction<? super ST, P, ? extends ShardOutcome<? super T>> function, P param, int topologyLimit)
+    {
         Invariants.require(self == this); // we just accept self as parameter for type safety
         ShardOutcomes status = NoChange;
         int maxShards = maxShardsPerEpoch();
@@ -147,7 +154,13 @@ public abstract class AbstractTracker<ST extends ShardTracker>
             status = topologies.get(i).mapReduceOn(node, i * maxShards, AbstractTracker::apply, self, function, param, ShardOutcomes::min, status);
         }
 
-        return status.toRequestStatus(this);
+        return status;
+    }
+
+    protected RequestStatus toStatusOrTryAgain(ShardOutcomes outcomes)
+    {
+        Invariants.require(outcomes != SendMore);
+        return outcomes.result;
     }
 
     static <ST extends ShardTracker, P, T extends AbstractTracker<ST>>
@@ -183,19 +196,14 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         return topologies.nodes();
     }
 
-    public SortedArrayList<Id> filterAndRecordFaulty()
+    public SortedArrayList<Id> filterAndRecordFaulty(@Nullable Tracing tracing)
     {
-        return filterAndRecordFaulty(topologies.nodes());
+        return filterAndRecordFaulty(topologies.nodes(), tracing);
     }
 
-    public SortedArrayList<Id> filterAndRecordFaulty(SortedArrayList<Id> ids)
+    public SortedArrayList<Id> filterAndRecordFaulty(SortedArrayList<Id> ids, @Nullable Tracing tracing)
     {
-        return filterAndRecordFaulty(ids, topologies, this);
-    }
-
-    public SortedArrayList<Id> filterAndRecordStale(SortedArrayList<Id> ids)
-    {
-        return filterAndRecordFaulty(ids, topologies, this);
+        return filterAndRecordFaulty(ids, topologies, this, tracing);
     }
 
     public ST get(int shardIndex)
@@ -217,7 +225,7 @@ public abstract class AbstractTracker<ST extends ShardTracker>
         return maxShardsPerEpoch;
     }
 
-    public static SortedArrayList<Id> filterAndRecordFaulty(SortedArrayList<Id> nodes, TopologySorter sorter, AbstractTracker<?> reportTo)
+    public static SortedArrayList<Id> filterAndRecordFaulty(SortedArrayList<Id> nodes, TopologySorter sorter, AbstractTracker<?> reportTo, @Nullable Tracing tracing)
     {
         Object[] buffer = null;
         int bufferCount = 0;
@@ -227,6 +235,8 @@ public abstract class AbstractTracker<ST extends ShardTracker>
             Id node = nodes.get(i);
             if (sorter.isFaulty(node))
             {
+                if (tracing != null)
+                    tracing.trace(null, "%s considered faulty; recording failure", node);
                 if (Failed == reportTo.prerecordFailure(node))
                     return null;
 

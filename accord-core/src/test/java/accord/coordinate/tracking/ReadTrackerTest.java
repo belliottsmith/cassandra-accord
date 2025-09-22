@@ -62,7 +62,7 @@ public class ReadTrackerTest
         public TestReadTracker(Topologies topologies)
         {
             super(topologies);
-            Assertions.assertTrue(initialise());
+            Assertions.assertTrue(initialise(null));
         }
 
         @Override
@@ -84,7 +84,14 @@ public class ReadTrackerTest
     void singleShard()
     {
         Topology subTopology = topology(topology.get(0));
-        ReadTracker tracker = new ReadTracker(topologies(subTopology));
+        ReadTracker tracker = new ReadTracker(topologies(subTopology))
+        {
+            @Override
+            protected RequestStatus trySendMore()
+            {
+                return RequestStatus.NoChange;
+            }
+        };
 
         tracker.recordInFlightRead(ids[0]);
         assertResponseState(tracker, false, false);

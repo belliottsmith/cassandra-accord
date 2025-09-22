@@ -160,10 +160,10 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     }
 
     @Override
-    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Runnable fail, Throwable failure)
     {
         retryBootstrap.accept(retry);
-        ownershipEventListener.onFailedBootstrap(attempt, phase, ranges, retry, failure);
+        ownershipEventListener.onFailedBootstrap(attempt, phase, ranges, retry, fail, failure);
     }
 
     private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class, LogUnavailableException.class));

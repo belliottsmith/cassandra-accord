@@ -270,6 +270,11 @@ public abstract class SortedListSet<K extends Comparable<? super K>> extends Abs
         }
     }
 
+    public SortedList<K> domain()
+    {
+        return list;
+    }
+
     public int domainSize()
     {
         return list.size();

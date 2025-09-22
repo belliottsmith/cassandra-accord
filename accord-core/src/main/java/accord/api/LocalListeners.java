@@ -57,6 +57,9 @@ public interface LocalListeners
      */
     interface Registered
     {
+        TxnId waitingOn();
+        ComplexListener waiting();
+
         /**
          * Cancel the registered listener. May be invoked from any thread.
          */
@@ -66,13 +69,13 @@ public interface LocalListeners
     /**
      * Cheap mechanism for one transaction to be notified when another transaction reaches a SaveStatus >= {@code await}
      */
-    void register(TxnId txnId, SaveStatus await, TxnId waiting);
+    void register(TxnId waitingOn, SaveStatus await, TxnId waiting);
 
     /**
      * Less efficient way to listen to a transaction that enables you to supply an arbitrary
      * Java object as a listener instead of a transaction.
      */
-    Registered register(TxnId txnId, ComplexListener listener);
+    Registered register(TxnId waitingOn, ComplexListener listener);
 
     /**
      * Notify any listener waiting on {@code safeCommand}'s updated status.
@@ -89,4 +92,23 @@ public interface LocalListeners
      * Erase all listeners; used only for resetting state
      */
     void clear();
+
+    class TxnListener
+    {
+        public final TxnId waiter;
+        public final TxnId waitingOn;
+        public final SaveStatus awaitingStatus;
+
+        public TxnListener(TxnId waiter, TxnId waitingOn, SaveStatus awaitingStatus)
+        {
+            this.waiter = waiter;
+            this.waitingOn = waitingOn;
+            this.awaitingStatus = awaitingStatus;
+        }
+    }
+
+    Iterable<TxnListener> txnListeners();
+    Iterable<Registered> complexListeners();
+
+    Iterable<TxnId> txnsWaitingOn(SaveStatus saveStatus);
 }

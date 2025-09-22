@@ -61,6 +61,7 @@ import accord.topology.Topology;
 import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
+import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.WrappableException;
 import accord.utils.async.AsyncChain;
@@ -81,6 +82,8 @@ import static accord.messages.Await.Until.HasCommittedDeps;
 import static accord.messages.Await.Until.HasDecidedExecuteAt;
 import static accord.messages.BeginRecovery.RecoverOk.maxAccepted;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedNotTruncated;
+import static accord.messages.BeginRecovery.RecoveryFlags.FAST_PATH_DECIDED;
+import static accord.messages.BeginRecovery.RecoveryFlags.FORCE_RECOVER_FAST_PATH;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedMedium;
@@ -109,7 +112,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
     private final Ballot ballot;
     private final Txn txn;
     private final @Nullable Timestamp committedExecuteAt;
-    private final boolean isFastPathDecided;
+    private final int flags;
     private final LatentStoreSelector reportTo;
 
     private final RecoveryTracker tracker;
@@ -119,7 +122,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                     BiConsumer<? super Outcome, Throwable> callback)
     {
         super(node, executor, txnId, route, topologies.nodes(), callback);
-        this.isFastPathDecided = isFastPathDecided;
+        this.flags = computeFlags(isFastPathDecided, topologies);
         Invariants.require(txnId.isVisible());
         this.adapter = node.coordinationAdapter(txnId, Recovery);
         this.ballot = ballot;
@@ -127,6 +130,25 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         this.committedExecuteAt = committedExecuteAt;
         this.reportTo = reportTo;
         this.tracker = new RecoveryTracker(topologies);
+    }
+
+    private static int computeFlags(boolean isFastPathDecided, Topologies topologies)
+    {
+        int flags = (isFastPathDecided ? TinyEnumSet.encode(FAST_PATH_DECIDED) : 0);
+        for (int i = 0 ; i < topologies.size() ; ++i)
+        {
+            Topology topology = topologies.get(i);
+            if (topology.hardRemovedIds().isEmpty())
+                continue;
+
+            for (Shard shard : topology.shards())
+            {
+                if (shard.hasLostQuorum())
+                    return flags | TinyEnumSet.encode(FORCE_RECOVER_FAST_PATH);
+            }
+        }
+
+        return flags;
     }
 
     public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean isFastPathDecided, BiConsumer<? super Outcome, Throwable> callback)
@@ -168,7 +190,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
     {
         super.start();
         node.agent().coordinatorEvents().onRecoveryStarted(txnId, ballot);
-        contact(to -> new BeginRecovery(to, tracker.topologies(), txnId, committedExecuteAt, isFastPathDecided, txn, scope, ballot));
+        contact(to -> new BeginRecovery(to, tracker.topologies(), txnId, committedExecuteAt, flags, txn, scope, ballot));
     }
 
     @Override
@@ -306,10 +328,9 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                         if (tracing != null)
                             tracing.trace(null, "found Applied; persisting.");
 
-                        withStableDeps(merge, executeAt, (i, t) -> node.agent().acceptAndWrap(i, t), stableDeps -> {
-                            adapter.persist(node, executor, tracker.topologies(), scope, ballot, CoordinationFlags.none(), txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, (i, t) -> node.agent().acceptAndWrap(i, t));
+                        withStableDeps(merge, executeAt, callback, stableDeps -> {
+                            adapter.persist(node, executor, tracker.topologies(), scope, ballot, CoordinationFlags.none(), txnId, txn, executeAt, stableDeps, acceptOrCommitNotTruncated.writes, acceptOrCommitNotTruncated.result, callback);
                         });
-                        callback.accept(acceptOrCommitNotTruncated.result, null);
                         return;
                     }
 
@@ -384,7 +405,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         }
 
         Invariants.require(committedExecuteAt == null || committedExecuteAt.equals(txnId));
-        Invariants.require(!isFastPathDecided);
+        Invariants.require(!TinyEnumSet.contains(flags, FAST_PATH_DECIDED) || TinyEnumSet.contains(flags, FORCE_RECOVER_FAST_PATH));
 
         boolean coordinatorInRecoveryQuorum = oks.get(txnId.node) != null;
         Participants<?> extraCoordVotes = extraCoordinatorVotes(txnId, coordinatorInRecoveryQuorum, okList);
@@ -595,7 +616,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
             topologies = node.topology().select(scope, txnId, executeAt, SHARE, QuorumEpochIntersections.recover);
 
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        Recover.recover(node, topologies, ballot, txnId, txn, scope, executeAt, isFastPathDecided, reportTo, callback);
+        Recover.recover(node, topologies, ballot, txnId, txn, scope, executeAt, TinyEnumSet.contains(flags, FAST_PATH_DECIDED), reportTo, callback);
     }
 
     AsyncChain<InferredFastPath> awaitEarlier(Node node, Deps waitOn, Await.Until awaitUntil)
@@ -723,6 +744,6 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
     @Override
     public String describe()
     {
-        return "ballot=" + ballot + ", isFastPathDecided=" + isFastPathDecided + ", committedExecuteAt=" + committedExecuteAt;
+        return "ballot=" + ballot + ", flags=" + Integer.toHexString(flags) + ", committedExecuteAt=" + committedExecuteAt;
     }
 }

@@ -64,6 +64,7 @@ import static accord.api.ProtocolModifiers.Toggles.dataStoreDetectsFutureReads;
 import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassCommandsForKey;
 import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
+import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.MessageType.StandardMessage.READ_RSP;
 import static accord.messages.ReadData.CommitOrReadNack.Kind.InsufficientEpochs;
@@ -316,15 +317,22 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
             {
                 default: throw new AssertionError();
                 case WAIT:
+                    int c = status.compareTo(SaveStatus.Stable);
+                    if (flags.contains(NO_WAIT) && c >= 0)
+                    {
+                        updateUnavailable(safeStore.ranges().allAt(executeAtEpoch));
+                        return null;
+                    }
+
                     listeners.put(storeId, safeStore.register(txnId, this));
                     waitingOn.add(storeId);
                     ++waitingOnCount;
 
-                    int c = status.compareTo(SaveStatus.Stable);
                     if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
                     else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
+
                     node.agent().replicaEvents().onReadWaiting(safeStore, command);
-                    return status.compareTo(SaveStatus.Stable) >= 0 ? CommitOrReadNack.Waiting : CommitOrReadNack.Insufficient;
+                    return c >= 0 ? CommitOrReadNack.Waiting : CommitOrReadNack.InsufficientAndWaiting;
 
                 case OBSOLETE:
                     state = State.PENDING_OBSOLETE;
@@ -399,10 +407,16 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
             if (state != State.PENDING)
                 return false;
 
-            switch (actionForStatus(command.saveStatus()))
+            SaveStatus saveStatus = command.saveStatus();
+            switch (actionForStatus(saveStatus))
             {
-                default: throw new AssertionError("Unhandled Action: " + actionForStatus(command.saveStatus()));
+                default: throw new AssertionError("Unhandled Action: " + actionForStatus(saveStatus));
                 case WAIT:
+                    if (flags.contains(NO_WAIT) && saveStatus.compareTo(SaveStatus.Stable) >= 0)
+                    {
+                        onOneSuccess(storeId, safeStore.ranges().allAt(executeAtEpoch));
+                        return false;
+                    }
                     return true;
 
                 case OBSOLETE:
@@ -768,41 +782,34 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
             /**
              * Committed/PreApplied successfully, but the request is blocking so waiting to reply
              */
-            Waiting("ReadOrApplyWaiting", false),
+            Waiting(false),
 
-            Redundant("CommitOrReadRedundant", true),
+            Redundant(true),
 
             /**
              * Either not committed, or not stable
              */
-            Insufficient("CommitInsufficient", false),
+            InsufficientAndWaiting(false),
 
             /**
              * Either not committed, or not stable due to insufficient epochs
              */
-            InsufficientEpochs("CommitInsufficientEpochs", false),
+            InsufficientEpochs(false),
 
             /**
              * The commit has been rejected due to stale ballot.
              */
-            Rejected("CommitRejected", true),
+            Rejected(true),
+
             ;
 
             private static final Kind[] kinds = values();
 
-            final String fullname;
             final boolean isFinal;
 
-            Kind(String fullname, boolean isFinal)
+            Kind(boolean isFinal)
             {
-                this.fullname = fullname;
                 this.isFinal = isFinal;
-            }
-
-            @Override
-            public String toString()
-            {
-                return fullname;
             }
 
             public static Kind lookupByOrdinal(int ordinal)
@@ -811,11 +818,11 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
             }
         }
 
-        public static final CommitOrReadNack Insufficient = new CommitOrReadNack(Kind.Insufficient);
         public static final CommitOrReadNack Waiting = new CommitOrReadNack(Kind.Waiting);
         public static final CommitOrReadNack Redundant = new CommitOrReadNack(Kind.Redundant);
+        public static final CommitOrReadNack InsufficientAndWaiting = new CommitOrReadNack(Kind.InsufficientAndWaiting);
         public static final CommitOrReadNack Rejected = new CommitOrReadNack(Kind.Rejected);
-        private static final CommitOrReadNack[] byKind = new CommitOrReadNack[] { Waiting, Redundant, Insufficient, null, Rejected };
+        private static final CommitOrReadNack[] byKind = new CommitOrReadNack[] { Waiting, Redundant, InsufficientAndWaiting, null, Rejected };
         public static CommitOrReadNack lookupByKind(CommitOrReadNack.Kind kind) { return lookupByKindOrdinal(kind.ordinal()); }
         public static CommitOrReadNack lookupByKindOrdinal(int kindOrdinal) { return byKind[kindOrdinal]; }
 
@@ -853,7 +860,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         @Override
         public String toString()
         {
-            return kind.fullname;
+            return kind.name();
         }
 
         @Override

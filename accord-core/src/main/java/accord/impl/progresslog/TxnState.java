@@ -32,14 +32,14 @@ import accord.utils.UnhandledEnum;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
-public final class TxnState extends HomeState implements PreLoadContext
+public final class TxnState extends WaitingState implements PreLoadContext
 {
     TxnState(TxnId txnId)
     {
         super(txnId);
     }
 
-    void updateScheduling(SafeCommandStore safeStore, DefaultProgressLog instance, TxnStateKind updated, @Nullable BlockedUntil blockedUntil, Progress newProgress)
+    void updateScheduling(SafeCommandStore safeStore, DefaultProgressLog owner, TxnStateKind updated, @Nullable BlockedUntil blockedUntil, Progress newProgress)
     {
         long newDelay;
         switch (newProgress)
@@ -50,24 +50,31 @@ public final class TxnState extends HomeState implements PreLoadContext
                 newDelay = 0;
                 break;
             case Querying:
-                newDelay = NANOSECONDS.toMicros(instance.config().maxActiveRunTime.toNanos());
+                newDelay = NANOSECONDS.toMicros(owner.config().maxActiveRunTime.toNanos());
                 Invariants.require(newDelay >= 0);
                 break;
             case Queued:
-                switch (updated)
+                if (owner.isCatchingUp())
                 {
-                    default: throw new UnhandledEnum(updated);
-                    case Waiting:
-                        newDelay = instance.commandStore.agent().slowReplicaDelay(instance.node, safeStore, txnId, 1 + waitingRunCounter(), blockedUntil, MICROSECONDS);
-                        break;
-                    case Home:
-                        newDelay = instance.commandStore.agent().slowCoordinatorDelay(instance.node, safeStore, txnId, MICROSECONDS, 1 + homeRunCounter());
+                    newDelay = 1;
+                }
+                else
+                {
+                    switch (updated)
+                    {
+                        default: throw new UnhandledEnum(updated);
+                        case Waiting:
+                            newDelay = owner.commandStore.agent().slowReplicaDelay(owner.node, safeStore, txnId, 1 + waitingRunCounter(), blockedUntil, MICROSECONDS);
+                            break;
+                        case Home:
+                            newDelay = owner.commandStore.agent().slowCoordinatorDelay(owner.node, safeStore, txnId, MICROSECONDS, 1 + homeRunCounter());
+                    }
                 }
                 Invariants.require(newDelay > 0);
                 break;
             case Awaiting:
                 int retries = updated == TxnStateKind.Home ? homeRunCounter() : waitingRunCounter();
-                newDelay = instance.commandStore.agent().slowAwaitDelay(instance.node, safeStore, txnId, 1 + retries, blockedUntil, MICROSECONDS);
+                newDelay = owner.commandStore.agent().slowAwaitDelay(owner.node, safeStore, txnId, 1 + retries, blockedUntil, MICROSECONDS);
                 Invariants.require(newDelay > 0);
                 break;
         }
@@ -100,11 +107,11 @@ public final class TxnState extends HomeState implements PreLoadContext
             {
                 clearPendingTimerDelay();
                 setScheduledTimer(updated.other());
-                instance.update(otherDeadline, this);
+                owner.update(otherDeadline, this);
             }
             else if (previousDeadline > 0)
             {
-                instance.unschedule(this);
+                owner.unschedule(this);
             }
             else
             {
@@ -113,25 +120,25 @@ public final class TxnState extends HomeState implements PreLoadContext
         }
         else
         {
-            long nowMicros = instance.node().elapsed(MICROSECONDS);
+            long nowMicros = owner.node().elapsed(MICROSECONDS);
             long newDeadline = nowMicros + newDelay;
             if (otherDeadline == 0)
             {
                 setScheduledTimer(updated);
-                if (previousDeadline > 0) instance.update(newDeadline, this);
-                else instance.add(newDeadline, this);
+                if (previousDeadline > 0) owner.update(newDeadline, this);
+                else owner.add(newDeadline, this);
             }
             else if (newDeadline < otherDeadline)
             {
                 setScheduledTimer(updated);
                 setPendingTimerDelay(Ints.saturatedCast(otherDeadline - newDeadline));
-                instance.update(newDeadline, this);
+                owner.update(newDeadline, this);
             }
             else
             {
                 setScheduledTimer(updated.other());
                 setPendingTimerDelay(Ints.saturatedCast(Math.max(1, newDeadline - otherDeadline)));
-                instance.update(otherDeadline, this);
+                owner.update(otherDeadline, this);
             }
         }
     }

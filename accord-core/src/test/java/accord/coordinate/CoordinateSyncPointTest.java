@@ -52,8 +52,6 @@ import accord.utils.async.AsyncResult;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 
-import static java.util.Collections.emptySet;
-
 class CoordinateSyncPointTest
 {
     static final Node.Id N1 = new Node.Id(1);
@@ -107,7 +105,7 @@ class CoordinateSyncPointTest
                                                {
                                                    CommandStore store = node.commandStores().forId(0);
                                                    return store.chain(() -> {
-                                                       ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, emptySet(), store, 1, new ExecuteSyncPoint.DurabilityResults());
+                                                       ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, store, 1, new ExecuteSyncPoint.DurabilityResults());
                                                        execute.start();
                                                        return execute.onDone();
                                                    });

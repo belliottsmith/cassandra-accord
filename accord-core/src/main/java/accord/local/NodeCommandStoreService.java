@@ -34,6 +34,7 @@ public interface NodeCommandStoreService extends TimeService, UniqueTimeService,
     TopologyManager topology();
     long currentStamp();
     void updateStamp();
+    boolean isReplaying();
 
     default Timestamp uniqueTimestamp()
     {

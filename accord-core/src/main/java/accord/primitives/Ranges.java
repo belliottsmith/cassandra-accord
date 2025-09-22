@@ -25,14 +25,11 @@ import javax.annotation.Nonnull;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
-import java.util.function.Predicate;
 import java.util.stream.Stream;
-
-import com.google.common.collect.ImmutableMap;
 
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_OVERLAPPING;
 import static accord.primitives.Routables.Slice.Overlapping;
@@ -252,17 +249,17 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         return mergeTouching(this, Ranges::ofSortedAndDeoverlapped);
     }
 
-    public <T> Map<T, Ranges> partitioningBy(Function<? super Range, T> split)
+    public <T extends Enum<T>> Map<T, Ranges> partitioningBy(Function<? super Range, T> split, Class<T> clazz)
     {
         if (isEmpty())
             return Collections.emptyMap();
-        Map<T, List<Range>> collector = new HashMap<>();
+        Map<T, List<Range>> collector = new EnumMap<>(clazz);
         for (Range range : this)
             collector.computeIfAbsent(split.apply(range), ignore -> new ArrayList<>()).add(range);
 
-        ImmutableMap.Builder<T, Ranges> builder = ImmutableMap.builder();
+        EnumMap<T, Ranges> result = new EnumMap<>(clazz);
         for (Map.Entry<T, List<Range>> e : collector.entrySet())
-            builder.put(e.getKey(), Ranges.ofSortedAndDeoverlapped(e.getValue().toArray(Range[]::new)));
-        return builder.build();
+            result.put(e.getKey(), Ranges.ofSortedAndDeoverlapped(e.getValue().toArray(Range[]::new)));
+        return result;
     }
 }

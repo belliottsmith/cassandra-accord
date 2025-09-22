@@ -1016,6 +1016,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         return ranges.without(lostRanges);
     }
 
+    public Ranges removeLostOrStale(Ranges ranges)
+    {
+        return ranges.without(lostRanges).without(staleRanges);
+    }
+
     public TxnId minShardAndLocallyAppliedBefore()
     {
         return minShardAndLocallyAppliedBefore;

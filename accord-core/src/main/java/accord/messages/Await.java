@@ -515,7 +515,6 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
                    ", route=" + scope +
                    ", newStatus=" + newStatus +
                    ", callbackId=" + callbackId +
-                   ", from=" + node.id() +
                    '}';
         }
     }

@@ -135,7 +135,14 @@ public class InMemoryJournal implements Journal
     public void dropAll()
     {
         diffsPerCommandStore.clear();
-        fieldStates.clear();
+        // TODO (expected): this seems to be a bit of a mess:
+        //   We split responsibility for RangesForEpoch between TopologyUpdate and FieldStates, and clear them differently.
+        //   Need to rationalise this better.
+        fieldStates.forEach((k, v) -> {
+            v.newRedundantBefore = null;
+            v.newSafeToRead = null;
+            v.newBootstrapBeganAt = null;
+        });
     }
 
     @Override

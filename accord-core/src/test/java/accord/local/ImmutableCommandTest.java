@@ -114,7 +114,7 @@ public class ImmutableCommandTest
                              DurableBefore.NOOP_PERSISTER,
                              new InMemoryJournal(id, random.fork()));
         awaitUninterruptibly(node.unsafeStart().chain());
-        node.onTopologyUpdate(storeSupport.local.get(), false, true);
+        node.onTopologyUpdate(storeSupport.local.get());
         return node;
     }
 

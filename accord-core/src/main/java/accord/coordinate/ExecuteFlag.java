@@ -26,7 +26,7 @@ import accord.utils.TinyEnumSet;
 
 public enum ExecuteFlag
 {
-    READY_TO_EXECUTE, HAS_UNIQUE_HLC;
+    READY_TO_EXECUTE, HAS_UNIQUE_HLC, NO_WAIT;
 
     private static final ExecuteFlag[] LOOKUP = values();
     public static ExecuteFlag forOrdinal(int ordinal)
@@ -49,10 +49,17 @@ public enum ExecuteFlag
         public static ExecuteFlags get(ExecuteFlag a, ExecuteFlag b) { return LOOKUP[encode(a) | encode(b)]; }
         public ExecuteFlags with(ExecuteFlag a) { return LOOKUP[bitset | encode(a)]; }
         public ExecuteFlags without(ExecuteFlag a) { return LOOKUP[bitset & ~encode(a)]; }
-        public ExecuteFlags or(ExecuteFlags that) { return LOOKUP[this.bitset | that.bitset]; }
-        public ExecuteFlags and(ExecuteFlags that) { return LOOKUP[this.bitset & that.bitset]; }
+        public ExecuteFlags or(ExecuteFlags that) { return selfOrLookup(this.bitset | that.bitset); }
+        public ExecuteFlags and(ExecuteFlags that) { return selfOrLookup(this.bitset & that.bitset); }
         public int bits() { return bitset; }
         private ExecuteFlags(int bits) { super(bits); }
+
+        private ExecuteFlags selfOrLookup(int bitset)
+        {
+            if (bitset == this.bitset)
+                return this;
+            return LOOKUP[bitset];
+        }
 
         @Override
         public String toString()
@@ -72,40 +79,45 @@ public enum ExecuteFlag
     public interface CoordinationFlags
     {
         boolean isReadyToExecute(Node.Id node);
-        boolean hasUniqueHlc();
+        ExecuteFlags all();
+
+        void setNoWait();
         void add(Node.Id node, ExecuteFlags flags);
 
         default ExecuteFlags get(Node.Id node)
         {
-            ExecuteFlags result = ExecuteFlags.none();
-            if (hasUniqueHlc()) result = result.with(HAS_UNIQUE_HLC);
+            ExecuteFlags result = all();
             if (isReadyToExecute(node)) result = result.with(READY_TO_EXECUTE);
             return result;
         }
 
         static CoordinationFlags none()
         {
-            return ALWAYS_EMPTY;
+            return of(ExecuteFlags.none());
+        }
+
+        static CoordinationFlags of(ExecuteFlags flags)
+        {
+            return new SmallCoordinationFlags(flags, SmallCoordinationFlags.NO_IDS);
         }
 
         static CoordinationFlags empty(SortedList<Node.Id> list)
         {
-            return list.size() <= 64 ? new SmallCoordinationFlags(list) : new LargeCoordinationFlags(list);
+            return list.size() <= 64 ? new SmallCoordinationFlags(ExecuteFlags.none(), list) : new LargeCoordinationFlags(ExecuteFlags.none(), list);
         }
-    }
-
-    private static final SmallCoordinationFlags ALWAYS_EMPTY = new SmallCoordinationFlags(new SortedArrays.SortedArrayList<>(new Node.Id[0]));
-    static
-    {
-        ALWAYS_EMPTY.hasUniqueHlc = false;
     }
 
     static class SmallCoordinationFlags extends SortedListSet.SmallSortedListSet<Node.Id> implements CoordinationFlags
     {
-        boolean hasUniqueHlc = true;
-        private SmallCoordinationFlags(SortedList<Node.Id> list)
+        private static final SortedList<Node.Id> NO_IDS = new SortedArrays.SortedArrayList<>(new Node.Id[0]);
+
+        private ExecuteFlags all;
+        private SmallCoordinationFlags(ExecuteFlags all, SortedList<Node.Id> list)
         {
             super(list);
+            if (!list.isEmpty())
+                all = all.with(HAS_UNIQUE_HLC);
+            this.all = all;
         }
 
         @Override
@@ -115,15 +127,22 @@ public enum ExecuteFlag
         }
 
         @Override
-        public boolean hasUniqueHlc()
+        public ExecuteFlags all()
         {
-            return hasUniqueHlc;
+            return all;
+        }
+
+        @Override
+        public void setNoWait()
+        {
+            all = all.with(NO_WAIT);
         }
 
         @Override
         public void add(Node.Id node, ExecuteFlags flags)
         {
-            hasUniqueHlc &= flags.contains(HAS_UNIQUE_HLC);
+            if (all != flags)
+                all = all.and(flags);
             if (flags.contains(READY_TO_EXECUTE))
                 add(node);
         }
@@ -131,10 +150,11 @@ public enum ExecuteFlag
 
     static class LargeCoordinationFlags extends SortedListSet.LargeSortedListSet<Node.Id> implements CoordinationFlags
     {
-        boolean hasUniqueHlc = true;
-        private LargeCoordinationFlags(SortedList<Node.Id> list)
+        ExecuteFlags all;
+        private LargeCoordinationFlags(ExecuteFlags all, SortedList<Node.Id> list)
         {
             super(list);
+            this.all = all.with(HAS_UNIQUE_HLC);
         }
 
         @Override
@@ -144,15 +164,22 @@ public enum ExecuteFlag
         }
 
         @Override
-        public boolean hasUniqueHlc()
+        public ExecuteFlags all()
         {
-            return hasUniqueHlc;
+            return all;
+        }
+
+        @Override
+        public void setNoWait()
+        {
+            all = all.with(NO_WAIT);
         }
 
         @Override
         public void add(Node.Id node, ExecuteFlags flags)
         {
-            hasUniqueHlc &= flags.contains(HAS_UNIQUE_HLC);
+            if (all != flags)
+                all = all.and(flags);
             if (flags.contains(READY_TO_EXECUTE))
                 add(node);
         }

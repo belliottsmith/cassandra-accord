@@ -143,10 +143,10 @@ public enum Status
         public static final Durability NotDurable = get(HasDecision.None, HasOutcome.None, HasOutcome.None, false);
         public static final Durability DurablyCommitted = get(HasDecision.DurablyCommitted, HasOutcome.None, HasOutcome.None, false);
         public static final Durability DurablyStable = get(HasDecision.DurablyStable, HasOutcome.None, HasOutcome.None, false);
-        public static final Durability ShardUniversal = get(HasDecision.None, HasOutcome.Universal, HasOutcome.None, false);
         public static final Durability AllQuorums = get(HasDecision.DurablyStable, Quorum, Quorum, false);
         public static final Durability Universal = get(HasDecision.DurablyStable, HasOutcome.Universal, HasOutcome.Universal, false);
         public static final Durability Invalidated = get(HasDecision.None, HasOutcome.None, HasOutcome.None, true);
+        public static final Durability QuorumOrInvalidated = get(HasDecision.None, Quorum, Quorum, true);
         public static final Durability UniversalOrInvalidated = get(HasDecision.None, HasOutcome.Universal, HasOutcome.Universal, true);
 
         public enum HasDecisionOrOutcome

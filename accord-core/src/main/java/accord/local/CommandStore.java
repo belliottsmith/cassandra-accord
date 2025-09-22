@@ -21,6 +21,7 @@ package accord.local;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -50,11 +51,14 @@ import accord.impl.AbstractAsyncExecutor;
 import accord.coordinate.CoordinateMaxConflict;
 import accord.local.CommandStores.BootstrapRangeAction;
 import accord.local.CommandStores.RangesForEpoch;
+import accord.local.Commands.NotifyWaitingOnPlus;
 import accord.local.PreLoadContext.Empty;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
+import accord.primitives.SaveStatus;
+import accord.primitives.Status;
 import accord.primitives.Status.Durability.HasOutcome;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -73,6 +77,7 @@ import accord.utils.async.AsyncResults.SettableResult;
 import org.agrona.collections.LongHashSet;
 
 import static accord.api.ConfigurationService.EpochReady.DONE;
+import static accord.api.ConfigurationService.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Image;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_DURABLE;
@@ -156,6 +161,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     // Used in markShardStale to make sure the staleness includes in progress bootstraps
     // TODO (desired): migrate to BTree
     private transient NavigableMap<TxnId, Ranges> bootstrapBeganAt = emptyBootstrapBeganAt(); // additive (i.e. once inserted, rolled-over until invalidated, and the floor entry contains additions)
+    protected boolean hasResumedBootstraps;
     private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
     private MaxDecidedRX maxDecidedRX = MaxDecidedRX.EMPTY;
@@ -183,13 +189,12 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     static class WaitingOnVisibility
     {
-        final SettableResult<Void> whenDone;
+        final SettableResult<Void> whenDone = new SettableResult<>();
         final Ranges allRanges;
         Ranges waitingOn, waitingOnDurable;
 
-        WaitingOnVisibility(SettableResult<Void> whenDone, Ranges ranges)
+        WaitingOnVisibility(Ranges ranges)
         {
-            this.whenDone = whenDone;
             this.allRanges = this.waitingOn = this.waitingOnDurable = ranges;
         }
     }
@@ -364,6 +369,12 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     protected void unsafeUpsertRedundantBefore(RedundantBefore addRedundantBefore)
     {
         redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
+    }
+
+    @VisibleForTesting
+    public boolean unsafeIsRefusingAny()
+    {
+        return refuses != null;
     }
 
     protected void unsafeRefuseRequests(Ranges refuse)
@@ -559,6 +570,38 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         return getClass().getSimpleName() + "{id=" + id + ", node=" + node.id().id + '}';
     }
 
+    public final AsyncResult<Void> cancelBootstraps()
+    {
+        return submit((Empty)() -> "Cancel Bootstraps", safeStore -> {
+            bootstraps.forEach(b -> b.invalidate(rangesForEpoch.all()));
+            return null;
+        });
+    }
+
+    public final AsyncResult<EpochReady> resumeBootstrap(Node node)
+    {
+        synchronized (this)
+        {
+            Invariants.require(!hasResumedBootstraps);
+            hasResumedBootstraps = true;
+        }
+
+        return submit((Empty)() -> "Resume Bootstrap", safeStore -> {
+            Ranges unfinished = rangesForEpoch.all();
+            unfinished = unfinished.without(safeToRead.lastEntry().getValue());
+            unfinished = redundantBefore.removeLostOrStale(unfinished);
+            for (Bootstrap bootstrap : bootstraps)
+                unfinished = unfinished.without(bootstrap.all);
+
+            long epoch = rangesForEpoch.epochAtIndex(0);
+            if (unfinished.isEmpty())
+                return done(epoch);
+
+            logger.info("{}: Resuming bootstrap of {}", this, unfinished);
+            return epochReadyAfterBootstrap(unfinished, epoch, startSafeBootstrapInternal(node, safeStore, unfinished, epoch));
+        });
+    }
+
     /**
      * Defer submitting the work until we have wired up any changes to topology in memory, then first submit the work
      * to setup any state in the command store, and finally submit the distributed work to bootstrap the data locally.
@@ -570,9 +613,10 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         switch (action)
         {
             default: throw new UnhandledEnum(action);
-            case NO_BOOTSTRAP:
+            case BOOTSTRAP_NOT_NEEDED:
                 return () -> {
                     AsyncResult<Void> done = execute((Empty) () -> "Initialise New Epoch", (safeStore) -> {
+                        logger.info("{}: Initialising {} for epoch {}", this, newRanges, epoch);
                         // Merge in a base for any ranges that needs to be covered
                         Ranges newBootstrapRanges = newRanges;
                         for (Ranges existing : bootstrapBeganAt.values())
@@ -583,7 +627,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
                         markExclusiveSyncPointDecided(safeStore, TxnId.NONE, newRanges);
                     });
 
-                    return new EpochReady(epoch, done, done, done, done);
+                    return EpochReady.all(epoch, done);
                 };
             case SAFE_BOOTSTRAP:
                 return () -> epochReadyAfterBootstrap(newRanges, epoch, startSafeBootstrap(node, newRanges, epoch));
@@ -595,21 +639,38 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     private EpochReady epochReadyAfterBootstrap(Ranges newRanges, long epoch, AsyncResult<EpochReady> bootstrap)
     {
+        return epochReadyAfterBootstrap(newRanges, epoch, EpochReady.wrap(epoch, bootstrap));
+    }
+
+    private EpochReady epochReadyAfterBootstrap(Ranges newRanges, long epoch, EpochReady bootstrap)
+    {
         AsyncResult<Void> readyToCoordinate = readyToCoordinate(newRanges, epoch);
-        return new EpochReady(epoch, bootstrap.map(ignore -> null),
+        return new EpochReady(epoch,
+                              bootstrap.metadata,
                               readyToCoordinate,
-                              bootstrap.flatMap(e -> e.data),
-                              bootstrap.flatMap(e -> e.reads));
+                              bootstrap.data,
+                              bootstrap.reads);
     }
 
     private AsyncResult<EpochReady> startSafeBootstrap(Node node, Ranges newRanges, long epoch)
     {
         return submit((Empty) () -> "New Epoch", safeStore -> {
-            Bootstrap bootstrap = new Bootstrap(node, this, epoch, newRanges);
-            bootstraps.add(bootstrap);
-            bootstrap.start(safeStore);
-            return new EpochReady(epoch, null, null, bootstrap.data, bootstrap.reads);
+            return startSafeBootstrapInternal(node, safeStore, newRanges, epoch);
         });
+    }
+
+    private static final AsyncResult<Void> HIDDEN_COORDINATION = AsyncResults.failure(new IllegalStateException());
+    private EpochReady startSafeBootstrapInternal(Node node, SafeCommandStore safeStore, Ranges newRanges, long epoch)
+    {
+        logger.info("{}: Starting Safe Bootstrap for {} for epoch {}", this, newRanges, epoch);
+        Bootstrap bootstrap = new Bootstrap(node, this, epoch, newRanges);
+        bootstraps.add(bootstrap);
+        bootstrap.start(safeStore);
+        return new EpochReady(epoch,
+                              AsyncResults.success(null),
+                              HIDDEN_COORDINATION,
+                              bootstrap.data,
+                              bootstrap.reads);
     }
 
     /**
@@ -639,9 +700,14 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     {
         CoordinateMaxConflict
         .maxConflict(node, ranges)
-        .recover(fail -> {
-            agent.ownershipEvents().onFailedBootstrap(attempt, "Fetch Max Conflict (to mark log safe at)", ranges, () -> rebootstrap(node, ranges, epoch, attempt + 1, ready, fetch), fail);
-            return AsyncChains.failure(fail);
+        .recover(failure -> {
+            Runnable retry = () -> rebootstrap(node, ranges, epoch, attempt + 1, ready, fetch);
+            Runnable fail = () -> {
+                ((SettableByCallback<Void>)ready.data).tryFailure(failure);
+                ((SettableByCallback<Void>)ready.reads).tryFailure(failure);
+            };
+            agent.ownershipEvents().onFailedBootstrap(attempt, "Fetch Max Conflict (to mark log safe at)", ranges, retry, fail, failure);
+            return AsyncChains.failure(failure);
         }).flatMap(success -> chain((Empty) () -> "Initiate Unsafe " + fetch + " Bootstrap", safeStore -> {
             node.uniqueNow(success.hlc()); // ensure we pick a higher timestamp than the maximum conflict we found globally
             // Mark unsafe to read first
@@ -687,6 +753,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         };
     }
 
+    // may be invoked by any thread without holding the command store lock
     private AsyncResult<Void> readyToCoordinate(Ranges ranges, long epoch)
     {
         if (redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).epoch() >= epoch)
@@ -694,11 +761,12 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
         TxnId minForEpoch = TxnId.minForEpoch(epoch);
         Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
-        SettableResult<Void> whenDone = new SettableResult<>();
-        WaitingOnVisibility sync = new WaitingOnVisibility(whenDone, remaining);
+        WaitingOnVisibility sync = new WaitingOnVisibility(remaining);
+        SettableResult<Void> whenDone = sync.whenDone;
         synchronized (waitingOnVisibility)
         {
-            Invariants.require(waitingOnVisibility.put(epoch, sync) == null);
+            WaitingOnVisibility prev = waitingOnVisibility.putIfAbsent(epoch, sync);
+            Invariants.require(prev == null);
         }
         ensureReadyToCoordinate(epoch, ranges);
         return whenDone;
@@ -808,6 +876,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         listeners.clearBefore(this, clearWaitingBefore);
     }
 
+    @VisibleForTesting
     public AsyncResult<Void> awaitVisibility(long epoch, Ranges ranges)
     {
         synchronized (waitingOnVisibility)
@@ -931,15 +1000,16 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
                     e.getValue().waitingOnDurable = waitingOnDurable = waitingOnDurable.without(ranges);
                     if (waitingOnDurable.isEmpty())
                     {
-                        logger.debug("Completed full sync for {} on epoch {} using {}", e.getValue().allRanges, e.getKey(), describe);
-                        e.getValue().whenDone.trySuccess(null);
+                        SettableResult<Void> done = e.getValue().whenDone;
+                        logger.debug("{} completed full visibility sync for {} on epoch {} using {}", this, e.getValue().allRanges, e.getKey(), describe);
+                        done.trySuccess(null);
                         if (remove == null)
                             remove = new LongHashSet();
                         remove.add(e.getKey());
                     }
                     else
                     {
-                        logger.debug("Completed partial sync for {} on epoch {} using {}; {} still to sync and {} to sync durably", synced, e.getKey(), describe, waitingOn, waitingOnDurable);
+                        logger.debug("{} completed partial visibility sync for {} on epoch {} using {}; {} still to sync and {} to sync durably", this, synced, e.getKey(), describe, waitingOn, waitingOnDurable);
                     }
                 }
             }
@@ -974,28 +1044,75 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         markUnsafeToRead(ranges);
     }
 
-    // MUST be invoked before CommandStore reference leaks to anyone
-    // The integration may have already loaded persisted values for these fields before this is called
-    // so it must be a merge for each field with the initialization values. These starting values don't need to be
-    // persisted since we can synthesize them at startup every time
-    // TODO (review): This needs careful thought about not persisting and that purgeAndInsert is doing the right thing
-    // with safeToRead
-    Supplier<EpochReady> initialise(long epoch, Ranges ranges)
+    /**
+     * This is a heavy-handed operator action to unstick waiting transactions whose transitive dependencies
+     * may already be applied.
+     */
+    public final AsyncResult<Void> operatorTryToExecuteListeningTxns()
     {
-        return () -> {
-            AsyncResult<Void> done = execute((Empty) () -> "Initialise New Epoch", (safeStore) -> {
-                // Merge in a base for any ranges that needs to be covered
-                Ranges newBootstrapRanges = ranges;
-                for (Ranges existing : bootstrapBeganAt.values())
-                    newBootstrapRanges = newBootstrapRanges.without(existing);
-                if (!newBootstrapRanges.isEmpty())
-                    safeStore.setBootstrapBeganAt(bootstrap(TxnId.NONE, newBootstrapRanges, bootstrapBeganAt));
-                safeStore.setSafeToRead(purgeAndInsert(safeToRead, TxnId.NONE, ranges));
-                markExclusiveSyncPointDecided(safeStore, TxnId.NONE, ranges);
-            });
+        SettableResult<Void> done = new SettableResult<>();
+        execute((Empty)() -> "Try Execute Listening", safeStore -> {
+            tryExecuteListening(safeStore, listeners.txnsWaitingOn(SaveStatus.Applied).iterator(), done);
+        });
+        return done;
+    }
 
-            return new EpochReady(epoch, done, done, done, done);
-        };
+    private void tryExecuteListening(SafeCommandStore safeStore, Iterator<TxnId> iterator, SettableResult<Void> done)
+    {
+        if (!iterator.hasNext())
+        {
+            done.trySuccess(null);
+            return;
+        }
+
+        try
+        {
+            TxnId waitingOn = iterator.next();
+            PreLoadContext context = PreLoadContext.contextFor(waitingOn, "Try Execute Listening");
+            if (!safeStore.canExecuteWith(context) || !safeStore.tryRecurse())
+            {
+                //noinspection DataFlowIssue
+                safeStore = safeStore;
+                execute(context, safeStore0 -> tryExecuteListening(safeStore0, waitingOn, iterator, done));
+            }
+            else
+            {
+                try { tryExecuteListening(safeStore, waitingOn, iterator, done); }
+                finally { safeStore.unrecurse(); }
+            }
+        }
+        catch (Throwable t)
+        {
+            done.tryFailure(t);
+        }
+    }
+
+    private void tryExecuteListening(SafeCommandStore safeStore, TxnId waitingOn, Iterator<TxnId> iterator, SettableResult<Void> done)
+    {
+        try
+        {
+            SafeCommand safeCommand = safeStore.unsafeGet(waitingOn);
+            //noinspection DataFlowIssue
+            safeStore = safeStore;
+            //noinspection DataFlowIssue
+            safeCommand = safeCommand;
+            boolean wasApplied = safeCommand.current().hasBeen(Status.Applied);
+            Consumer<SafeCommandStore> continuation = safeStore0 -> {
+                if (!wasApplied)
+                {
+                    SafeCommand safeCommand0 = safeStore0.ifLoadedAndInitialised(waitingOn);
+                    if (safeCommand0 != null && safeCommand0.current().saveStatus().hasBeen(Status.Applied))
+                        logger.warn("{} was successfully applied by tryToExecuteListening", waitingOn);
+                }
+                tryExecuteListening(safeStore0, iterator, done);
+            };
+
+            Commands.maybeExecute(safeStore, safeCommand, safeCommand.current(), true, true, NotifyWaitingOnPlus.adapter(continuation, true, true));
+        }
+        catch (Throwable t)
+        {
+            done.tryFailure(t);
+        }
     }
 
     public final boolean isRejectedIfNotPreAccepted(TxnId txnId, Unseekables<?> participants)
@@ -1014,6 +1131,11 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public final RedundantBefore unsafeGetRedundantBefore()
     {
         return redundantBefore;
+    }
+
+    public final LocalListeners unsafeGetListeners()
+    {
+        return listeners;
     }
 
     @Nullable
@@ -1053,14 +1175,14 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         return dataStore;
     }
 
-    final synchronized void markSafeToRead(Timestamp forBootstrapAt, Timestamp at, Ranges ranges)
+    final synchronized AsyncResult<Void> markSafeToRead(Timestamp forBootstrapAt, Timestamp at, Ranges ranges)
     {
-        execute((Empty) () -> "Mark Safe To Read", safeStore -> {
+        return execute((Empty) () -> "Mark Safe To Read", safeStore -> {
             // TODO (required): handle weird edge cases like newer at having a lower HLC than prior existing at, but higher epoch
             Ranges validatedSafeToRead = redundantBefore.validateSafeToRead(forBootstrapAt, ranges);
             safeStore.setSafeToRead(purgeAndInsert(safeToRead, at, validatedSafeToRead));
             updateMaxConflicts(ranges, at);
-        }, agent);
+        });
     }
 
     public static ImmutableSortedMap<TxnId, Ranges> bootstrap(TxnId at, Ranges ranges, NavigableMap<TxnId, Ranges> readyAt)

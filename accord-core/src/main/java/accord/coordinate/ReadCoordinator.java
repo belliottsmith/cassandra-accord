@@ -280,6 +280,8 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         Invariants.require(!isDone);
         isDone = true;
         node.unregister(this);
+        if (tracing != null)
+            Coordination.traceStop(tracing, this);
     }
 
     private void handle(RequestStatus result)
@@ -306,15 +308,15 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
 
     protected void start(List<Id> to)
     {
-        if (tracing != null)
-            tracing.trace(null, "contacting %s", to);
         to.forEach(this::contact);
     }
 
     public final void start()
     {
         node.register(this);
-        if (initialise()) startOnceInitialised();
+        if (tracing != null)
+            Coordination.traceStart(tracing, this);
+        if (initialise(tracing)) startOnceInitialised();
         else finishOnExhaustion();
     }
 
@@ -323,6 +325,8 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         List<Id> contact = new ArrayList<>(maxShardsPerEpoch());
         if (trySendMore(List::add, contact) != RequestStatus.NoChange)
             throw illegalState();
+        if (tracing != null)
+            tracing.trace(null, "contacting (start) %s", contact);
         start(contact);
     }
 

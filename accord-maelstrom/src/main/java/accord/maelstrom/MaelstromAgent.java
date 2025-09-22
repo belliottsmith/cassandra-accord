@@ -65,7 +65,7 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     }
 
     @Override
-    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Runnable fail, Throwable failure)
     {
         throw new AssertionError();
     }

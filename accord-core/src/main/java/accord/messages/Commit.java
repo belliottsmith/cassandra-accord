@@ -232,7 +232,7 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
                 return new CommitOrReadNack(InsufficientEpochs, insufficientEpoch(safeStore, safeCommand, txnId, route));
             case Insufficient:
                 Invariants.require(kind != StableWithTxnAndDeps && kind != CommitWithTxn);
-                return CommitOrReadNack.Insufficient;
+                return CommitOrReadNack.InsufficientAndWaiting;
             case Rejected:
                 return CommitOrReadNack.Rejected;
         }

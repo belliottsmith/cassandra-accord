@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import javax.annotation.Nullable;
 
+import accord.api.Tracing;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
 import accord.primitives.Participants;
@@ -35,6 +36,7 @@ public abstract class AbstractSimpleCoordination<P extends Participants<?>> impl
     protected final SequentialAsyncExecutor executor;
     protected final TxnId txnId;
     protected final P scope;
+    protected final @Nullable Tracing tracing;
     private Throwable failure;
     private boolean isDoneWithReplies, isFinishing, isDone;
 
@@ -45,6 +47,7 @@ public abstract class AbstractSimpleCoordination<P extends Participants<?>> impl
         this.executor = executor;
         this.txnId = Invariants.nonNull(txnId);
         this.scope = scope;
+        this.tracing = node.agent().trace(txnId, scope, kind());
     }
 
     @Override
@@ -70,18 +73,17 @@ public abstract class AbstractSimpleCoordination<P extends Participants<?>> impl
     void start()
     {
         node.register(this);
+        if (tracing != null)
+            Coordination.traceStart(tracing, this);
     }
 
     void setDone()
     {
         Invariants.require(!isDone);
-        ensureDone();
-    }
-
-    void ensureDone()
-    {
         isDoneWithReplies = isFinishing = isDone = true;
         node.unregister(this);
+        if (tracing != null)
+            Coordination.traceStop(tracing, this);
     }
 
     protected boolean isDone()

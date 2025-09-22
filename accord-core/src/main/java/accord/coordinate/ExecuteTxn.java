@@ -163,7 +163,12 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     ExecuteTxn(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
         super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId, route, callback);
-        this.path = ballot == Ballot.ZERO ? path : RECOVER;
+        if (!ballot.equals(Ballot.ZERO))
+        {
+            path = RECOVER;
+            flags.setNoWait();
+        }
+        this.path = path;
         this.txn = txn;
         this.route = route;
         this.ballot = ballot;
@@ -363,8 +368,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 return Action.Aborted;
 
-            case Insufficient:
-                // the replica may be missing the original commit, or the additional commit, so send everything
+            case InsufficientAndWaiting:
+                // the replica may be missing the original commit, or any additional commit, so send everything
                 sendMaximal(from);
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 return Action.TryAlternative;
