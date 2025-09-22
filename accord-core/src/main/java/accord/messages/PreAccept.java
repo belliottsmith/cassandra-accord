@@ -130,6 +130,8 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 if (command.status().compareTo(Status.PreAccepted) > 0)
                     return PreAcceptNack.INSTANCE;
 
+                // TODO (expected): special case Deps.NONE here - e.g. as null, or otherwise we should prevent their merge with any others reply
+                //   (to avoid edge cases similar to the one where we used thus vote for earlier epochs, but achieved a valid fast quorum without this vote in latest epoch)
                 if (command.executeAt().is(REJECTED) && !participants.owns().isEmpty()) // if our vote is required we don't need to compute deps
                     return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE, ExecuteFlags.none());
 

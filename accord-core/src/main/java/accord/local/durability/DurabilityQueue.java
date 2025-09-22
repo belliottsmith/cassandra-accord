@@ -50,8 +50,10 @@ import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
+import accord.topology.Topology;
 import accord.topology.TopologyManager;
 import accord.utils.Invariants;
+import accord.utils.SortedArrays.SortedArrayList;
 import org.agrona.collections.ObjectHashSet;
 
 import static accord.coordinate.ExecuteSyncPoint.coordinateIncluding;
@@ -88,7 +90,7 @@ public class DurabilityQueue
         final @Nullable DurabilityRequest request;
         final int attempt;
 
-        Pending(SyncPoint<Range> syncPoint, DurabilityRequest request, int attempt)
+        Pending(SyncPoint<Range> syncPoint, @Nullable DurabilityRequest request, int attempt)
         {
             this.syncPoint = syncPoint;
             this.request = request;
@@ -112,7 +114,7 @@ public class DurabilityQueue
     private synchronized void submit(SyncPoint<Range> syncPoint, @Nullable DurabilityRequest request, int attempt)
     {
         SequentialAsyncExecutor executor = node.someSequentialExecutor();
-        if (executor != null && inProgress.size() < maxConcurrency && !isInProgress(syncPoint.route))
+        if (executor != null && inProgress.size() < maxConcurrency && notInProgress(syncPoint.route))
         {
             start(syncPoint, request, attempt, executor);
         }
@@ -125,15 +127,15 @@ public class DurabilityQueue
         }
     }
 
-    private boolean isInProgress(Route<Range> route)
+    private boolean notInProgress(Route<Range> route)
     {
         for (Range range : route)
         {
             Map.Entry<RoutingKey, RoutingKey> e = inProgressRanges.floorEntry(range.start());
             if (e != null && e.getValue().compareTo(range.start()) > 0)
-                return true;
+                return false;
         }
-        return false;
+        return true;
     }
 
     private void registerInProgress(SyncPoint<Range> syncPoint, ExecuteSyncPoint.DurabilityResults submitted)
@@ -246,7 +248,7 @@ public class DurabilityQueue
     private void start(SyncPoint<Range> exclusiveSyncPoint, @Nullable DurabilityRequest request, int attempt, SequentialAsyncExecutor executor)
     {
         logger.debug("{}: Awaiting durability for {}", exclusiveSyncPoint.syncId, exclusiveSyncPoint.route.toRanges());
-        DurabilityResults coordinate = coordinateIncluding(node, exclusiveSyncPoint, request == null ? null : request.including, executor, attempt);
+        DurabilityResults coordinate = coordinateIncluding(node, exclusiveSyncPoint, executor, attempt);
         registerInProgress(exclusiveSyncPoint, coordinate);
         if (request != null)
             request.reportAttempt(exclusiveSyncPoint.syncId, node.elapsed(MICROSECONDS));
@@ -261,12 +263,41 @@ public class DurabilityQueue
         coordinate.onDone().invoke((success, fail) -> {
             TxnId txnId = exclusiveSyncPoint.syncId;
             Ranges ranges = exclusiveSyncPoint.route.toRanges();
-            String requestor = request != null ? " requested by " + request.requestedBy : "";
+
+            String requestor = null;
+            boolean isDone;
+            if (request == null)
+            {
+                 isDone = success != null && success.achievedRemote == All;
+            }
+            else
+            {
+                requestor = " requested by " + request.requestedBy;
+                isDone = request.isDone(ranges);
+                if (!isDone && request.including != null)
+                {
+                    Topology topology = node.topology().current();
+                    SortedArrayList<Node.Id> removed = topology.removedIds().intersecting(request.including);
+                    SortedArrayList<Node.Id> hardRemoved = topology.hardRemovedIds().intersecting(request.including);
+                    if (!removed.isEmpty() || !hardRemoved.isEmpty())
+                    {
+                        String message = String.format("%s: Cannot achieve durability requested by %s as (%s/%s) are (removed/hard removed)", exclusiveSyncPoint.syncId, request, removed, hardRemoved);
+                        logger.info(message);
+                        node.durability().unregister(request);
+                        // TODO (desired): more specific exception?
+                        request.result.tryFailure(new RuntimeException(message));
+                        return;
+                    }
+                }
+            }
             if (fail != null)
             {
                 if (logger.isTraceEnabled()) logger.trace("{}: failed awaiting durability for {}{}.", txnId, ranges, requestor, fail);
                 if (fail instanceof SyncPointErased || fail instanceof TopologyManager.TopologyRetiredException)
                 {
+                    if (isDone)
+                        return;
+
                     // we can't succeed. if this was requested, and the request is still waiting, submit another coordination request
                     // TODO (required): expand this to all unknown exception outcomes
                     if (request != null)
@@ -274,7 +305,7 @@ public class DurabilityQueue
                     return;
                 }
             }
-            if (success == null || (success.achievedRemote.compareTo(request == null ? All : request.remote) < 0))
+            if (!isDone)
             {
                 if (success != null)
                     fail = success.failure;
@@ -303,12 +334,13 @@ public class DurabilityQueue
                     if (fail instanceof Timeout) logger.info("{}: Timeout awaiting durability for {}{}", txnId, ranges, requestor, fail);
                     else if (fail != null) logger.info("{}: Failed awaiting durability for {}{}; will retry", txnId, ranges, requestor, fail);
                 }
+
                 retry(exclusiveSyncPoint, request, attempt + 1);
             }
-            else
+            else if (request == null)
             {
-                if (request != null) logger.info("{}: Successfully achieved durability for {}{}.", txnId, ranges, requestor);
-                else logger.debug("{}: Successfully achieved durability for {}.", txnId, ranges);
+                // if request != null, the request will log the necessary information
+                logger.debug("{}: Successfully achieved durability for {}.", txnId, ranges);
             }
         });
     }
@@ -343,7 +375,7 @@ public class DurabilityQueue
         Pending next;
         while (null != (next = pending.poll()))
         {
-            if (!isInProgress(next.syncPoint.route))
+            if (notInProgress(next.syncPoint.route))
             {
                 start(next.syncPoint, next.request, next.attempt, executor);
                 if (inProgress.size() >= maxConcurrency) break;

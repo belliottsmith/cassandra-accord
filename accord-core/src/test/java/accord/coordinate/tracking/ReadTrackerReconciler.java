@@ -37,7 +37,7 @@ public class ReadTrackerReconciler extends TrackerReconciler<ReadShardTracker, R
         public InFlightCapturingReadTracker(Topologies topologies)
         {
             super(topologies);
-            initialise();
+            initialise(null);
         }
 
         @Override

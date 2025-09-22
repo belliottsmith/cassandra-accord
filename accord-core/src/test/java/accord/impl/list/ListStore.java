@@ -37,7 +37,6 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
-import accord.local.cfk.CommandsForKey;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
@@ -173,8 +172,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     @Override
     public void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore onSuccess)
     {
-        // TODO (required): we need a more general Replaying state
-        if (!CommandsForKey.reportLinearizabilityViolations())
+        if (commandStore.node().isReplaying())
             return;
         snapshot(false).invoke((success, fail) -> {
             if (fail == null) commandStore.execute((PreLoadContext.Empty)()->"Report DataStore Durable", safeStore -> safeStore.upsertRedundantBefore(onSuccess));
@@ -524,7 +522,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     }
 
     @Override
-    public AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync)
+    public AsyncResult<Void> onTopologyUpdate(Topology topology)
     {
         return AsyncResults.success(null);
     }

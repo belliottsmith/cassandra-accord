@@ -62,6 +62,7 @@ import accord.coordinate.Outcome;
 import accord.coordinate.PrepareRecovery;
 import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.CommandStores.StoreSelector;
+import accord.local.cfk.CommandsForKey;
 import accord.local.durability.DurabilityService;
 import accord.messages.Callback;
 import accord.messages.Reply;
@@ -187,6 +188,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
      */
     private volatile long stamp;
     private static final AtomicLongFieldUpdater<Node> stampUpdater = AtomicLongFieldUpdater.newUpdater(Node.class, "stamp");
+    private volatile boolean replaying;
 
     public Node(Id id, MessageSink messageSink,
                 ConfigurationService configService, TimeService time, UniqueTimeService uniqueTime,
@@ -243,9 +245,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     @VisibleForTesting
     public AsyncResult<Void> unsafeStart()
     {
-        EpochReady ready = onTopologyUpdateInternal(configService.currentTopology(), false);
+        EpochReady ready = onTopologyUpdateInternal(configService.currentTopology());
         ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, ready.epoch));
-        configService.acknowledgeEpoch(ready, false);
+        configService.acknowledgeEpoch(ready);
         return ready.metadata;
     }
 
@@ -336,38 +338,41 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return topology().epoch();
     }
 
-    private synchronized EpochReady onTopologyUpdateInternal(Topology topology, boolean startSync)
+    private synchronized EpochReady onTopologyUpdateInternal(Topology topology)
     {
-        Supplier<EpochReady> bootstrap = commandStores.updateTopology(this, topology, startSync);
+        Supplier<EpochReady> bootstrap = commandStores.updateTopology(this, topology);
         Supplier<EpochReady> orderFastPathReporting = () -> {
             if (this.topology.isEmpty()) return bootstrap.get();
-            return orderFastPathReporting(this.topology.epochReady(topology.epoch() - 1), bootstrap.get());
+            return orderReporting(this.topology.epochReady(topology.epoch() - 1), bootstrap.get());
         };
 
         return this.topology.onTopologyUpdate(topology, orderFastPathReporting, configService::reportEpochRemoved);
     }
 
-    private static EpochReady orderFastPathReporting(EpochReady previous, EpochReady next)
+    private static EpochReady orderReporting(EpochReady previous, EpochReady next)
     {
         if (previous.epoch + 1 != next.epoch)
             throw new IllegalArgumentException("Attempted to order epochs but they are not next to each other... previous=" + previous.epoch + ", next=" + next.epoch);
-        if (previous.coordinate.isDone()) return next;
+        if (previous.coordinate.isDone() && previous.data.isDone() && previous.reads.isDone())
+            return next;
+
         return new EpochReady(next.epoch,
                               next.metadata,
                               previous.coordinate.flatMap(ignore -> next.coordinate),
-                              next.data,
-                              next.reads);
+                              previous.data.flatMap(ignore -> next.data),
+                              previous.reads.flatMap(ignore -> next.reads)
+        );
     }
 
     @Override
-    public synchronized AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync)
+    public synchronized AsyncResult<Void> onTopologyUpdate(Topology topology)
     {
         if (topology.epoch() <= this.topology.epoch())
             return AsyncResults.success(null);
-        EpochReady ready = onTopologyUpdateInternal(topology, startSync);
+        EpochReady ready = onTopologyUpdateInternal(topology);
         long epoch = topology.epoch();
         ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, epoch)).invoke(agent);
-        configService.acknowledgeEpoch(ready, startSync);
+        configService.acknowledgeEpoch(ready);
         return ready.coordinate;
     }
 
@@ -932,5 +937,18 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     public void updateStamp()
     {
         stampUpdater.incrementAndGet(this);
+    }
+
+    @Override
+    public boolean isReplaying()
+    {
+        return replaying;
+    }
+
+    public void unsafeSetReplaying(boolean replaying)
+    {
+        this.replaying = replaying;
+        if (replaying) CommandsForKey.disableLinearizabilityViolationsReporting();
+        else CommandsForKey.enableLinearizabilityViolationsReporting();
     }
 }

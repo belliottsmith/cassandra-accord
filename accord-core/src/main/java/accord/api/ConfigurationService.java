@@ -23,6 +23,7 @@ import javax.annotation.Nullable;
 import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
+import accord.utils.Invariants;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
@@ -95,10 +96,10 @@ public interface ConfigurationService
         public EpochReady(long epoch, AsyncResult<Void> metadata, AsyncResult<Void> coordinate, AsyncResult<Void> data, AsyncResult<Void> reads)
         {
             this.epoch = epoch;
-            this.metadata = metadata;
-            this.coordinate = coordinate;
-            this.data = data;
-            this.reads = reads;
+            this.metadata = Invariants.nonNull(metadata);
+            this.coordinate = Invariants.nonNull(coordinate);
+            this.data = Invariants.nonNull(data);
+            this.reads = Invariants.nonNull(reads);
         }
 
         public AsyncResult<Void> metadata() { return metadata; }
@@ -108,7 +109,12 @@ public interface ConfigurationService
 
         public static EpochReady done(long epoch)
         {
-            return new EpochReady(epoch, DONE, DONE, DONE, DONE);
+            return all(epoch, DONE);
+        }
+
+        public static EpochReady all(long epoch, AsyncResult<Void> done)
+        {
+            return new EpochReady(epoch, done, done, done, done);
         }
 
         @Override
@@ -121,6 +127,16 @@ public interface ConfigurationService
                    ", data=" + data +
                    ", reads=" + reads +
                    '}';
+        }
+
+        public static EpochReady wrap(long epoch, AsyncResult<EpochReady> async)
+        {
+            return new EpochReady(epoch,
+                                  async.flatMap(e -> e.metadata),
+                                  async.flatMap(e -> e.coordinate),
+                                  async.flatMap(e -> e.data),
+                                  async.flatMap(e -> e.reads)
+            );
         }
     }
 
@@ -136,7 +152,7 @@ public interface ConfigurationService
          *
          *   * {@param isLoad} - whether current topology update is being loaded from the local node during startup
          */
-        AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync);
+        AsyncResult<Void> onTopologyUpdate(Topology topology);
 
         /**
          * Called when accord data associated with a superseded epoch has been sync'd from previous replicas.
@@ -195,7 +211,7 @@ public interface ConfigurationService
      *
      * returns false is epoch has already been truncated
      */
-    boolean acknowledgeEpoch(EpochReady ready, boolean startSync);
+    boolean acknowledgeEpoch(EpochReady ready);
 
     void reportEpochClosed(Ranges ranges, long epoch);
 

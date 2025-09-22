@@ -333,8 +333,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     @Override
     protected void ensureDurable(Ranges ranges, RedundantBefore onCommandStoreDurable)
     {
-        // TODO (required): we need a more general Replaying state
-        if (!CommandsForKey.reportLinearizabilityViolations())
+        if (node().isReplaying())
             return;
 
         if (agent instanceof InMemoryAgent)
@@ -1214,6 +1213,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         rangeCommands.clear();
         progressLog.clear();
         unsafeSetRejectBefore(new RejectBefore());
+        hasResumedBootstraps = false;
     }
 
     public Journal.Replayer replayer()

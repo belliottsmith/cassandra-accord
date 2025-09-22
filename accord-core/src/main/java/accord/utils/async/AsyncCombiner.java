@@ -82,7 +82,7 @@ public abstract class AsyncCombiner<A, I, O> extends AsyncChains.Head<O>
     private void callback(int idx, I result, Throwable throwable)
     {
         int current = remaining;
-        if (current == 0)
+        if (current <= 0)
             return;
 
         if (throwable != null && REMAINING.getAndSet(this, 0) > 0)
@@ -108,11 +108,12 @@ public abstract class AsyncCombiner<A, I, O> extends AsyncChains.Head<O>
     protected Cancellable start(BiConsumer<? super O, Throwable> callback)
     {
         List<? extends A> chains = inputs();
-        state = new Object[chains.size()];
-
         int size = chains.size();
+
+        this.state = new Object[size];
         this.callback = callback;
         this.remaining = size;
+
         if (size == 0)
         {
             callback.accept(process(results()), null);

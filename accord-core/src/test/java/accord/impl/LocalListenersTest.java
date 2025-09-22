@@ -88,7 +88,7 @@ public class LocalListenersTest
         final SavingNotifySink canonicalSink = new SavingNotifySink(this, true);
         final TreeMap<TxnId, TxnState> state = new TreeMap<>();
         final SavingNotifySink testSink = new SavingNotifySink(this, false);
-        final LocalListeners test = new DefaultLocalListeners(new NoOpRemoteListeners(), testSink);
+        final LocalListeners test = new DefaultLocalListeners(null, new NoOpRemoteListeners(), testSink);
         int nextCanonicalId = 0, nextTestId;
 
         TestCase(RandomSource rnd)

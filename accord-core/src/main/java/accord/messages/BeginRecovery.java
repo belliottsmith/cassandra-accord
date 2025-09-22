@@ -44,6 +44,7 @@ import accord.primitives.Unseekable;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
@@ -57,6 +58,8 @@ import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Retired;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Truncated;
+import static accord.messages.BeginRecovery.RecoveryFlags.FAST_PATH_DECIDED;
+import static accord.messages.BeginRecovery.RecoveryFlags.FORCE_RECOVER_FAST_PATH;
 import static accord.messages.MessageType.StandardMessage.BEGIN_RECOVER_REQ;
 import static accord.messages.MessageType.StandardMessage.BEGIN_RECOVER_RSP;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
@@ -71,37 +74,42 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
 {
     public static class SerializationSupport
     {
-        public static BeginRecovery create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch, boolean isFastPathDecided)
+        public static BeginRecovery create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch, int flags)
         {
-            return new BeginRecovery(txnId, scope, waitForEpoch, minEpoch, partialTxn, ballot, route, executeAtOrTxnIdEpoch, isFastPathDecided);
+            return new BeginRecovery(txnId, scope, waitForEpoch, minEpoch, partialTxn, ballot, route, executeAtOrTxnIdEpoch, flags);
         }
+    }
+
+    public enum RecoveryFlags
+    {
+        FAST_PATH_DECIDED, FORCE_RECOVER_FAST_PATH
     }
 
     public final PartialTxn partialTxn;
     public final Ballot ballot;
     public final FullRoute<?> route;
     public final long executeAtOrTxnIdEpoch;
-    public final boolean isFastPathDecided;
+    public final int flags;
 
-    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, @Nullable Timestamp committedExecuteAt, boolean isFastPathDecided, Txn txn, FullRoute<?> route, Ballot ballot)
+    public BeginRecovery(Id to, Topologies topologies, TxnId txnId, @Nullable Timestamp committedExecuteAt, int flags, Txn txn, FullRoute<?> route, Ballot ballot)
     {
         super(to, topologies, txnId, route);
         this.partialTxn = txn.intersecting(scope, true);
         this.ballot = ballot;
         this.route = route;
         this.executeAtOrTxnIdEpoch = topologies.currentEpoch();
-        this.isFastPathDecided = isFastPathDecided;
+        this.flags = flags;
         Invariants.require(committedExecuteAt == null || committedExecuteAt.epoch() == topologies.currentEpoch());
     }
 
-    private BeginRecovery(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch, boolean isFastPathDecided)
+    private BeginRecovery(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, PartialTxn partialTxn, Ballot ballot, @Nullable FullRoute<?> route, long executeAtOrTxnIdEpoch, int flags)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.partialTxn = partialTxn;
         this.ballot = ballot;
         this.route = route;
         this.executeAtOrTxnIdEpoch = executeAtOrTxnIdEpoch;
-        this.isFastPathDecided = isFastPathDecided;
+        this.flags = flags;
     }
 
     @Override
@@ -150,7 +158,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         boolean supersedingRejects;
         Deps earlierNoWait, earlierWait;
         Deps laterCoordRejects;
-        if (command.hasBeen(AcceptedMedium) || txnId.isSyncPoint() || isFastPathDecided)
+        if (command.hasBeen(AcceptedMedium) || !recoverFastPath())
         {
             supersedingRejects = true;
             earlierNoWait = earlierWait = Deps.NONE;
@@ -176,6 +184,13 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         Participants<?> coordinatorAcceptsFastPath = saveStatus.known.hasPrivilegedVote() ? participants.owns() : null;
         boolean acceptsFastPath = acceptsFastPath(txnId, participants, saveStatus, executeAt);
         return new RecoverOk(txnId, saveStatus.status, accepted, executeAt, deps, earlierWait, earlierNoWait, laterCoordRejects, acceptsFastPath, coordinatorAcceptsFastPath, supersedingRejects, writes, result);
+    }
+
+    private boolean recoverFastPath()
+    {
+        if (TinyEnumSet.contains(flags, FORCE_RECOVER_FAST_PATH))
+            return true;
+        return !txnId.isSyncPoint() && !TinyEnumSet.contains(flags, FAST_PATH_DECIDED);
     }
 
     static boolean acceptsFastPath(TxnId txnId, StoreParticipants participants, SaveStatus saveStatus, @Nullable Timestamp executeAt)
@@ -234,9 +249,9 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
     @Override
     public LoadKeysFor loadKeysFor()
     {
-        if (isFastPathDecided || txnId.isSyncPoint())
-            return LoadKeysFor.READ_WRITE;
-        return LoadKeysFor.RECOVERY;
+        if (recoverFastPath())
+            return LoadKeysFor.RECOVERY;
+        return LoadKeysFor.READ_WRITE;
     }
 
     @Override

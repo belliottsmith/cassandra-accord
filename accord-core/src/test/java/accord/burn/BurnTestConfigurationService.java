@@ -161,12 +161,12 @@ public class BurnTestConfigurationService extends AbstractTestConfigurationServi
     }
 
     @Override
-    public void reportTopology(Topology topology, boolean isLoad, boolean startSync)
+    public void reportTopology(Topology topology)
     {
         // we process via scheduler.selfRecurring only to logically detach from any client task so we can terminate
         Node node = lookup.apply(localId);
-        if (node == null) super.reportTopology(topology, isLoad, startSync);
-        else node.scheduler().selfRecurring(() -> super.reportTopology(topology, isLoad, startSync), 0, TimeUnit.MILLISECONDS);
+        if (node == null) super.reportTopology(topology);
+        else node.scheduler().selfRecurring(() -> super.reportTopology(topology), 0, TimeUnit.MILLISECONDS);
     }
 
     @GuardedBy("this")
@@ -182,7 +182,7 @@ public class BurnTestConfigurationService extends AbstractTestConfigurationServi
     }
 
     @Override
-    protected void onReadyToCoordinate(Topology topology, boolean startSync)
+    protected void onReadyToCoordinate(Topology topology)
     {
         topologyUpdates.syncComplete(lookup.apply(localId), topology.nodes(), topology.epoch());
     }

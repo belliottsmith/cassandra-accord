@@ -19,12 +19,7 @@
 package accord.coordinate;
 
 import java.util.Collection;
-import java.util.Collections;
-import java.util.Set;
 import java.util.function.BiConsumer;
-import java.util.function.Function;
-
-import javax.annotation.Nullable;
 
 import accord.api.Result;
 import accord.coordinate.tracking.AbstractTracker;
@@ -45,7 +40,7 @@ import accord.primitives.Range;
 import accord.primitives.SyncPoint;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
-import accord.utils.SortedArrays.SortedArrayList;
+import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 import accord.utils.WrappableException;
 import accord.utils.async.AsyncResult;
@@ -93,41 +88,25 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
 
     final DurabilityResults results;
     final DurabilityResult partialResult;
-    final Set<Node.Id> excludeSuccess;
     final DurabilityTracker tracker;
     final int attempt;
     boolean reportedQuorum, reportedMinorityQuorum;
     long retryInFutureEpoch;
 
-    protected ExecuteSyncPoint(Node node, SyncPoint<Range> syncPoint, Set<Node.Id> excludeSuccess, SequentialAsyncExecutor executor, int attempt, DurabilityResults callback)
+
+    protected ExecuteSyncPoint(Node node, SyncPoint<Range> syncPoint, SequentialAsyncExecutor executor, int attempt, DurabilityResults callback)
     {
-        this(node, syncPoint, exclusiveSyncPoint().forExecution(node, syncPoint.route(), SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor), excludeSuccess, executor, attempt, null, callback);
+        this(node, syncPoint, exclusiveSyncPoint().forExecution(node, syncPoint.route(), SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor), executor, attempt, null, callback);
     }
 
-    ExecuteSyncPoint(Node node, SyncPoint<Range> syncPoint, Function<Topologies, Set<Node.Id>> excludeSuccess, SequentialAsyncExecutor executor, int attempt, DurabilityResults callback)
-    {
-        this(node, syncPoint, exclusiveSyncPoint().forExecution(node, syncPoint.route(), SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor), excludeSuccess, executor, attempt, callback);
-    }
-
-    ExecuteSyncPoint(Node node, SyncPoint<Range> syncPoint, Topologies topologies, Function<Topologies, Set<Node.Id>> excludeSuccess, SequentialAsyncExecutor executor, int attempt, DurabilityResults callback)
-    {
-        this(node, syncPoint, topologies, excludeSuccess.apply(topologies), executor, attempt, null, callback);
-    }
-
-    ExecuteSyncPoint(Node node, SyncPoint<Range> syncPoint, Topologies topologies, Set<Node.Id> excludeSuccess, SequentialAsyncExecutor executor, int attempt, DurabilityResult partialResult, DurabilityResults callback)
+    ExecuteSyncPoint(Node node, SyncPoint<Range> syncPoint, Topologies topologies, SequentialAsyncExecutor executor, int attempt, DurabilityResult partialResult, DurabilityResults callback)
     {
         super(node, executor, syncPoint.syncId, syncPoint.route, topologies.nodes(), callback);
         this.syncPoint = syncPoint;
         this.partialResult = partialResult;
-        this.excludeSuccess = excludeSuccess;
         this.attempt = attempt;
-        this.tracker = new DurabilityTracker(topologies, excludeSuccess);
+        this.tracker = new DurabilityTracker(topologies);
         this.results = callback;
-    }
-
-    public AsyncResult<DurabilityResult> onQuorum()
-    {
-        return results.onQuorum;
     }
 
     public AsyncResult<DurabilityResult> onDone()
@@ -139,16 +118,11 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
     void start()
     {
         node.agent().coordinatorEvents().onExecuting(syncPoint.syncId, null, syncPoint.waitFor, null);
-        SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
         // TODO (desired): special Apply message that doesn't resend deps if path=MEDIUM
         Txn txn = node.agent().emptySystemTxn(syncPoint.syncId.kind(), syncPoint.syncId.domain());
         Result result = txn.result(syncPoint.syncId, syncPoint.executeAt, null);
-        if (contact == null) finishOnExaustion();
-        else
-        {
-            super.start();
-            contact(to -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.route, syncPoint.syncId, txn, syncPoint.waitFor, syncPoint.route, null, result));
-        }
+        super.start();
+        contact(to -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.route, syncPoint.syncId, txn, syncPoint.waitFor, syncPoint.route, null, result));
     }
 
     @Override
@@ -159,6 +133,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
 
         if (!reply.isOk())
         {
+            Invariants.require(reply instanceof CommitOrReadNack);
             CommitOrReadNack nack = (CommitOrReadNack) reply;
             switch (nack.kind)
             {
@@ -168,7 +143,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
                     sendApply(from, nack.minEpoch());
                     return;
 
-                case Insufficient:
+                case InsufficientAndWaiting:
                     sendApply(from);
                     return;
 
@@ -235,14 +210,14 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
             return;
         }
 
-        Collection<Node.Id> failedNodes = tracker.failures();
+        Collection<Node.Id> failedNodes = tracker.excluding();
         if (status == RequestStatus.Failed)
             recordFailure(Exhausted.exhausted(node.agent(), txnId, syncPoint.route.homeKey(), syncPoint.route.toRanges(), failedNodes));
 
         if (retryInFutureEpoch > tracker.topologies().currentEpoch())
         {
             awaitEpochAtLeastToFinish(retryInFutureEpoch, () -> {
-                ExecuteSyncPoint continuation = new ExecuteSyncPoint(node, syncPoint, node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE), excludeSuccess, executor, attempt, current(), (DurabilityResults) finishAndTakeCallback());
+                ExecuteSyncPoint continuation = new ExecuteSyncPoint(node, syncPoint, node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE), executor, attempt, current(), (DurabilityResults) finishAndTakeCallback());
                 continuation.start();
             });
         }
@@ -269,38 +244,28 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
 
     DurabilityResult current()
     {
-        DurabilityResult cur = new DurabilityResult(syncPoint, tracker.achievedLocal(node.id()), tracker.achievedRemote(), tracker.failures(), failure());
+        DurabilityResult cur = new DurabilityResult(syncPoint, tracker.achievedLocal(node.id()), tracker.achievedRemote(), tracker.including(), tracker.excluding(), failure());
         if (partialResult == null)
             return cur;
         return partialResult.merge(cur);
     }
 
+    public static DurabilityResults coordinateIncluding(Node node, SyncPoint<Range> exclusiveSyncPoint, SequentialAsyncExecutor executor, int attempt)
+    {
+        return coordinate(node, exclusiveSyncPoint, executor, attempt);
+    }
+
     public static DurabilityResults coordinate(Node node, SyncPoint<Range> exclusiveSyncPoint, int attempt)
     {
-        return coordinate(node, ignore -> Collections.emptySet(), exclusiveSyncPoint, attempt);
+        return coordinate(node, exclusiveSyncPoint, node.someSequentialExecutor(), attempt);
     }
 
-    public static DurabilityResults coordinateIncluding(Node node, SyncPoint<Range> exclusiveSyncPoint, @Nullable Collection<Node.Id> including, int attempt)
-    {
-        return coordinateIncluding(node, exclusiveSyncPoint, including, node.someSequentialExecutor(), attempt);
-    }
-
-    public static DurabilityResults coordinateIncluding(Node node, SyncPoint<Range> exclusiveSyncPoint, @Nullable Collection<Node.Id> including, SequentialAsyncExecutor executor, int attempt)
-    {
-        return coordinate(node, including == null ? ignore -> Collections.emptySet() : topologies -> topologies.nodes().without(including::contains), exclusiveSyncPoint, executor, attempt);
-    }
-
-    public static DurabilityResults coordinate(Node node, Function<Topologies, Set<Node.Id>> excludeSuccess, SyncPoint<Range> exclusiveSyncPoint, int attempt)
-    {
-        return coordinate(node, excludeSuccess, exclusiveSyncPoint, null, attempt);
-    }
-
-    public static DurabilityResults coordinate(Node node, Function<Topologies, Set<Node.Id>> excludeSuccess, SyncPoint<Range> syncPoint, SequentialAsyncExecutor executor, int attempt)
+    public static DurabilityResults coordinate(Node node, SyncPoint<Range> syncPoint, SequentialAsyncExecutor executor, int attempt)
     {
         DurabilityResults result = new DurabilityResults();
         try
         {
-            ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, syncPoint, excludeSuccess, executor, attempt, result);
+            ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, syncPoint, executor, attempt, result);
             coordinate.start();
         }
         catch (Throwable t)
@@ -326,6 +291,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
     @Override
     public String describe()
     {
-        return "exclude=" + excludeSuccess;
+        // TODO (expected): report hard removed / stale nodes we're excluding, not only those requested by the caller
+        return "exclude=" + tracker.topologies().staleOrRemovedIds().intersecting(tracker.nodes());
     }
 }

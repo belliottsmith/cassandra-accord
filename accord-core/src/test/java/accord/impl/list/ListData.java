@@ -35,13 +35,18 @@ public class ListData extends TreeMap<Key, Timestamped<int[]>> implements Data
     @Override
     public Data merge(Data data)
     {
-        if (data != null)
-        {
-            ((ListData)data).forEach((k, v) -> {
-                merge(k, v, (a, b) -> a == null ? b : b == null ? a : Timestamped.mergeEqual(a, b, Arrays::equals));
-            });
-        }
-        return this;
+        if (data == null || ((ListData)data).isEmpty())
+            return this;
+
+        if (isEmpty())
+            return data;
+
+        ListData merged = new ListData();
+        merged.putAll(this);
+        ((ListData)data).forEach((k, v) -> {
+            merged.merge(k, v, (a, b) -> a == null ? b : b == null ? a : Timestamped.mergeEqual(a, b, Arrays::equals));
+        });
+        return merged;
     }
 
     @Override

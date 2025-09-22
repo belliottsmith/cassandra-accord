@@ -74,7 +74,6 @@ import static accord.primitives.SaveStatus.TruncatedUnapplied;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Durability.NotDurable;
-import static accord.primitives.Status.Durability.ShardUniversal;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.Paranoia.LINEAR;
@@ -468,7 +467,6 @@ public abstract class Command implements ICommand
         public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, Result result)
         {
             Invariants.requireArgument(!txnId.awaitsOnlyDeps());
-            durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
             return validate(new Truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result));
         }
 
@@ -493,20 +491,12 @@ public abstract class Command implements ICommand
 
         public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Writes writes, Result result, @Nullable Timestamp executesAtLeast)
         {
-            durability = checkTruncatedApplyInvariants(durability, saveStatus, executeAt);
             if (!txnId.awaitsOnlyDeps())
             {
                 Invariants.require(executesAtLeast == null);
                 return truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result);
             }
             return validate(new TruncatedAwaitsOnlyDeps(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result, executesAtLeast));
-        }
-
-        private static Durability checkTruncatedApplyInvariants(Durability durability, SaveStatus saveStatus, Timestamp executeAt)
-        {
-            Invariants.requireArgument(executeAt != null);
-            Invariants.requireArgument(saveStatus.status == Status.Truncated);
-            return durability.mergeMax(ShardUniversal);
         }
 
         public static Truncated invalidated(Command command)
@@ -737,7 +727,6 @@ public abstract class Command implements ICommand
 
         public static Committed committed(ICommand copy, SaveStatus status, WaitingOn overrideWaitingOn)
         {
-            Invariants.require(status == (overrideWaitingOn.isWaiting() ? SaveStatus.Stable : ReadyToExecute));
             return validate(new Committed(copy, status, overrideWaitingOn));
         }
 
@@ -1451,7 +1440,7 @@ public abstract class Command implements ICommand
 
         return command instanceof Command.Executed ?
                executed(command, command.saveStatus(), waitingOn.build()) :
-               committed(command, waitingOn.isWaiting() ? SaveStatus.Stable : ReadyToExecute, waitingOn.build());
+               committed(command, command.saveStatus(), waitingOn.build());
     }
 
     static Command.PreAccepted preaccept(Command command, SaveStatus saveStatus, StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)

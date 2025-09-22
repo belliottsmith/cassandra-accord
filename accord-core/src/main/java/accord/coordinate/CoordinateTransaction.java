@@ -41,7 +41,6 @@ import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.PreAccept.PreAcceptNack;
 import accord.messages.PreAccept.PreAcceptReply;
-import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.Status;
 import accord.topology.Topologies;
@@ -69,6 +68,7 @@ import static accord.local.Commands.AcceptOutcome.Success;
 import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Accept.Kind.SLOW;
 import static accord.primitives.Timestamp.Flag.REJECTED;
+import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -131,9 +131,20 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     }
 
     @Override
-    void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Node.Id, PreAcceptOk> oks)
+    void onPreAccepted(Topologies topologies, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
-        if (tracker.hasFastPathAccepted())
+        Timestamp executeAt = oks.foldlNonNullValues(topologies.current().nodes(), (ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
+        if (executeAt.is(REJECTED) && !(topologies.size() == 1 && (tracker.hasFastPathAccepted() || tracker.hasMediumPathAccepted())))
+        {
+            // we special case having fast or medium path accepted with only the latest topology because this is compatible with
+            // the behaviour on PreAccept that does not calculate Deps if we are a voting replica and mark REJECTED;
+            // that is, if we have some earlier topology where the lack of deps would be an invalid quorum vote, we must reject the transaction
+            // otherwise, if we have somehow reached a medium or fast path decision this vote can be safely ignored
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, executeAt, finishAndTakeCallback());
+            node.agent().coordinatorEvents().onRejected(txnId);
+            return;
+        }
+        else if (tracker.hasFastPathAccepted())
         {
             Deps deps = mergeFastOrMediumDeps(oks);
             if (deps != null)
@@ -160,12 +171,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                 proposeAdapter().propose(node, executor, topologies, scope, MEDIUM, Ballot.ZERO, txnId, txn, txnId, deps, finishAndTakeCallback());
                 return;
             }
-        }
-        else if (executeAt.is(REJECTED))
-        {
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, executeAt, finishAndTakeCallback());
-            node.agent().coordinatorEvents().onRejected(txnId);
-            return;
         }
 
         Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);

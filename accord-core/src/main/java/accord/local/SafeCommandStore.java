@@ -79,7 +79,7 @@ import static accord.utils.Invariants.illegalState;
  */
 public abstract class SafeCommandStore implements RangesForEpochSupplier, RedundantBeforeSupplier, CommandSummaries
 {
-    private static final int MAX_REENTRANCY = 100;
+    private static final int MAX_REENTRANCY = 50;
     private int reentrancyCounter;
     public boolean tryRecurse()
     {

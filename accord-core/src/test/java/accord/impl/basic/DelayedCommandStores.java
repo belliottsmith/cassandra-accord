@@ -18,10 +18,10 @@
 
 package accord.impl.basic;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -206,7 +206,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         private final SimulatedDelayedExecutorService executor;
-        private final Queue<Task<?>> pending = new LinkedList<>();
+        private final Queue<Task<?>> pending = new ArrayDeque<>();
         private final CacheLoading cacheLoading;
         private final Journal journal;
         private Task<?> active;
@@ -261,10 +261,10 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
         public void restore()
         {
+            loadRangesForEpoch(journal.loadRangesForEpoch(id()));
             loadRedundantBefore(journal.loadRedundantBefore(id()));
             loadBootstrapBeganAt(journal.loadBootstrapBeganAt(id()));
             loadSafeToRead(journal.loadSafeToRead(id()));
-            loadRangesForEpoch(journal.loadRangesForEpoch(id()));
         }
 
         @Override

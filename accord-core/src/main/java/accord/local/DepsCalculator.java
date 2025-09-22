@@ -77,6 +77,9 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
         }
     }
 
+    // TODO (expected): we can also track whether we have only single-key writes that have been Accepted with ballot 0 (or timestamp != t0), or else Committed[1];
+    //  in this case we can decide immediately if we have a unique hlc as we don't run the risk of other keys inserting some arbitrary timestamp
+    //  [1] probably unsafe to use Accepted with ballot > 0, as there could be a timestamp battle, and the timestamp we see might not be the one that gets decided.
     private boolean hasUnappliedDependency;
     private long maxAppliedHlc;
 

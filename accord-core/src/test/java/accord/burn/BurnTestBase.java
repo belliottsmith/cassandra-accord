@@ -109,6 +109,7 @@ import accord.utils.Gen;
 import accord.utils.Gens;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
+import accord.utils.Threads;
 import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.Utils;
@@ -743,14 +744,26 @@ public class BurnTestBase
         return ((PrefixedIntHashKey) key).prefix;
     }
 
-
     public static abstract class ValidatingRandom implements RandomSource
     {
+        static final boolean VALIDATE_STACK_TRACES = false;
+
         final DefaultRandom delegate;
+        final AtomicInteger counter;
+        final int stream;
 
         public ValidatingRandom(DefaultRandom delegate)
         {
             this.delegate = delegate;
+            this.counter = new AtomicInteger();
+            this.stream = 0;
+        }
+
+        private ValidatingRandom(DefaultRandom delegate, AtomicInteger counter)
+        {
+            this.delegate = delegate;
+            this.counter = counter;
+            this.stream = counter.incrementAndGet();
         }
 
         @Override
@@ -809,7 +822,18 @@ public class BurnTestBase
             delegate.setSeed(seed);
         }
 
-        abstract <T> T validate(String expect, T result);
+        <T> T validate(String expect, T result)
+        {
+            String st = "";
+            if (VALIDATE_STACK_TRACES)
+            {
+                st = Threads.prettyPrintStackTrace(Thread.currentThread(), true, "\n");
+                st = st.replaceAll("(RecordingRandom|ReplayRandom|BurnTest(Base|)[^\\n]+(record|replay|main)|ReplayQueue|RecordingQueue)[^\\n]+(\\n|$)", "" + '\n');
+            }
+            return validate(counter.incrementAndGet(), st, expect, result);
+        }
+
+        abstract <T> T validate(int counter, String st, String expect, T result);
     }
 
     public static class RecordingRandom extends ValidatingRandom
@@ -822,9 +846,21 @@ public class BurnTestBase
             this.out = out;
         }
 
-        <T> T validate(String expect, T result)
+        private RecordingRandom(DataOutputStream out, DefaultRandom delegate, AtomicInteger counter)
         {
-            try { out.writeUTF(expect + ":" + result); }
+            super(delegate, counter);
+            this.out = out;
+        }
+
+        <T> T validate(int counter, String st, String expect, T result)
+        {
+            try
+            {
+                out.writeInt(stream);
+                out.writeInt(counter);
+                out.writeUTF(st);
+                out.writeUTF(expect + ":" + result);
+            }
             catch (IOException e) { throw new RuntimeException(e); }
             return result;
         }
@@ -833,7 +869,7 @@ public class BurnTestBase
         public RandomSource fork()
         {
             validate("fork", "");
-            return new RecordingRandom(out, delegate.fork());
+            return new RecordingRandom(out, delegate.fork(), counter);
         }
     }
 
@@ -847,18 +883,31 @@ public class BurnTestBase
             this.in = in;
         }
 
-        <T> T validate(String expect, T result)
+        public ReplayRandom(DataInputStream in, DefaultRandom delegate, AtomicInteger counter)
         {
-            String test;
+            super(delegate, counter);
+            this.in = in;
+        }
+
+        <T> T validate(int counter, String st, String expect, T result)
+        {
+            int testStream, testCounter;
+            String testSt, testVals;
             try
             {
-                test = in.readUTF();
+                testStream = in.readInt();
+                testCounter = in.readInt();
+                testSt = in.readUTF();
+                testVals = in.readUTF();
             }
             catch (IOException e)
             {
                 throw new RuntimeException(e);
             }
-            Invariants.require(test.equals(expect + ":" + result));
+            Invariants.require(testStream == stream);
+            Invariants.require(testCounter == counter);
+            Invariants.require(!VALIDATE_STACK_TRACES || testSt.equals(st));
+            Invariants.require(testVals.equals(expect + ":" + result));
             return result;
         }
 
@@ -866,7 +915,7 @@ public class BurnTestBase
         public RandomSource fork()
         {
             validate("fork", "");
-            return new ReplayRandom(in, delegate.fork());
+            return new ReplayRandom(in, delegate.fork(), counter);
         }
     }
 }

@@ -19,23 +19,23 @@
 package accord.impl.progresslog;
 
 // the phase of the distributed state machine
-public enum CoordinatePhase
+public enum HomePhase
 {
     /**
      * This replica is not known to be a home shard of the transaction
      */
-    NotInitialised,
+    NotInitialised(false),
 
     /**
      * not durably decided; if eligible to take over coordination, should see if coordination is stalled and if so
      * take over recovery to ensure an execution decision is reached
      */
-    Undecided,
+    Undecided(true),
 
     /**
      * durably decided but not ready to execute locally; no progress expected
      */
-    Decided,
+    Decided(false),
 
     /**
      * durably decided, but replicas may not be ready to execute; should wait until we can expect to successfully
@@ -43,28 +43,40 @@ public enum CoordinatePhase
      * TODO (expected): this state is not effectively used today, we only wait for the home shard to be ready to execute,
      * whereas we can perform a distributed wait using the WaitingState to ensure we can make progress
      */
-    AwaitReadyToExecute,
+    AwaitReadyToExecute(true),
 
     /**
      * some replicas of all shards ready to execute; we can expect that the transaction can be successfully executed,
      * and we should now try to ensure this happens when it is our turn to do so
      */
-    ReadyToExecute,
+    ReadyToExecute(true),
 
     /**
-     * The transaction has been durably executed at a majority of replicas of all shards (but not necessarily ourselves)
+     * The transaction has been durably executed at a majority of replicas of all shards (but not necessarily ourselves),
+     * or it has been invalidated.
      */
-    Done
+    Done(false),
+
+    /**
+     * The transaction is either Done, or this was not its home shard
+     */
+    Cleared(false)
     ;
 
-    private static final CoordinatePhase[] lookup = values();
+    private static final HomePhase[] lookup = values();
+    final boolean expectsProgress;
+
+    HomePhase(boolean expectsProgress)
+    {
+        this.expectsProgress = expectsProgress;
+    }
 
     boolean isAtMostReadyToExecute()
     {
-        return compareTo(CoordinatePhase.ReadyToExecute) <= 0;
+        return compareTo(HomePhase.ReadyToExecute) <= 0;
     }
 
-    public static CoordinatePhase forOrdinal(int ordinal)
+    public static HomePhase forOrdinal(int ordinal)
     {
         if (ordinal < 0 || ordinal > lookup.length)
             throw new IndexOutOfBoundsException(ordinal);

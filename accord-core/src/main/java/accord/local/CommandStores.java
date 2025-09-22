@@ -80,7 +80,7 @@ import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.ConfigurationService.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Sync;
-import static accord.local.CommandStores.BootstrapRangeAction.NO_BOOTSTRAP;
+import static accord.local.CommandStores.BootstrapRangeAction.BOOTSTRAP_NOT_NEEDED;
 import static accord.local.CommandStores.BootstrapRangeAction.SAFE_BOOTSTRAP;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
@@ -699,13 +699,13 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public enum BootstrapRangeAction
     {
-        NO_BOOTSTRAP, SAFE_BOOTSTRAP, UNSAFE_BOOTSTRAP
+        BOOTSTRAP_NOT_NEEDED, SAFE_BOOTSTRAP, UNSAFE_BOOTSTRAP
     }
 
     protected BootstrapRangeAction shouldBootstrap(Node node, Topology prevGlobal, Topology newLocalTopology, Range add)
     {
         if (newLocalTopology.epoch() == 1 || !prevGlobal.ranges().contains(add))
-            return NO_BOOTSTRAP;
+            return BOOTSTRAP_NOT_NEEDED;
 
         return SAFE_BOOTSTRAP;
     }
@@ -724,13 +724,16 @@ public abstract class CommandStores implements AsyncExecutorFactory
         });
     }
 
-    private synchronized TopologyUpdate updateTopology(Node node, Snapshot prev, Topology newTopology, boolean startSync)
+    private synchronized TopologyUpdate updateTopology(Node node, Snapshot prev, Topology newTopology)
     {
         Invariants.requireArgument(!newTopology.isSubset(), "Use full topology for CommandStores.updateTopology");
 
         long epoch = newTopology.epoch();
         if (epoch <= prev.global.epoch())
+        {
+            Invariants.require(node.isReplaying(), "Received topology with epoch %d <= %d, but we are not replaying", epoch, prev.global.epoch());
             return new TopologyUpdate(prev, () -> done(epoch));
+        }
 
         Topology newLocalTopology = newTopology.forNode(supplier.node.id()).trim();
         Ranges addedGlobal = newTopology.ranges().without(prev.global.ranges());
@@ -738,15 +741,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         Ranges added = newLocalTopology.ranges().without(prev.local.ranges());
         Ranges subtracted = prev.local.ranges().without(newLocalTopology.ranges());
-        if (added.isEmpty() && subtracted.isEmpty())
-        {
-            Supplier<EpochReady> epochReady = () -> done(epoch);
-            // even though we haven't changed our replication, we need to check if the membership of our shard has changed
-            if (newLocalTopology.shards().equals(prev.local.shards()))
-                return new TopologyUpdate(new Snapshot(prev.shards, newLocalTopology, newTopology), epochReady);
-            // if it has, we still need to make sure we have witnessed the transactions of the majority of prior epoch
-            // which we do by fetching deps and replicating them to CommandsForKey/historicalRangeCommands
-        }
 
         List<Supplier<EpochReady>> bootstrapUpdates = new ArrayList<>();
         List<ShardHolder> result = new ArrayList<>(prev.shards.length + added.size());
@@ -764,8 +758,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
             // TODO (desired): only sync affected shards
             Ranges ranges = shard.ranges().currentRanges();
             // ranges can be empty when ranges are lost or consolidated across epochs.
-            if (epoch > 1 && startSync && requiresSync(ranges, prev.global, newTopology))
+            if (epoch > 1 && requiresSync(ranges, prev.global, newTopology))
             {
+                logger.debug("Epoch {} requires visibility sync for {}", epoch, ranges);
                 bootstrapUpdates.add(shard.store.sync(node, ranges, epoch));
             }
             result.add(shard);
@@ -773,6 +768,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         if (!added.isEmpty())
         {
+            logger.info("Epoch {} adding {} to local command stores", epoch, added);
             for (Ranges addRanges : shardDistributor.split(added))
             {
                 EpochUpdateHolder updateHolder = new EpochUpdateHolder();
@@ -781,7 +777,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder));
                 shard.ranges = rangesForEpoch;
 
-                Map<BootstrapRangeAction, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range));
+                Map<BootstrapRangeAction, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range), BootstrapRangeAction.class);
                 for (Map.Entry<BootstrapRangeAction, Ranges> entry : partitioned.entrySet())
                 {
                     BootstrapRangeAction action = entry.getKey();
@@ -791,15 +787,27 @@ public abstract class CommandStores implements AsyncExecutorFactory
             }
         }
 
-        Supplier<EpochReady> bootstrap = bootstrapUpdates.isEmpty() ? () -> done(epoch) : () -> {
-            List<EpochReady> list = bootstrapUpdates.stream().map(Supplier::get).collect(toList());
-            return new EpochReady(epoch,
-                AsyncResults.reduce(list.stream().map(b -> b.metadata).collect(toList()), Reduce.toNull()),
-                AsyncResults.reduce(list.stream().map(b -> b.coordinate).collect(toList()), Reduce.toNull()),
-                AsyncResults.reduce(list.stream().map(b -> b.data).collect(toList()), Reduce.toNull()),
-                AsyncResults.reduce(list.stream().map(b -> b.reads).collect(toList()), Reduce.toNull())
-            );
-        };
+        Supplier<EpochReady> bootstrap;
+        if (bootstrapUpdates.isEmpty())
+        {
+            logger.debug("Epoch {} implies no change to local command stores", epoch);
+            bootstrap = () -> done(epoch);
+        }
+        else
+        {
+            if (!subtracted.isEmpty())
+                logger.info("Epoch {} removes {} from local command stores", epoch, subtracted);
+
+            bootstrap = () -> {
+                List<EpochReady> list = bootstrapUpdates.stream().map(Supplier::get).collect(toList());
+                return new EpochReady(epoch,
+                                      AsyncResults.reduce(list.stream().map(b -> b.metadata).collect(toList()), Reduce.toNull()),
+                                      AsyncResults.reduce(list.stream().map(b -> b.coordinate).collect(toList()), Reduce.toNull()),
+                                      AsyncResults.reduce(list.stream().map(b -> b.data).collect(toList()), Reduce.toNull()),
+                                      AsyncResults.reduce(list.stream().map(b -> b.reads).collect(toList()), Reduce.toNull())
+                );
+            };
+        }
         return new TopologyUpdate(new Snapshot(result.toArray(new ShardHolder[0]), newLocalTopology, newTopology), bootstrap);
     }
 
@@ -974,7 +982,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                     else
                         accumulator = accumulator.withRanges(epoch, ranges);
 
-                    Ranges additions = Ranges.EMPTY;
+                    Ranges additions = ranges;
                     Ranges removals = Ranges.EMPTY;
                     if (prev != null)
                     {
@@ -999,9 +1007,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
         loadSnapshot(new Snapshot(shards, current.local, current.global));
     }
 
-    public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology, boolean startSync)
+    public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology)
     {
-        TopologyUpdate update = updateTopology(node, current, newTopology, startSync);
+        TopologyUpdate update = updateTopology(node, current, newTopology);
         if (update.snapshot != current)
         {
             AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableResult<>();

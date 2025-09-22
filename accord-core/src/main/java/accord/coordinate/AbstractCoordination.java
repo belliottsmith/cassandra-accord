@@ -27,8 +27,8 @@ import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.api.Tracing;
 import accord.coordinate.tracking.AbstractTracker;
+import accord.coordinate.tracking.RequestStatus;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
@@ -36,6 +36,7 @@ import accord.messages.Request;
 import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
+import accord.topology.Topologies;
 import accord.utils.DebugMap;
 import accord.utils.Invariants;
 import accord.utils.SimpleBitSet;
@@ -52,27 +53,27 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
 {
     private final SortedArrayList<Node.Id> nodes;
     private final SimpleBitSet expectingReply;
-    protected final @Nullable Tracing tracing;
     private final @Nullable DebugMap debug;
 
     private BiConsumer<? super Result, Throwable> callback;
     private Object[] replyState;
     private int replyCount;
 
-    protected AbstractCoordination(Node node, SequentialAsyncExecutor executor, TxnId txnId, P participants, SortedArrayList<Node.Id> nodes, BiConsumer<? super Result, Throwable> callback)
+    protected AbstractCoordination(Node node, SequentialAsyncExecutor executor, TxnId txnId, P scope, SortedArrayList<Node.Id> nodes, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, executor, txnId, participants);
+        super(node, executor, txnId, scope);
         this.nodes = nodes;
         this.callback = Invariants.nonNull(callback);
         this.replyState = new Object[nodes.size()];
         this.expectingReply = SimpleBitSet.allocate(nodes.size());
-        this.tracing = node.agent().trace(txnId, participants, kind());
         this.debug = Invariants.debug() ? new DebugMap(nodes) : null;
     }
 
     abstract void onSuccessInternal(Node.Id from, int fromIndex, Reply reply);
     abstract void onFailureInternal(Node.Id from, int fromIndex, Throwable fail);
     void onSlowResponseInternal(Node.Id from) {}
+    public abstract @Nonnull AbstractTracker<?> tracker();
+    public SortedList<Node.Id> nodes() { return nodes; }
 
     void recordOk(int fromIndex, Ok ok)
     {
@@ -171,15 +172,33 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     void contact(Function<Node.Id, Request> request, @Nullable Predicate<Node.Id> include)
     {
         executor.executeMaybeImmediately(() -> {
+            AbstractTracker<?> tracker = tracker();
+            Topologies topologies = tracker.topologies();
+            if (tracing != null)
+                tracing.trace(null, "contacting %s", nodes);
+
             for (int i = 0; i < nodes.size() ; ++i)
             {
                 Node.Id to = nodes.get(i);
                 if (include == null || include.test(to))
                 {
-                    Invariants.require(replyState[i] == null);
-                    expectingReply.set(i);
-                    replyState[i] = node.send(to, request.apply(to), executor, this);
-                    Invariants.require(expectingReply.get(i) || replyState[i] == null);
+                    if (topologies.isFaulty(to))
+                    {
+                        if (tracing != null)
+                            tracing.trace(null, "%s is considered faulty; recording failure instead", to);
+                        if (RequestStatus.Failed == tracker.prerecordFailure(to))
+                        {
+                            finishOnExaustion();
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        Invariants.require(replyState[i] == null);
+                        expectingReply.set(i);
+                        replyState[i] = node.send(to, request.apply(to), executor, this);
+                        Invariants.require(expectingReply.get(i) || replyState[i] == null);
+                    }
                 }
             }
         });
@@ -338,9 +357,9 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         AbstractTracker<?> tracker = tracker();
         SortedListMap<Node.Id, ?> replies = replies();
         return kind().name() + ':' + txnId
-               + "scope:" + scope()
+               + " scope:" + scope()
                + " inflight:" + inflight()
-               + (tracker == null ? "" : " tracker:" + tracker.summariseTracker())
+               + " tracker:" + tracker.summariseTracker()
                + (describe.isEmpty() ? "" : ' ' + describe)
                + (replies == null ? "" : " replies:" + summariseReplies(replies, 60));
     }

@@ -32,7 +32,6 @@ import accord.api.ProtocolModifiers.Toggles.DependencyElision;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.ViolationHandler.ViolationHandlerHolder;
-import accord.api.VisibleForImplementation;
 import accord.local.Command.WaitingOn;
 import accord.local.Command.WaitingOn.Update;
 import accord.local.CommandStores.RangesForEpochSupplier;
@@ -54,6 +53,7 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.primitives.SaveStatus;
+import accord.primitives.SaveStatus.LocalExecution;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -677,16 +677,6 @@ public class Commands
         safeStore.notifyListeners(safeCommand, command);
     }
 
-    /**
-     * The ranges for which we participate in the execution of a transaction, excluding those ranges
-     * for transactions below a SyncPoint where we adopted the range, and that will be obtained from peers,
-     * and therefore we do not want to execute locally
-     */
-    public static Ranges applyRanges(SafeCommandStore safeStore, Timestamp executeAt)
-    {
-        return safeStore.ranges().allAt(executeAt.epoch());
-    }
-
     private static class PostApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, PreLoadContext
     {
         final CommandStore commandStore;
@@ -734,6 +724,7 @@ public class Commands
         // TODO (required): this is anyway non-monotonic and milliseconds granularity
         long startedApplyAt = safeStore.node().elapsed(MICROSECONDS);
         TxnId txnId = command.txnId();
+        //noinspection DataFlowIssue
         safeStore = safeStore; // disable reuse
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
         return command.writes()
@@ -741,35 +732,49 @@ public class Commands
                       .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, startedApplyAt, false));
     }
 
-    @VisibleForImplementation
-    public static AsyncChain<Void> replayWrites(SafeCommandStore safeStore, PreLoadContext context, Command command)
-    {
-        CommandStore unsafeStore = safeStore.commandStore();
-        Command.Executed executed = command.asExecuted();
-        Participants<?> executes = executed.participants().stillExecutes();
-        if (executes.isEmpty())
-            return AsyncChains.success(null);
-
-        TxnId txnId = command.txnId();
-        return command.writes().apply(safeStore, executes, command.partialTxn())
-                      .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, -1, true));
-    }
-
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn)
     {
-        return maybeExecute(safeStore, safeCommand, safeCommand.current(), alwaysNotifyListeners, notifyWaitingOn);
+        return maybeExecute(safeStore, safeCommand, safeCommand.current(), alwaysNotifyListeners, notifyWaitingOn, MaybeExecuteAdapter.DEFAULT);
     }
 
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, boolean alwaysNotifyListeners, boolean notifyWaitingOn)
+    {
+        return maybeExecute(safeStore, safeCommand, command, alwaysNotifyListeners, notifyWaitingOn, MaybeExecuteAdapter.DEFAULT);
+    }
+
+    public interface MaybeExecuteAdapter
+    {
+        MaybeExecuteAdapter DEFAULT = new MaybeExecuteAdapter()
+        {
+            @Override
+            public void notifyWaiting(SafeCommandStore safeStore, SafeCommand waiting)
+            {
+                new NotifyWaitingOn(waiting).start(safeStore);
+            }
+
+            @Override
+            public void notWaiting(SafeCommandStore safeStore)
+            {
+            }
+        };
+
+        void notifyWaiting(SafeCommandStore safeStore, SafeCommand safeCommand);
+        void notWaiting(SafeCommandStore safeStore);
+    }
+
+    // TODO (desired): merge notifyListeners and notifyWaitingOn into MaybeExecuteAdapter without allocation/megamorphic despatch penalty
+    public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, boolean alwaysNotifyListeners, boolean notifyWaitingOn, MaybeExecuteAdapter adapter)
     {
         if (logger.isTraceEnabled())
             logger.trace("{}: Maybe executing with status {}. Will notify listeners on noop: {}",
                          command.txnId(), command.status(), alwaysNotifyListeners);
 
-        if (command.status() != Stable && command.saveStatus() != SaveStatus.PreApplied)
+        SaveStatus saveStatus = command.saveStatus();
+        if (saveStatus != SaveStatus.Stable && saveStatus != SaveStatus.PreApplied)
         {
             if (alwaysNotifyListeners)
                 safeStore.notifyListeners(safeCommand, command);
+            adapter.notWaiting(safeStore);
             return false;
         }
 
@@ -780,21 +785,20 @@ public class Commands
                 safeStore.notifyListeners(safeCommand, command);
 
             if (notifyWaitingOn && waitingOn.isWaitingOnCommand())
-                new NotifyWaitingOn(safeCommand).accept(safeStore);
+                adapter.notifyWaiting(safeStore, safeCommand);
             return false;
         }
 
         TxnId txnId = command.txnId();
-        switch (command.status())
+        switch (saveStatus)
         {
+            default: throw UnhandledEnum.invalid(command.status());
             case Stable:
                 // TODO (required): maintain distinct ReadyToRead and ReadyToWrite states
-                // immediately, as no transaction should take a local dependency on this transaction.
-                // This handles both transactions whose ownership is lost, as well as those that become pre-bootstrap or stale
                 safeCommand.readyToExecute(safeStore);
                 logger.trace("{}: set to ReadyToExecute", txnId);
                 safeStore.notifyListeners(safeCommand, command);
-                return true;
+                break;
 
             case PreApplied:
                 Command.Executed executed = command.asExecuted();
@@ -807,14 +811,16 @@ public class Commands
                 }
                 else
                 {
+                    // apply immediately, as no transaction should take a local dependency on this transaction.
+                    // This handles both transactions whose ownership is lost, as well as those that become pre-bootstrap or stale
                     logger.trace("{}: applying no-op", txnId);
                     safeCommand.applied(safeStore);
                     safeStore.notifyListeners(safeCommand, command);
                 }
-                return true;
-            default:
-                throw illegalState("Unexpected status: " + command.status());
         }
+
+        adapter.notWaiting(safeStore);
+        return true;
     }
 
     protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp waitingExecuteAt, StoreParticipants participants, PartialDeps deps)
@@ -1202,27 +1208,45 @@ public class Commands
         final TxnId waitingId;
         TxnId loadDepId;
 
-        public NotifyWaitingOn(SafeCommand root)
+        private NotifyWaitingOn(SafeCommand waiting)
         {
-            Invariants.requireArgument(root.current().hasBeen(Stable));
-            this.waitingId = root.txnId();
+            Invariants.requireArgument(waiting.current().hasBeen(Stable));
+            this.waitingId = waiting.txnId();
+        }
+
+        void start(SafeCommandStore safeStore)
+        {
+            if (safeStore.tryRecurse())
+            {
+                try { accept(safeStore); }
+                finally { safeStore.unrecurse(); }
+            }
+            else
+            {
+                safeStore.commandStore().execute(this, this);
+            }
         }
 
         @Override
-        public void accept(SafeCommandStore safeStore)
+        public final void accept(SafeCommandStore safeStore)
+        {
+            acceptInternal(safeStore);
+        }
+
+        // return false if done, true if continuing after loading a dependency
+        boolean acceptInternal(SafeCommandStore safeStore)
         {
             SafeCommand waitingSafe = safeStore.get(waitingId);
             SafeCommand depSafe = null;
+            if (loadDepId != null)
             {
-                Command waiting = waitingSafe.current();
-                if (waiting.saveStatus().compareTo(Applying) >= 0)
-                    return; // nothing to do
-
-                if (loadDepId != null)
+                depSafe = safeStore.ifInitialised(loadDepId);
+                if (depSafe == null) // TODO (required): slice to waiting.participants().waitsOn? can simplify method
                 {
-                    depSafe = safeStore.ifInitialised(loadDepId);
-                    if (depSafe == null) // TODO (required): slice to waiting.participants().waitsOn? can simplify method
-                        depSafe = initialiseOrRemoveDependency(safeStore, waitingSafe, loadDepId, waiting.partialDeps().participants(loadDepId));
+                    Command waiting = waitingSafe.current();
+                    if (waiting.saveStatus().compareTo(Applying) >= 0)
+                        return false; // nothing to do
+                    depSafe = initialiseOrRemoveDependency(safeStore, waitingSafe, loadDepId, waiting.partialDeps().participants(loadDepId));
                 }
             }
 
@@ -1230,7 +1254,7 @@ public class Commands
             {
                 Command waiting = waitingSafe.current();
                 if (waiting.saveStatus().compareTo(Applying) >= 0)
-                    return; // nothing to do
+                    return false; // nothing to do
 
                 if (depSafe == null)
                 {
@@ -1239,7 +1263,7 @@ public class Commands
                     if (directlyBlockedOn == null)
                     {
                         if (waitingOn.isWaiting())
-                            return; // nothing more we can do; all direct dependencies are notified
+                            return false; // nothing more we can do; all direct dependencies are notified
 
                         switch (waiting.saveStatus())
                         {
@@ -1247,13 +1271,13 @@ public class Commands
                             case ReadyToExecute:
                             case Applied:
                             case Applying:
-                                return;
+                                return false;
 
                             case Stable:
                             case PreApplied:
                                 boolean executed = maybeExecute(safeStore, waitingSafe, true, false);
                                 Invariants.require(executed);
-                                return;
+                                return false;
                         }
                     }
 
@@ -1262,16 +1286,16 @@ public class Commands
                     {
                         loadDepId = directlyBlockedOn;
                         safeStore.commandStore().execute(this, this, safeStore.agent());
-                        return;
+                        return true;
                     }
                 }
                 else
                 {
                     Command dep = depSafe.current();
                     SaveStatus depStatus = dep.saveStatus();
-                    SaveStatus.LocalExecution depExecution = depStatus.execution;
+                    LocalExecution depExecution = depStatus.execution;
                     if (!waitingId.awaitsOnlyDeps() && depStatus.known.isExecuteAtKnown() && dep.executeAt().compareTo(waiting.executeAt()) > 0)
-                        depExecution = SaveStatus.LocalExecution.Applied;
+                        depExecution = LocalExecution.Applied;
 
                     Participants<?> participants = null;
                     if (depExecution.compareTo(WaitingToExecute) < 0 && dep.participants().owns().isEmpty())
@@ -1292,7 +1316,7 @@ public class Commands
                             if (logger.isTraceEnabled()) logger.trace("{} blocked on {} until ReadyToExclude", waitingId, dep.txnId());
                             safeStore.registerListener(depSafe, HasDecidedExecuteAt.unblockedFrom, waitingId);
                             safeStore.progressLog().waiting(HasDecidedExecuteAt, safeStore, depSafe, null, participants, null);
-                            return;
+                            return false;
 
                         case ReadyToExclude:
                         case WaitingToExecute:
@@ -1301,23 +1325,24 @@ public class Commands
 
                         case Applying:
                             safeStore.registerListener(depSafe, SaveStatus.Applied, waitingId);
-                            return;
+                            return false;
 
                         case WaitingToApply:
                             if (dep.asCommitted().isWaitingOnDependency())
                             {
                                 safeStore.registerListener(depSafe, SaveStatus.Applied, waitingId);
-                                return;
+                                maybeTransitivelyExecute(safeStore, depSafe);
+                                return false;
                             }
                             else
                             {
-                                maybeExecute(safeStore, depSafe, false, false);
+                                transitivelyExecute(safeStore, depSafe);
                                 switch (depSafe.current().saveStatus())
                                 {
                                     default: throw illegalState("Invalid child status after attempt to execute: " + depSafe.current().saveStatus());
                                     case Applying:
                                         safeStore.registerListener(depSafe, SaveStatus.Applied, waitingId);
-                                        return;
+                                        return false;
 
                                     case Applied:
                                         // fall-through to outer Applied branch
@@ -1333,6 +1358,15 @@ public class Commands
                     }
                 }
             }
+        }
+
+        void maybeTransitivelyExecute(SafeCommandStore safeStore, SafeCommand depSafe)
+        {
+        }
+
+        void transitivelyExecute(SafeCommandStore safeStore, SafeCommand depSafe)
+        {
+            maybeExecute(safeStore, depSafe, false, false);
         }
 
         static SafeCommand maybeCleanupRedundantDependency(SafeCommandStore safeStore, SafeCommand waitingSafe, SafeCommand depSafe, Participants<?> executes)
@@ -1395,7 +1429,101 @@ public class Commands
         }
     }
 
-    static Command removeRedundantDependencies(SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable TxnId redundant)
+    public static class NotifyWaitingOnPlus extends NotifyWaitingOn implements MaybeExecuteAdapter
+    {
+        static class CountingConsumer
+        {
+            final Consumer<SafeCommandStore> onDone;
+            int count;
+
+            CountingConsumer(Consumer<SafeCommandStore> onDone)
+            {
+                this.onDone = onDone;
+            }
+
+            void increment()
+            {
+                ++count;
+            }
+
+            void decrement(SafeCommandStore safeStore)
+            {
+                if (--count == -1 && onDone != null)
+                    onDone.accept(safeStore);
+            }
+        }
+
+        final CountingConsumer onDone;
+        final boolean transitivelyNotifyListeners;
+        final boolean transitivelyNotifyWaitingOn;
+
+        NotifyWaitingOnPlus(SafeCommand root, Consumer<SafeCommandStore> onDone, boolean transitivelyNotifyListeners, boolean transitivelyNotifyWaitingOn)
+        {
+            this(root, new CountingConsumer(onDone), transitivelyNotifyListeners, transitivelyNotifyWaitingOn);
+        }
+
+        NotifyWaitingOnPlus(SafeCommand root, CountingConsumer onDone, boolean transitivelyNotifyListeners, boolean transitivelyNotifyWaitingOn)
+        {
+            super(root);
+            this.onDone = onDone;
+            this.transitivelyNotifyListeners = transitivelyNotifyListeners;
+            this.transitivelyNotifyWaitingOn = transitivelyNotifyWaitingOn;
+        }
+
+        @Override
+        boolean acceptInternal(SafeCommandStore safeStore)
+        {
+            if (super.acceptInternal(safeStore))
+                return true;
+
+            onDone.decrement(safeStore);
+            return false;
+        }
+
+        void maybeTransitivelyExecute(SafeCommandStore safeStore, SafeCommand depSafe)
+        {
+            transitivelyExecute(safeStore, depSafe);
+        }
+
+        @Override
+        void transitivelyExecute(SafeCommandStore safeStore, SafeCommand depSafe)
+        {
+            onDone.increment();
+            maybeExecute(safeStore, depSafe, depSafe.current(), transitivelyNotifyListeners, transitivelyNotifyWaitingOn, this);
+        }
+
+        @Override
+        public void notifyWaiting(SafeCommandStore safeStore, SafeCommand waiting)
+        {
+            new NotifyWaitingOnPlus(waiting, onDone, transitivelyNotifyListeners, transitivelyNotifyWaitingOn).start(safeStore);
+        }
+
+        @Override
+        public void notWaiting(SafeCommandStore safeStore)
+        {
+            onDone.decrement(safeStore);
+        }
+
+        public static MaybeExecuteAdapter adapter(Consumer<SafeCommandStore> onDone, boolean transitivelyNotifyListeners, boolean transitivelyNotifyWaitingOn)
+        {
+            return new Commands.MaybeExecuteAdapter()
+            {
+                @Override
+                public void notifyWaiting(SafeCommandStore safeStore, SafeCommand waiting)
+                {
+                    new NotifyWaitingOnPlus(waiting, onDone, transitivelyNotifyListeners, transitivelyNotifyWaitingOn).start(safeStore);
+                }
+
+                @Override
+                public void notWaiting(SafeCommandStore safeStore)
+                {
+                    onDone.accept(safeStore);
+                }
+            };
+        }
+    }
+
+    static void removeRedundantDependencies(SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable TxnId redundant)
     {
         Command.Committed current = safeCommand.current().asCommitted();
 
@@ -1408,18 +1536,18 @@ public class Commands
         // if we are a range transaction, being redundant for this transaction does not imply we are redundant for all transactions
         if (redundant != null)
             update.removeWaitingOn(redundant);
-        return safeCommand.updateWaitingOn(safeStore, update);
+        safeCommand.updateWaitingOn(safeStore, update);
     }
 
-    static Command removeNoLongerOwnedDependency(SafeCommandStore safeStore, SafeCommand safeCommand, @Nonnull TxnId wasOwned)
+    static void removeNoLongerOwnedDependency(SafeCommandStore safeStore, SafeCommand safeCommand, @Nonnull TxnId wasOwned)
     {
         Command.Committed current = safeCommand.current().asCommitted();
         if (!current.waitingOn.isWaitingOn(wasOwned))
-            return current;
+            return;
 
         Update update = new Update(current.waitingOn);
         update.removeWaitingOn(wasOwned);
-        return safeCommand.updateWaitingOn(safeStore, update);
+        safeCommand.updateWaitingOn(safeStore, update);
     }
 
     public static Command supplementParticipants(Command command, StoreParticipants participants)

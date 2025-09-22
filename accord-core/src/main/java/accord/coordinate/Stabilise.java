@@ -74,18 +74,13 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
     @Override
     void start()
     {
-        SortedArrayList<Node.Id> contact = tracker.filterAndRecordFaulty();
+        super.start();
+        contact(to -> new Commit(CommitSlowPath, to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
         if (allTopologies.size() > 1)
-            contact = contact.with(allTopologies.nodes().without(tracker.nodes()).without(allTopologies::isFaulty));
-
-        if (contact == null)
         {
-            finishOnExaustion();
-        }
-        else
-        {
-            super.start();
-            contact(to -> new Commit(CommitSlowPath, to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
+            SortedArrayList<Node.Id> extra = allTopologies.nodes().without(tracker.nodes()).without(allTopologies::isFaulty);
+            for (Node.Id to : extra)
+                node.send(to, new Commit(CommitSlowPath, to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
         }
     }
 
@@ -109,7 +104,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
                 case Rejected:
                     recordFailure(from, Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                     break;
-                case Insufficient:
+                case InsufficientAndWaiting:
                     node.send(from, new Commit(CommitWithTxn, from, allTopologies,
                                                txnId, txn, scope, ballot, executeAt, stabiliseDeps));
                     break;

@@ -56,6 +56,7 @@ import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
+import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.TxnId.Cardinality.cardinality;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -165,8 +166,9 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     }
 
     @Override
-    void onPreAccepted(Topologies topologies, Timestamp executeAt, SortedListMap<Node.Id, PreAcceptOk> oks)
+    void onPreAccepted(Topologies topologies, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
+        Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
         if (executeAt.is(REJECTED))
         {
             node.agent().coordinatorEvents().onRejected(txnId);

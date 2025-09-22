@@ -22,6 +22,9 @@ import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 
+import javax.annotation.Nullable;
+
+import accord.api.Tracing;
 import accord.coordinate.tracking.ReadTracker.ReadShardTracker.PartialReadSuccess;
 import accord.primitives.Ranges;
 import accord.topology.Shard;
@@ -40,7 +43,7 @@ import static accord.coordinate.tracking.AbstractTracker.ShardOutcomes.*;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 
-public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
+public abstract class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
 {
     private static final ShardOutcome<ReadTracker> DataSuccess = (tracker, shardIndex) -> {
         --tracker.waitingOnData;
@@ -93,7 +96,7 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
             return hadSucceeded ? NoChange : DataSuccess;
         }
 
-        static class PartialReadSuccess
+        public static class PartialReadSuccess
         {
             final boolean isSlow;
             final Ranges unavailable;
@@ -233,12 +236,14 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
         this.waitingOnData = waitingOnShards;
     }
 
-    public boolean initialise()
+    public boolean initialise(@Nullable Tracing tracing)
     {
-        SortedArrayList<Id> candidates = filterAndRecordFaulty();
+        SortedArrayList<Id> candidates = filterAndRecordFaulty(tracing);
         if (candidates == null)
             return false;
 
+        if (tracing != null)
+            tracing.trace(null, "candidates %s", candidates);
         this.candidates.addAll(candidates);
         return true;
     }
@@ -311,7 +316,8 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
 
     public RequestStatus prerecordFailure(Id from)
     {
-        return recordResponse(this, from, ReadShardTracker::prerecordReadFailure, null);
+        RequestStatus status = recordResponseInternal(this, from, ReadShardTracker::prerecordReadFailure, null).result;
+        return status == null ? RequestStatus.NoChange : status;
     }
 
     protected RequestStatus recordResponse(Id from, BiFunction<? super ReadShardTracker, Boolean, ? extends ShardOutcome<? super ReadTracker>> function)
@@ -350,6 +356,16 @@ public class ReadTracker extends AbstractTracker<ReadTracker.ReadShardTracker>
 
         return true;
     }
+
+    @Override
+    protected RequestStatus toStatusOrTryAgain(ShardOutcomes outcomes)
+    {
+        if (outcomes != SendMore)
+            return outcomes.result;
+        return trySendMore();
+    }
+
+    protected abstract RequestStatus trySendMore();
 
     public <T1> RequestStatus trySendMore(BiConsumer<T1, Id> contact, T1 with)
     {

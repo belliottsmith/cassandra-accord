@@ -398,7 +398,7 @@ public class RemoteListenersTest
                   null,
                   null,
                   ignore -> new ProgressLog.NoOpProgressLog(),
-                  ignore -> new DefaultLocalListeners(new DefaultRemoteListeners((a, b, c, d, e)->{}),
+                  ignore -> new DefaultLocalListeners(null, new DefaultRemoteListeners((a, b, c, d, e)->{}),
                                                       DefaultLocalListeners.DefaultNotifySink.INSTANCE),
                   new EpochUpdateHolder());
             this.storeId = id;

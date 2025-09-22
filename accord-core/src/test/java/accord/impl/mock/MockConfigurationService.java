@@ -81,7 +81,7 @@ public class MockConfigurationService implements TestableConfigurationService
     }
 
     @Override
-    public synchronized boolean acknowledgeEpoch(EpochReady epoch, boolean startSync)
+    public synchronized boolean acknowledgeEpoch(EpochReady epoch)
     {
         Assertions.assertFalse(acks.containsKey(epoch.epoch));
         acks.put(epoch.epoch, epoch);
@@ -120,7 +120,7 @@ public class MockConfigurationService implements TestableConfigurationService
 
         List<AsyncResult<Void>> futures = new ArrayList<>();
         for (Listener listener : listeners)
-            futures.add(listener.onTopologyUpdate(topology, false, true));
+            futures.add(listener.onTopologyUpdate(topology));
 
         AsyncResult<Void> result = futures.isEmpty()
            ? AsyncResults.success(null)

@@ -25,6 +25,7 @@ import accord.primitives.Status.Durability.HasOutcomeOrInvalidated;
 import javax.annotation.Nonnull;
 
 import static accord.primitives.Status.Durability.HasOutcomeOrInvalidated.None;
+import static accord.primitives.Status.Durability.HasOutcomeOrInvalidated.QuorumOrInvalidated;
 import static accord.primitives.Status.Durability.HasOutcomeOrInvalidated.UniversalOrInvalidated;
 import static accord.primitives.Status.Phase.Accept;
 import static accord.primitives.Status.Phase.Commit;
@@ -37,7 +38,7 @@ public class ProgressToken implements Comparable<ProgressToken>, Outcome
     public static final ProgressToken NONE = new ProgressToken(None, Status.NotDefined, Ballot.ZERO, false);
     public static final ProgressToken INVALIDATED = new ProgressToken(UniversalOrInvalidated, Status.Invalidated, Ballot.ZERO, false);
     public static final ProgressToken APPLIED = new ProgressToken(None, Status.PreApplied, Ballot.ZERO, false);
-    public static final ProgressToken TRUNCATED_DURABLE_OR_INVALIDATED = new ProgressToken(UniversalOrInvalidated, Status.Truncated, Ballot.ZERO, false);
+    public static final ProgressToken TRUNCATED_DURABLE_OR_INVALIDATED = new ProgressToken(QuorumOrInvalidated, Status.Truncated, Ballot.ZERO, false);
 
     public final HasOutcomeOrInvalidated outcome;
     public final Status status;

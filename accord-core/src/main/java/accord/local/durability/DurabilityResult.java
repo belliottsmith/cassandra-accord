@@ -35,14 +35,16 @@ public class DurabilityResult
     public final SyncPoint<Range> syncPoint;
     public final SyncLocal achievedLocal;
     public final SyncRemote achievedRemote;
+    public final @Nullable Collection<Node.Id> including;
     public final @Nullable Collection<Node.Id> excluding;
     public final Throwable failure;
 
-    public DurabilityResult(SyncPoint<Range> syncPoint, SyncLocal achievedLocal, SyncRemote achievedRemote, @Nullable Collection<Node.Id> excluding, Throwable failure)
+    public DurabilityResult(SyncPoint<Range> syncPoint, SyncLocal achievedLocal, SyncRemote achievedRemote, @Nullable Collection<Node.Id> including, @Nullable Collection<Node.Id> excluding, Throwable failure)
     {
         this.syncPoint = syncPoint;
         this.achievedLocal = achievedLocal;
         this.achievedRemote = achievedRemote;
+        this.including = including;
         this.excluding = excluding;
         this.failure = failure;
     }
@@ -51,13 +53,17 @@ public class DurabilityResult
     {
         SyncLocal achievedLocal = min(this.achievedLocal, that.achievedLocal);
         SyncRemote achievedRemote = min(this.achievedRemote, that.achievedRemote);
-        Collection<Node.Id> excluding = this.excluding == null ? that.excluding :
-                                        that.excluding == null ? this.excluding :
-                                        SortedArrays.SortedArrayList.copyUnsorted(this.excluding, Node.Id[]::new).with(SortedArrays.SortedArrayList.copyUnsorted(that.excluding, Node.Id[]::new));
+        Collection<Node.Id> including = merge(this.including, that.including);
+        Collection<Node.Id> excluding = merge(this.excluding, that.excluding);
         Throwable failure = this.failure == null ? that.failure
                                  : that.failure == null ? this.failure
                                         : FailureAccumulator.append(this.failure, that.failure);
-        return new DurabilityResult(syncPoint, achievedLocal, achievedRemote, excluding, failure);
+        return new DurabilityResult(syncPoint, achievedLocal, achievedRemote, including, excluding, failure);
+    }
+
+    private static Collection<Node.Id> merge(Collection<Node.Id> a, Collection<Node.Id> b)
+    {
+        return a == null ? b : b == null ? a :SortedArrays.SortedArrayList.copyUnsorted(a, Node.Id[]::new).with(SortedArrays.SortedArrayList.copyUnsorted(b, Node.Id[]::new));
     }
 
     @Override
@@ -65,7 +71,7 @@ public class DurabilityResult
     {
         return syncPoint.syncId + " for " + syncPoint.route.toRanges()
                + " achieved: (" + achievedLocal + ',' + achievedRemote
-               + ", excluding: " + excluding + ')';
+               + ", including: " + including + ')';
     }
 
     private static <E extends Enum<E>> E min(E a, E b)

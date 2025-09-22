@@ -78,7 +78,7 @@ public class TestAgent implements Agent, OwnershipEventListener
         }
 
         @Override
-        public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+        public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Runnable fail, Throwable failure)
         {
             if (failure != null)
                 throw new AssertionError("Unexpected exception", failure);
@@ -109,7 +109,7 @@ public class TestAgent implements Agent, OwnershipEventListener
     }
 
     @Override
-    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Throwable failure)
+    public void onFailedBootstrap(int attempt, String phase, Ranges ranges, Runnable retry, Runnable fail, Throwable failure)
     {
         retry.run();
     }

@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import javax.annotation.Nullable;
 
+import accord.api.Tracing;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
@@ -55,19 +56,13 @@ public interface Coordination
     }
 
     long coordinationId();
-
     TxnId txnId();
     CoordinationKind kind();
     Participants<?> scope();
+    @Nullable AbstractTracker<?> tracker();
+    @Nullable SortedList<Id> nodes();
 
     default @Nullable Ballot ballot() { return null; }
-
-    default SortedList<Id> nodes()
-    {
-        AbstractTracker<?> tracker = tracker();
-        return tracker == null ? null : tracker.nodes();
-    }
-    default @Nullable AbstractTracker<?> tracker() { return null; }
 
     default String describe() { return ""; }
 
@@ -83,4 +78,21 @@ public interface Coordination
       * @return true if the coordination was aborted
      */
     default boolean abort() { return false; }
+
+    static void traceStart(Tracing tracing, Coordination coordination)
+    {
+        String description = coordination.describe();
+        if (description != null)
+            tracing.trace(null, "Description: %s", description);
+        Participants<?> scope = coordination.scope();
+        if (scope != null)
+            tracing.trace(null, "Scope: %s", scope);
+    }
+
+    static void traceStop(Tracing tracing, Coordination coordination)
+    {
+        AbstractTracker<?> tracker = coordination.tracker();
+        if (tracker != null)
+            tracing.trace(null, "Tracker: %s", tracker.summariseTracker());
+    }
 }

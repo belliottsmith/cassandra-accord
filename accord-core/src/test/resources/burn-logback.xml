@@ -36,6 +36,7 @@
         </filter>
     </appender>
 
+    <logger name="accord.local.CommandStores" level="ERROR"/>
     <logger name="accord.local.durability.DurabilityService" level="ERROR"/>
     <logger name="accord.impl.progresslog.DefaultProgressLog" level="ERROR"/>
     <logger name="accord.local.durability.DurabilityQueue" level="ERROR"/>

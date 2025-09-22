@@ -62,12 +62,12 @@ public class AbstractConfigurationServiceTest
         }
 
         @Override
-        public AsyncResult<Void> onTopologyUpdate(Topology topology, boolean isLoad, boolean startSync)
+        public AsyncResult<Void> onTopologyUpdate(Topology topology)
         {
             if (topologies.put(topology.epoch(), topology) != null)
                 Assertions.fail("Received topology twice for epoch " + topology.epoch());
             if (ackTopologies)
-                parent.acknowledgeEpoch(EpochReady.done(topology.epoch()), true);
+                parent.acknowledgeEpoch(EpochReady.done(topology.epoch()));
             return AsyncResults.success(null);
         }
 
@@ -143,7 +143,7 @@ public class AbstractConfigurationServiceTest
         }
 
         @Override
-        protected void onReadyToCoordinate(Topology topology, boolean startSync)
+        protected void onReadyToCoordinate(Topology topology)
         {
             if (!syncStarted.add(topology.epoch()))
                 Assertions.fail("Sync started multiple times for " + topology.epoch());
@@ -152,7 +152,7 @@ public class AbstractConfigurationServiceTest
         @Override
         protected void topologyUpdatePostListenerNotify(Topology topology)
         {
-            acknowledgeEpoch(EpochReady.done(topology.epoch()), true);
+            acknowledgeEpoch(EpochReady.done(topology.epoch()));
         }
 
         @Override

@@ -39,11 +39,16 @@ import accord.utils.Invariants;
 
 import static accord.coordinate.Coordination.CoordinationKind.HomeProgress;
 import static accord.impl.progresslog.CallbackInvoker.invokeHomeCallback;
-import static accord.impl.progresslog.CoordinatePhase.Done;
+import static accord.impl.progresslog.HomePhase.Cleared;
+import static accord.impl.progresslog.HomePhase.Decided;
+import static accord.impl.progresslog.HomePhase.Done;
+import static accord.impl.progresslog.HomePhase.NotInitialised;
+import static accord.impl.progresslog.HomePhase.ReadyToExecute;
 import static accord.impl.progresslog.Progress.NoneExpected;
 import static accord.impl.progresslog.Progress.Querying;
 import static accord.impl.progresslog.Progress.Queued;
 import static accord.impl.progresslog.TxnStateKind.Home;
+import static accord.primitives.Status.Durability.HasDecision.None;
 
 /**
  * TODO (documentation): describe state machine
@@ -51,9 +56,9 @@ import static accord.impl.progresslog.TxnStateKind.Home;
  * TODO (expected): do not attempt recovery every run; simply check the coordinator is still active
  * TODO (expected): do not attempt execution until all shards are ready; use the WaitingState to achieve this
  */
-abstract class HomeState extends WaitingState
+abstract class HomeState extends BaseTxnState
 {
-    private static final int PROGRESS_SHIFT = WaitingState.WAITING_STATE_END_SHIFT;
+    private static final int PROGRESS_SHIFT = 0;
     private static final long PROGRESS_MASK = 0x3;
     private static final int STATUS_SHIFT = PROGRESS_SHIFT + 2;
     private static final long STATUS_MASK = 0x7;
@@ -73,20 +78,25 @@ abstract class HomeState extends WaitingState
         super(txnId);
     }
 
-    void set(SafeCommandStore safeStore, DefaultProgressLog instance, CoordinatePhase newCoordinatePhase, Progress newProgress)
+    void set(SafeCommandStore safeStore, DefaultProgressLog owner, HomePhase newHomePhase, Progress newProgress)
     {
-        encodedState &= SET_MASK;
-        encodedState |= ((long)newCoordinatePhase.ordinal() << STATUS_SHIFT)
-                        | ((long)newProgress.ordinal() << PROGRESS_SHIFT);
-
+        setNoScheduling(newHomePhase, newProgress);
         if (newProgress == NoneExpected)
-            instance.clearProgressToken(txnId);
-        updateScheduling(safeStore, instance, Home, null, newProgress);
+            owner.clearProgressToken(txnId);
+        updateScheduling(safeStore, owner, Home, null, newProgress);
     }
 
-    @Nonnull CoordinatePhase phase()
+    void setNoScheduling(HomePhase newHomePhase, Progress newProgress)
     {
-        return phase(encodedState);
+        encodedState &= SET_MASK;
+        encodedState |= ((long) newHomePhase.ordinal() << STATUS_SHIFT)
+                        | ((long)newProgress.ordinal() << PROGRESS_SHIFT);
+    }
+
+    @Nonnull
+    HomePhase homePhase()
+    {
+        return homePhase(encodedState);
     }
 
     final @Nonnull Progress homeProgress()
@@ -94,9 +104,9 @@ abstract class HomeState extends WaitingState
         return homeProgress(encodedState);
     }
 
-    private static @Nonnull CoordinatePhase phase(long encodedState)
+    private static @Nonnull HomePhase homePhase(long encodedState)
     {
-        return CoordinatePhase.forOrdinal((int) ((encodedState >>> STATUS_SHIFT) & STATUS_MASK));
+        return HomePhase.forOrdinal((int) ((encodedState >>> STATUS_SHIFT) & STATUS_MASK));
     }
 
     private static @Nonnull Progress homeProgress(long encodedState)
@@ -124,32 +134,71 @@ abstract class HomeState extends WaitingState
         encodedState &= ~shiftedMask;
     }
 
-    void atLeast(SafeCommandStore safeStore, DefaultProgressLog instance, CoordinatePhase newPhase, Progress newProgress)
+    void atLeast(SafeCommandStore safeStore, DefaultProgressLog owner, HomePhase newPhase, Progress newProgress)
     {
-        if (phase() == Done)
+        if (homePhase().compareTo(Done) >= 0)
             return;
 
-        if (newPhase.compareTo(phase()) > 0)
+        if (newPhase.compareTo(homePhase()) > 0)
         {
-            instance.clearPendingAndActive(Home, txnId);
+            owner.clearPendingAndActive(Home, txnId);
             clearHomeRunCounter();
-            set(safeStore, instance, newPhase, newProgress);
+            set(safeStore, owner, newPhase, newProgress);
         }
     }
 
-    final void runHome(DefaultProgressLog instance, SafeCommandStore safeStore, SafeCommand safeCommand)
+    void maybeUpdatePhase(SafeCommandStore safeStore, DefaultProgressLog owner, Command command)
+    {
+        HomePhase newPhase = shouldUpdatePhase(owner, command);
+        if (newPhase != null)
+            atLeast(safeStore, owner, newPhase, newPhase.expectsProgress ? Queued : NoneExpected);
+    }
+
+    HomePhase shouldUpdatePhase(DefaultProgressLog owner, Command command)
+    {
+        if (command.saveStatus() == SaveStatus.Erased)
+            return Done;
+
+        HomePhase phase = homePhase();
+        if (phase.compareTo(ReadyToExecute) >= 0)
+            return null;
+
+        if (command.saveStatus().compareTo(SaveStatus.ReadyToExecute) >= 0)
+            return ReadyToExecute;
+
+        if (phase.compareTo(Decided) < 0)
+        {
+            // while we can infer that a command is durably decided by looking at Stable and accepted/commit ballots
+            // this doesn't tell us whether the Stable record is itself durable at other replicas.
+            // Since we currently gate further execution progress on the home shard's ability to execute, we want
+            // all shards to independently be able to reach Stable before we stop performing home shard progress work
+            // So, we rely exclusively on Durability information which records a coordinator's knowledge about a phase's durability
+            if (command.durability().isDurablyStable() && (!owner.homeExpectsLocallyApplied() || command.saveStatus().compareTo(SaveStatus.Stable) >= 0))
+                return Decided;
+        }
+
+        return null;
+    }
+
+    final void runHome(DefaultProgressLog owner, SafeCommandStore safeStore, SafeCommand safeCommand)
     {
         incrementHomeRunCounter();
         Invariants.require(!isHomeDoneOrUninitialised());
         Command command = safeCommand.current();
-        Tracing tracing = instance.node.agent().trace(txnId, command.participants().max(), HomeProgress);
+        Tracing tracing = owner.node.agent().trace(txnId, command.participants().max(), HomeProgress);
         // note: we may truncate locally based on shard-specific criteria, but this doesn't mean we're globally persisted
 
-        if (command.saveStatus() == SaveStatus.Erased // TODO (expected): improve progressLog.clear() so we can expect these to be cleared from the progress log
-            || !Invariants.expect(!command.durability().isDurableOrInvalidated(), "Command is durable or invalidated, but we have not cleared the ProgressLog"))
         {
-            setHomeDone(instance);
-            return;
+            HomePhase updatePhase = shouldUpdatePhase(owner, command);
+            if (updatePhase != null)
+            {
+                if (!updatePhase.expectsProgress)
+                {
+                    set(safeStore, owner, updatePhase, NoneExpected);
+                    return;
+                }
+                setNoScheduling(updatePhase, Queued);
+            }
         }
 
         // TODO (expected): when invalidated, safer to maintain HomeState until known to be globally invalidated
@@ -157,36 +206,36 @@ abstract class HomeState extends WaitingState
         if (Route.isFullRoute(command.route()))
         {
             HasOutcome min = safeStore.durableBefore().min(txnId, command.route());
-            if (min.isDurable())
+            if (min.isDurable() && owner.isHomeDoneIfDurable(command))
             {
                 if (tracing != null)
                     tracing.trace(safeStore.commandStore(), "DurableBefore records %s; terminating home state", min);
-                safeCommand.incidentalUpdate(command.updateDurability(command.durability().mergeMax(Durability.UniversalOrInvalidated)));
-                setHomeDone(instance);
+                safeCommand.incidentalUpdate(command.updateDurability(command.durability().mergeMax(Durability.get(None, min, min, true))));
+                setHomeDone(owner);
                 return;
             }
         }
 
-        ProgressToken maxProgressToken = instance.savedProgressToken(txnId).merge(command);
-        CallbackInvoker<ProgressToken, Outcome> invoker = invokeHomeCallback(instance, txnId, maxProgressToken, HomeState::recoverCallback);
+        ProgressToken maxProgressToken = owner.savedProgressToken(txnId).merge(command);
+        CallbackInvoker<ProgressToken, Outcome> invoker = invokeHomeCallback(owner, txnId, maxProgressToken, HomeState::recoverCallback);
         CommandStores.StoreSelector reportTo = new IncludingSpecificStoreSelector(safeStore.commandStore().id());
 
         if (tracing != null)
             tracing.trace(safeStore.commandStore(), "Invoking MaybeRecover with progress token %s", maxProgressToken);
 
-        instance.start(invoker, MaybeRecover.maybeRecover(instance.node(), txnId, invalidIf(), command.route(), maxProgressToken, reportTo, invoker));
-        set(safeStore, instance, phase(), Querying);
+        owner.start(invoker, MaybeRecover.maybeRecover(owner.node(), txnId, invalidIf(), command.route(), maxProgressToken, owner.homeExpectsLocallyApplied(), reportTo, invoker));
+        set(safeStore, owner, homePhase(), Querying);
     }
 
-    static void recoverCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog instance, TxnId txnId, @Nullable ProgressToken prevProgressToken, Outcome success, Throwable fail)
+    static void recoverCallback(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, TxnId txnId, @Nullable ProgressToken prevProgressToken, Outcome success, Throwable fail)
     {
-        HomeState state = instance.get(txnId);
+        HomeState state = owner.get(txnId);
         if (state == null)
             return;
 
         Command command = safeCommand.current();
-        Tracing tracing = instance.node.agent().trace(safeCommand.txnId(), command.participants().max(), HomeProgress);
-        CoordinatePhase status = state.phase();
+        Tracing tracing = owner.node.agent().trace(safeCommand.txnId(), command.participants().max(), HomeProgress);
+        HomePhase status = state.homePhase();
         if (status.isAtMostReadyToExecute() && state.homeProgress() == Querying)
         {
             if (fail != null)
@@ -201,8 +250,8 @@ abstract class HomeState extends WaitingState
 
                 // re-save prior progress token
                 if (prevProgressToken != null && prevProgressToken.compareTo(command) > 0)
-                    instance.saveProgressToken(command.txnId(), prevProgressToken);
-                state.set(safeStore, instance, status, Queued);
+                    owner.saveProgressToken(command.txnId(), prevProgressToken);
+                state.set(safeStore, owner, status, Queued);
             }
             else
             {
@@ -210,17 +259,18 @@ abstract class HomeState extends WaitingState
                 if (prevProgressToken != null)
                     token = token.merge(prevProgressToken);
 
-                if (token.outcome.isDurableOrInvalidated())
+                if (token.outcome.isDurableOrInvalidated() && owner.isHomeDoneIfDurable(command))
                 {
                     if (tracing != null)
                         tracing.trace(safeStore.commandStore(), "Callback: progress token %s reports durable; marking home state done.", token);
-                    state.setHomeDoneAndMaybeRemove(instance);
+                    state.setHomeDoneAndMaybeRemove(owner);
                     if (token.outcome.compareTo(command.durability().allShardsOrInvalidated()) >= 0)
                     {
                         Durability newDurability = null;
                         switch (token.outcome)
                         {
                             case Quorum: newDurability = Durability.AllQuorums; break;
+                            case QuorumOrInvalidated: newDurability = Durability.QuorumOrInvalidated; break;
                             case Universal: newDurability = Durability.Universal; break;
                             case UniversalOrInvalidated: newDurability = Durability.UniversalOrInvalidated; break;
                         }
@@ -233,8 +283,8 @@ abstract class HomeState extends WaitingState
                     if (tracing != null)
                         tracing.trace(safeStore.commandStore(), "Callback: progress token %s reports not durable; saving token and scheduling retry (%d).", token, state.homeRunCounter());
                     if (prevProgressToken != null && token.compareTo(command) > 0)
-                        instance.saveProgressToken(command.txnId(), token);
-                    state.set(safeStore, instance, status, Queued);
+                        owner.saveProgressToken(command.txnId(), token);
+                    state.set(safeStore, owner, status, Queued);
                 }
             }
         }
@@ -247,9 +297,19 @@ abstract class HomeState extends WaitingState
         }
     }
 
+    void clearHome(DefaultProgressLog instance)
+    {
+        clearHome(instance, Cleared);
+    }
+
     void setHomeDone(DefaultProgressLog instance)
     {
-        set(null, instance, Done, NoneExpected);
+        clearHome(instance, Done);
+    }
+
+    void clearHome(DefaultProgressLog instance, HomePhase phase)
+    {
+        set(null, instance, phase, NoneExpected);
         clearHomeRunCounter();
         instance.clearPendingAndActive(Home, txnId);
     }
@@ -260,30 +320,31 @@ abstract class HomeState extends WaitingState
         maybeRemove(instance);
     }
 
-    @Override
-    public String toStateString()
-    {
-        return (isHomeUninitialised() ? "" : isHomeDone() ? "Done; " : "{" + phase() + ',' + homeProgress() + "}; ") + super.toStateString();
-    }
-
     boolean isHomeDone()
     {
-        return phase() == Done;
+        return homePhase().compareTo(Done) >= 0;
     }
 
     boolean isHomeDoneOrUninitialised()
     {
-        CoordinatePhase phase = phase();
-        return phase == Done || phase == CoordinatePhase.NotInitialised;
+        HomePhase phase = homePhase();
+        return phase.compareTo(Done) >= 0 || phase == NotInitialised;
     }
 
     boolean isHomeInitialised()
     {
-        return phase() != CoordinatePhase.NotInitialised;
+        return !isHomeUninitialised();
     }
 
-    private boolean isHomeUninitialised()
+    boolean isHomeUninitialised()
     {
-        return phase() == CoordinatePhase.NotInitialised;
+        HomePhase phase = homePhase();
+        return phase == NotInitialised;
+    }
+
+    boolean isHomeUninitialisedOrCleared()
+    {
+        HomePhase phase = homePhase();
+        return phase == NotInitialised || phase == Cleared;
     }
 }

@@ -83,6 +83,7 @@ public enum SaveStatus
     AcceptedInvalidate              (Status.AcceptedInvalidate),
     AcceptedInvalidateWithDefinition(Status.AcceptedInvalidate,     FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
 
+    // TODO (expected): enrich with whether the proposal is a re-proposal of the original coordinator or a fast path recovery (this may help future optimisations)
     AcceptedMedium                  (Status.AcceptedMedium),
     AcceptedMediumWithDefinition    (Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown),
     AcceptedMediumWithDefAndVote    (Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown,        VotePreAccept),

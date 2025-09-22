@@ -90,8 +90,7 @@ public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoor
 
     protected Action checkSufficient(Id from, CheckStatusOk ok)
     {
-        Action action = isSufficient(from, ok) ? Action.Approve : Action.ApproveIfQuorum;
-        return action;
+        return isSufficient(from, ok) ? Action.Approve : Action.ApproveIfQuorum;
     }
 
     @Override

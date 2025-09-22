@@ -20,6 +20,8 @@ package accord.impl;
 
 import java.util.Arrays;
 import java.util.EnumMap;
+import java.util.Enumeration;
+import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 
@@ -27,6 +29,7 @@ import javax.annotation.Nullable;
 
 import accord.api.LocalListeners;
 import accord.api.RemoteListeners;
+import accord.api.VisibleForImplementation;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
@@ -40,6 +43,9 @@ import accord.utils.AsymmetricComparator;
 import accord.utils.Invariants;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
+
+import static accord.utils.ArrayBuffers.cachedAny;
+import static accord.utils.ArrayBuffers.cachedTxnIds;
 
 // TODO (desired): evict to disk
 public class DefaultLocalListeners implements LocalListeners
@@ -63,7 +69,7 @@ public class DefaultLocalListeners implements LocalListeners
         @Override
         public LocalListeners create(CommandStore commandStore)
         {
-            return new DefaultLocalListeners(remoteListeners, notifySink);
+            return new DefaultLocalListeners(commandStore, remoteListeners, notifySink);
         }
     }
 
@@ -72,6 +78,7 @@ public class DefaultLocalListeners implements LocalListeners
         void notify(SafeCommandStore safeStore, SafeCommand safeCommand, TxnId listener);
         boolean notify(SafeCommandStore safeStore, SafeCommand safeCommand, ComplexListener listener);
 
+        @VisibleForImplementation
         class NoOpNotifySink implements NotifySink
         {
             @Override public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, TxnId listener) {}
@@ -230,6 +237,18 @@ public class DefaultLocalListeners implements LocalListeners
         {
             this.listener = listener;
             this.txnId = txnId;
+        }
+
+        @Override
+        public TxnId waitingOn()
+        {
+            return txnId;
+        }
+
+        @Override
+        public ComplexListener waiting()
+        {
+            return listener;
         }
 
         @Override
@@ -412,32 +431,34 @@ public class DefaultLocalListeners implements LocalListeners
         }
     }
 
+    private final CommandStore commandStore;
     private final RemoteListeners remoteListeners;
     private final NotifySink notifySink;
 
     private final ConcurrentHashMap<TxnId, RegisteredComplexListeners> complexListeners = new ConcurrentHashMap<>();
     private Object[] txnListeners = BTree.empty();
 
-    public DefaultLocalListeners(RemoteListeners remoteListeners, NotifySink notifySink)
+    public DefaultLocalListeners(CommandStore commandStore, RemoteListeners remoteListeners, NotifySink notifySink)
     {
+        this.commandStore = commandStore;
         this.remoteListeners = remoteListeners;
         this.notifySink = notifySink;
     }
 
     @Override
-    public void register(TxnId txnId, SaveStatus await, TxnId listener)
+    public void register(TxnId waitingOn, SaveStatus await, TxnId listener)
     {
-        TxnListeners entry = BTree.find(txnListeners, compareExact.get(await), txnId);
+        TxnListeners entry = BTree.find(txnListeners, compareExact.get(await), waitingOn);
         if (entry == null)
-            txnListeners = BTree.update(txnListeners, BTree.singleton(entry = new TxnListeners(txnId, await)), TxnListeners::compareListeners);
+            txnListeners = BTree.update(txnListeners, BTree.singleton(entry = new TxnListeners(waitingOn, await)), TxnListeners::compareListeners);
         entry.add(listener);
     }
 
     @Override
-    public Registered register(TxnId txnId, ComplexListener listener)
+    public Registered register(TxnId waitingOn, ComplexListener listener)
     {
-        RegisteredComplexListener entry = new RegisteredComplexListener(txnId, listener);
-        complexListeners.compute(txnId, (id, cur) -> {
+        RegisteredComplexListener entry = new RegisteredComplexListener(waitingOn, listener);
+        complexListeners.compute(waitingOn, (id, cur) -> {
             if (cur == null)
                 cur = new RegisteredComplexListeners();
             cur.add(entry);
@@ -529,5 +550,178 @@ public class DefaultLocalListeners implements LocalListeners
                     listeners.listeners[i].index = -1;
             }
         });
+    }
+
+    @Override
+    public Iterable<TxnId> txnsWaitingOn(SaveStatus saveStatus)
+    {
+        return () -> {
+            return new Iterator<>()
+            {
+                Object[] snapshot = txnListeners;
+                Iterator<TxnListeners> iter = BTree.slice(snapshot, TxnListeners::compareListeners, BTree.Dir.ASC);
+                TxnListeners prev, next;
+
+                @Override
+                public boolean hasNext()
+                {
+                    Invariants.require(commandStore.inStore());
+
+                    if (snapshot != txnListeners)
+                    {
+                        snapshot = txnListeners;
+                        if (prev == null) iter = BTree.slice(snapshot, TxnListeners::compareListeners, BTree.Dir.ASC);
+                        else iter = BTree.slice(snapshot, TxnListeners::compareListeners, prev, false, null, false, BTree.Dir.ASC);
+                    }
+
+                    if (!iter.hasNext())
+                        return false;
+
+                    next = iter.next();
+                    return true;
+                }
+
+                @Override
+                public TxnId next()
+                {
+                    prev = next;
+                    next = null;
+                    return new TxnId(prev);
+                }
+            };
+        };
+    }
+
+    @Override
+    public Iterable<TxnListener> txnListeners()
+    {
+        return () -> {
+            return new Iterator<>()
+            {
+                Object[] snapshot = txnListeners;
+                Iterator<TxnListeners> iter = BTree.slice(snapshot, TxnListeners::compareListeners, BTree.Dir.ASC);
+                TxnListeners cur;
+                TxnId[] buffer = TxnId.NO_TXNIDS;
+                int bufferIndex, bufferCount, maxBufferCount;
+
+                @Override
+                public boolean hasNext()
+                {
+                    Invariants.require(commandStore.inStore());
+
+                    if (bufferIndex < bufferCount)
+                        return true;
+
+                    if (snapshot != txnListeners)
+                    {
+                        snapshot = txnListeners;
+                        if (cur == null) iter = BTree.slice(snapshot, TxnListeners::compareListeners, BTree.Dir.ASC);
+                        else iter = BTree.slice(snapshot, TxnListeners::compareListeners, cur, false, null, false, BTree.Dir.ASC);
+                    }
+
+                    while (true)
+                    {
+                        if (!iter.hasNext())
+                        {
+                            cachedTxnIds().forceDiscard(buffer, maxBufferCount);
+                            buffer = null;
+                            return false;
+                        }
+
+                        cur = iter.next();
+                        bufferIndex = 0;
+                        bufferCount = cur.count;
+                        if (bufferCount == 0)
+                            continue;
+
+                        if (bufferCount > maxBufferCount)
+                        {
+                            if (bufferCount > buffer.length)
+                            {
+                                cachedTxnIds().forceDiscard(buffer, maxBufferCount);
+                                buffer = cachedTxnIds().get(Math.max(buffer.length * 2, bufferCount));
+                            }
+                            maxBufferCount = bufferCount;
+                        }
+
+                        System.arraycopy(cur.listeners, 0, buffer, 0, bufferCount);
+                        return true;
+                    }
+                }
+
+                @Override
+                public TxnListener next()
+                {
+                    return new TxnListener(buffer[0], new TxnId(cur), cur.await);
+                }
+            };
+        };
+    }
+
+    private static final Object[] NO_OBJECTS = new Object[0];
+    @Override
+    public Iterable<Registered> complexListeners()
+    {
+        return () -> {
+            return new Iterator<>()
+            {
+                final Enumeration<TxnId> iter = complexListeners.keys();
+                Object[] buffer = NO_OBJECTS;
+                int bufferIndex, bufferCount, maxBufferCount;
+
+                @Override
+                public boolean hasNext()
+                {
+                    if (bufferIndex < bufferCount)
+                        return true;
+
+                    while (true)
+                    {
+                        if (!iter.hasMoreElements())
+                        {
+                            cachedAny().forceDiscard(buffer, maxBufferCount);
+                            buffer = null;
+                            return false;
+                        }
+
+                        TxnId txnId = iter.nextElement();
+                        complexListeners.compute(txnId, (ignore, cur) -> {
+                            if (cur == null)
+                                return cur;
+
+                            bufferIndex = 0;
+                            bufferCount = cur.count;
+                            if (bufferCount == 0)
+                                return cur;
+
+                            if (bufferCount > maxBufferCount)
+                            {
+                                maxBufferCount = bufferCount;
+                                if (bufferCount > buffer.length)
+                                    buffer = cachedAny().resize(buffer, maxBufferCount, Math.max(buffer.length * 2, bufferCount));
+                            }
+
+                            int count = 0;
+                            for (int i = 0 ; i < cur.length ; ++i)
+                            {
+                                if (cur.listeners[i] != null)
+                                    buffer[count++] = cur.listeners[i];
+                            }
+                            Invariants.expect(count == bufferCount);
+                            return cur;
+                        });
+
+                        if (bufferCount > 0)
+                            return true;
+                    }
+                }
+
+                @Override
+                public Registered next()
+                {
+                    return (Registered) buffer[0];
+                }
+            };
+        };
     }
 }

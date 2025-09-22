@@ -20,7 +20,6 @@ package accord.local.durability;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
-import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import javax.annotation.Nullable;
 
@@ -38,9 +37,9 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.async.AsyncResults;
 
-import static accord.local.durability.DurabilityService.SyncRemote.All;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
@@ -51,15 +50,20 @@ public class DurabilityRequest
 
     static class DurableEvents
     {
-        final long requestedAt;
-        long lastAttemptAt;
-        long durableAt;
-        int attempts;
+        private final long requestedAt;
+        private long lastAttemptAt;
+        private long durableAt;
+        private int attempts;
 
         DurableEvents(long requestedAt)
         {
             this.requestedAt = requestedAt;
         }
+
+        public long requestedAt() { return requestedAt; }
+        public int attempts() { return attempts; }
+        public long durableAt() { return durableAt; }
+        public long lastAttemptAt() { return lastAttemptAt; }
     }
 
     final AsyncResults.SettableResult<Void> result = new AsyncResults.SettableResult<>();
@@ -69,7 +73,7 @@ public class DurabilityRequest
     final Ranges ranges;
     final SyncLocal local;
     final SyncRemote remote;
-    final @Nullable Collection<Node.Id> including;
+    final @Nullable SortedArrayList<Node.Id> including;
     final long startedAt, timeoutAt;
     Timeouts.RegisteredTimeout timeout;
 
@@ -78,7 +82,7 @@ public class DurabilityRequest
 
     private LinkedHashMap<TxnId, DurableEvents> events;
 
-    DurabilityRequest(Object requestedBy, Txn.Kind kind, Timestamp min, Ranges ranges, SyncLocal local, SyncRemote remote, @Nullable Collection<Node.Id> including, long startedAt, long timeoutAt)
+    DurabilityRequest(Object requestedBy, Txn.Kind kind, Timestamp min, Ranges ranges, SyncLocal local, SyncRemote remote, @Nullable SortedArrayList<Node.Id> including, long startedAt, long timeoutAt)
     {
         this.requestedBy = requestedBy;
         this.kind = kind;
@@ -112,7 +116,7 @@ public class DurabilityRequest
         return events.computeIfAbsent(txnId, k -> new DurableEvents(Long.MIN_VALUE));
     }
 
-    private DurableEvents get(TxnId txnId)
+    synchronized DurableEvents get(TxnId txnId)
     {
         if (events == null)
             return null;
@@ -122,6 +126,13 @@ public class DurabilityRequest
     boolean isDone()
     {
         return result.isDone();
+    }
+
+    synchronized boolean isDone(Ranges ranges)
+    {
+        if (isDone())
+            return true;
+        return achieved.containsAll(ranges);
     }
 
     void timeout()
@@ -148,26 +159,37 @@ public class DurabilityRequest
             return false;
 
         agreed = agreed.union(MERGE_ADJACENT, intersecting);
+        DurableEvents e = get(syncPoint.syncId);
         if (local.compareTo(durability.achievedLocal) > 0 || remote.compareTo(durability.achievedRemote) > 0)
-            return false;
-
-        if (min.compareTo(syncPoint.syncId) > 0)
         {
-            DurableEvents e = get(syncPoint.syncId);
-            if (e != null && e.durableAt >= 0) logger.error("{}: too early to satisfy {}, but the request was submitted on its behalf.", syncPoint.syncId, this);
-            else logger.debug("{}: too early to satisfy {}", syncPoint.syncId, this);
+            if (e != null) logger.info("{}: achieved {}/{}, insufficient to satisfy {}/{} requested by {}", durability.syncPoint, durability.achievedLocal, durability.achievedRemote, local, remote, this);
+            else if (logger.isDebugEnabled()) logger.debug("{}: achieved {}/{}, insufficient to satisfy {}/{} requested by {}", durability.syncPoint, durability.achievedLocal, durability.achievedRemote, local, remote, this);
             return false;
         }
 
-        if (remote == All && including != null && (durability.excluding == null || intersects(durability.excluding, including)))
+        if (min.compareTo(syncPoint.syncId) > 0)
         {
-            logger.debug("{}: missing nodes {} for ranges {} to satisfy {}", syncPoint.syncId, missingIds(including, durability.excluding),
-                        ranges.intersecting(syncPoint.route, Minimal), this);
+            if (e != null) logger.error("{}: too early to satisfy {}, but the request was submitted on its behalf.", syncPoint.syncId, this);
+            else if (logger.isDebugEnabled()) logger.debug("{}: too early to satisfy {}", syncPoint.syncId, this);
+            return false;
+        }
+
+        if (including != null && (durability.including == null || !durability.including.containsAll(including)))
+        {
+            if (e != null)
+            {
+                logger.info("{}: missing nodes {} for ranges {} requested by {}", syncPoint.syncId, missingIds(including, durability.including),
+                            ranges.intersecting(syncPoint.route, Minimal), this);
+            }
+            else if (logger.isDebugEnabled())
+            {
+                logger.debug("{}: missing nodes {} for ranges {} requested by {}", syncPoint.syncId, missingIds(including, durability.including),
+                             ranges.intersecting(syncPoint.route, Minimal), this);
+            }
             return false;
         }
 
         Ranges newAchieved = achieved.union(MERGE_ADJACENT, intersecting);
-        DurableEvents e = get(syncPoint.syncId);
         if (achieved != newAchieved && e == null)
             e = ensure(syncPoint.syncId);
 
@@ -178,7 +200,8 @@ public class DurabilityRequest
             return false;
 
         achieved = newAchieved;
-        logger.debug("{}: partially satisfies {}. Remaining: {}.", syncPoint.syncId, this, ranges.without(achieved));
+        if (e != null) logger.info("{}: Successfully achieved durability for {} requested by {}. Remaining: {}.", syncPoint.syncId, ranges, this, ranges.without(achieved));
+        else if (logger.isDebugEnabled()) logger.debug("{}: partially satisfies {}. Remaining: {}.", syncPoint.syncId, this, ranges.without(achieved));
         return achieved.containsAll(ranges);
     }
 
@@ -190,16 +213,15 @@ public class DurabilityRequest
                + (including == null ? "" : " including:" + including) + ']';
     }
 
-
-    private static String missingIds(Collection<Node.Id> including, Collection<Node.Id> excluding)
+    private static String missingIds(Collection<Node.Id> require, @Nullable Collection<Node.Id> actual)
     {
-        if (excluding == null)
-            return including.toString();
+        if (actual == null)
+            return require.toString();
 
         StringBuilder sb = new StringBuilder("[");
-        for (Node.Id id : excluding)
+        for (Node.Id id : require)
         {
-            if (including.contains(id))
+            if (!actual.contains(id))
             {
                 sb.append(id);
                 sb.append(',');
@@ -207,22 +229,6 @@ public class DurabilityRequest
         }
         sb.setCharAt(sb.length() - 1, ']');
         return sb.toString();
-    }
-
-    private static boolean intersects(Collection<Node.Id> a, Collection<Node.Id> b)
-    {
-        if (a.isEmpty() || b.isEmpty())
-            return false;
-
-        boolean swap = b instanceof Set ? (a instanceof Set && a.size() > b.size()) : (a instanceof Set || a.size() > b.size());
-        if (swap) { Collection<Node.Id> tmp = a; a = b; b = tmp; }
-
-        for (Node.Id id : a)
-        {
-            if (b.contains(id))
-                return true;
-        }
-        return false;
     }
 
     synchronized Ranges stillWaiting(FullRoute<Range> intersecting)

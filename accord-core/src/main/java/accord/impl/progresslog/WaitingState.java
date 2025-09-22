@@ -87,15 +87,15 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
  *
  */
 @SuppressWarnings("CodeBlock2Expr")
-abstract class WaitingState extends BaseTxnState
+abstract class WaitingState extends HomeState
 {
-    private static final int PROGRESS_SHIFT = 0;
+    private static final int PROGRESS_SHIFT = HomeState.HOME_STATE_END_SHIFT;
     private static final long PROGRESS_MASK = 0x3;
-    private static final int BLOCKED_UNTIL_SHIFT = 2;
+    private static final int BLOCKED_UNTIL_SHIFT = PROGRESS_SHIFT + 2;
     private static final long BLOCKED_UNTIL_MASK = 0x3;
-    private static final int QUERYING_SHIFT = 4;
+    private static final int QUERYING_SHIFT = BLOCKED_UNTIL_SHIFT + 2;
     private static final long QUERYING_MASK = 0x3;
-    private static final int HOME_SATISFIES_SHIFT = 6;
+    private static final int HOME_SATISFIES_SHIFT = QUERYING_SHIFT + 2;
     private static final long HOME_SATISFIES_MASK = 0x3;
     private static final int QUERY_SHARDS_NOT_HOME_SHIFT = HOME_SATISFIES_SHIFT + Long.bitCount(HOME_SATISFIES_MASK);
     private static final long QUERY_SHARDS_NOT_HOME_BIT = 1L << QUERY_SHARDS_NOT_HOME_SHIFT;
@@ -119,6 +119,7 @@ abstract class WaitingState extends BaseTxnState
         Invariants.require(HOME_SATISFIES_SHIFT == QUERYING_SHIFT + Long.bitCount(QUERYING_MASK));
         Invariants.require(QUERY_SHARDS_NOT_HOME_SHIFT == HOME_SATISFIES_SHIFT + Long.bitCount(HOME_SATISFIES_MASK));
         Invariants.require(AWAIT_STARTED_SHIFT == 1 + QUERY_SHARDS_NOT_HOME_SHIFT);
+        Invariants.require(WAITING_STATE_END_SHIFT <= BaseTxnState.BASE_STATE_START_SHIFT);
     }
 
     // when awaiting shards we register callbacks numbered by the keys we're processing;
@@ -479,10 +480,14 @@ abstract class WaitingState extends BaseTxnState
 
         BlockedUntil satisfied = BlockedUntil.forSaveStatus(command.saveStatus());
         BlockedUntil next = Invariants.nonNull(satisfied.next());
-        if (homeSatisfies().compareTo(satisfied) <= 0)
+        if (homeSatisfies().compareTo(satisfied) <= 0 && homePhase() != HomePhase.Done)
         {
-            // TODO (expected): we should wait until Durability indicates a Quorum on all shards for the relevant status
-            // first wait until the homeKey has progressed to a point where it can answer our query; we don't expect our shards to know until then anyway
+            // Wait for the home shard to reach a decision that allows us to make progress.
+            // If we ARE the home shard and we are DONE then we should continue anyway (if we are NOT the home shard, we should not take the status Done, only Cleared).
+            // This could happen if the transaction precedes a sync point so we know it cannot execute and update its durability,
+            // but we don't guarantee to run invalidation/recovery TODO (expected): we SHOULD try to run recover/invalidate in this case before stopping home shard
+
+            // TODO (expected): if an appropriate Durability concept exists for the status we want, we should wait until it is reflected for all shards
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Blocked until %s. Waiting for home key %s to satisfy %s.", blockedUntil, route.homeKey(), next);
             clearAwaitState();
@@ -491,7 +496,7 @@ abstract class WaitingState extends BaseTxnState
             return;
         }
 
-        BlockedUntil querying = command.hasBeen(Status.PreCommitted) ? homeSatisfies() : HasDecidedExecuteAt;
+        BlockedUntil querying = command.hasBeen(Status.PreCommitted) ? BlockedUntil.max(next, homeSatisfies()) : HasDecidedExecuteAt;
         set(safeStore, owner, querying, Querying);
         long prevLowEpoch = readLowEpoch(safeStore, txnId, route);
         long prevHighEpoch = readHighEpoch(safeStore, txnId, route);
@@ -673,7 +678,7 @@ abstract class WaitingState extends BaseTxnState
                     if (!awaitRoute.equals(slicedRoute))
                     {
                         Invariants.expect(awaitRoute.isHomeKeyOnlyRoute());
-                        Invariants.expect(state.homeSatisfies().compareTo(querying) >= 0);
+                        Invariants.expect(state.homeSatisfies().compareTo(querying) >= 0 || state.homePhase() == HomePhase.Done);
                         // nothing to do, fall through and retry
                     }
                     else if (notReady.isEmpty())
@@ -928,7 +933,12 @@ abstract class WaitingState extends BaseTxnState
         }));
     }
 
-    String toStateString()
+    public String toStateString()
+    {
+        return (isHomeUninitialisedOrCleared() ? "" : isHomeDone() ? "Done; " : "{" + homePhase() + ',' + homeProgress() + "}; ") + printWaitingState();
+    }
+
+    public String printWaitingState()
     {
         BlockedUntil querying = querying();
         BlockedUntil blockedUntil = blockedUntil();

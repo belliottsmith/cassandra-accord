@@ -759,13 +759,13 @@ public class Cluster
             Purge purge = new Purge(clusterScheduler, random, nodesList, nodeMap, journalMap);
 
             Scheduled restart = clusterScheduler.recurring(() -> {
-                Id id = pickNodeNotBootstrapping(random, nodesList, topologyRandomizer);
-                if (id == null)
-                    return;
+                Id id = pickNodeNotRefusing(random, nodesList, nodeMap);
 
                 Node node = nodeMap.get(id);
                 CommandStores stores = node.commandStores();
+                stores.forAllUnsafe(CommandStore::cancelBootstraps);
                 while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
+                topologyRandomizer.rotateBootstrapping(id);
 
                 // TODO (expected): we include too many ranges here, including any that are retired
                 Ranges ranges = Ranges.of(Stream.of(node.commandStores().all()).flatMap(cs -> cs.unsafeGetRangesForEpoch().all().stream()).toArray(Range[]::new));
@@ -774,7 +774,6 @@ public class Cluster
                                           rebootstrap ? "rebootstrap" : "bounce and journal replay",
                                           id));
 
-                CommandsForKey.disableLinearizabilityViolationsReporting();
                 if (rebootstrap)
                     topologyRandomizer.markRebootstrapping(node);
 
@@ -798,23 +797,10 @@ public class Cluster
                         Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
                         lastUpdate = update;
                     }
-
-                    // Reset and restore command store states
-                    for (CommandStore store : stores.all())
-                    {
-                        DelayedCommandStore store1 = ((DelayedCommandStore) store);
-                        CommandStores.RangesForEpoch beforeRestore = store1.unsafeGetRangesForEpoch();
-                        store1.unsafeClearForTesting();
-                        if (lastUpdate != null)
-                            store1.unsafeSetRangesForEpoch(lastUpdate.commandStores.get(store.id()));
-                        CommandStores.RangesForEpoch afterRestore = store1.unsafeGetRangesForEpoch();
-                        if (!beforeRestore.equals(afterRestore))
-                            Invariants.require(beforeRestore.equals(afterRestore));
-                    }
-
-                    if (lastUpdate != null)
-                        node.commandStores().resetTopology(lastUpdate);
                 }
+
+                for (CommandStore store : stores.all())
+                    store.unsafeClearForTesting();
 
                 if (rebootstrap)
                 {
@@ -822,15 +808,19 @@ public class Cluster
 
                     // make sure to flush anything in flight before truncating journal
                     ((InMemoryJournal)journal).dropAll();
+                    if (lastUpdate != null)
+                        node.commandStores().resetTopology(lastUpdate);
+
+                    // TODO (expected): we seem to hit Log exceotions when rebootstrapping, suggesting we are handling them poorly
                     stores.rebootstrap(node).invoke(node.agent());
 
                     while (sinks.drain(getPendingPredicate(id, stores.all())));
 
-                    CommandsForKey.enableLinearizabilityViolationsReporting();
                     node.durability().start();
                 }
                 else
                 {
+                    node.unsafeSetReplaying(true);
                     if (lastUpdate != null)
                         ((DelayedCommandStores) node.commandStores()).validateShardStateForTesting(lastUpdate);
 
@@ -841,8 +831,9 @@ public class Cluster
 
                     // Re-enable safety checks
                     while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
-                    CommandsForKey.enableLinearizabilityViolationsReporting();
+                    node.unsafeSetReplaying(false);
                     verifyConsistentRestore(beforeStores, stores.all());
+                    stores.forAllUnsafe(commandStore -> commandStore.resumeBootstrap(node));
                     // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
                     listStore.checkAtLeast(stores, prevData);
                 }
@@ -951,14 +942,15 @@ public class Cluster
         return result;
     }
 
-    private static Id pickNodeNotBootstrapping(RandomSource random, List<Id> ids, TopologyRandomizer topologyRandomizer)
+    private static Id pickNodeNotRefusing(RandomSource random, List<Id> ids, Map<Id, Node> nodeMap)
     {
         List<Id> remaining = new ArrayList<>(ids);
         while (!remaining.isEmpty())
         {
             int i = random.nextInt(remaining.size());
             Id id = remaining.get(i);
-            if (!topologyRandomizer.isBootstrapping(id))
+            CommandStore[] stores = nodeMap.get(id).commandStores().all();
+            if (!Stream.of(stores).anyMatch(CommandStore::unsafeIsRefusingAny))
                 return id;
 
             remaining.set(i, remaining.get(remaining.size() - 1));

@@ -52,6 +52,7 @@ import accord.utils.UnhandledEnum;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
+import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
@@ -242,10 +243,25 @@ public interface CoordinationAdapter<R>
                 {
                     Topologies all = execution(node, any, route, SHARE, route, txnId, executeAt);
 
-                    if ((flags.hasUniqueHlc() || !requiresUniqueHlcs()) && txn.read().keys().isEmpty() && (path != FAST || !txnId.hasPrivilegedCoordinator()))
+                    if ((flags.all().contains(HAS_UNIQUE_HLC) || !requiresUniqueHlcs()) && txn.read().keys().isEmpty() && (path != FAST || !txnId.hasPrivilegedCoordinator()))
                     {
                         // TODO (expected): enable this optimisation with privileged coordinator to support faster blind writes
                         //   (only unsafe because we don't guarantee the stable record goes to the coordinator first)
+
+                        /*
+                          This optimisation is currently safe only because HAS_UNIQUE_HLC implies its dependencies are all applied.
+
+                          From Fedor:
+                            - c1 writes to key k1 and k2, it is not stable yet but eventually gets stable with t1
+                            - c2 writes to key k1, stabilizes with {c1} and a timestamp t2 > t1 and returns to client
+                            - c3 (submitted after c2 is returned) reads k2, gets ordered before c1 (t3 < t1)
+                            - c4 reads k1 and k2, gets ordered after c2 (t4 > t2)
+
+                          If we want to enable it for other systems, we need to give it a lot more thought.
+                          For instance, it might be that we need to be transtively Stable; or it might be sufficient
+                          to witness only >= Accepted dependencies and for Recovery to either not contact clients or
+                          to have some
+                         */
                         Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, null) : null;
                         Result result = txn.result(txnId, executeAt, null);
                         persist(node, executor, all, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, callback);
@@ -386,7 +402,7 @@ public interface CoordinationAdapter<R>
                 {
                     SyncPoint<Range> syncPoint = new SyncPoint<>(txnId, executeAt, deps, (FullRoute<Range>)route);
                     node.configService().reportEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
-                    node.durability().report(new DurabilityResult(syncPoint, NoLocal, NoRemote, null, null));
+                    node.durability().report(new DurabilityResult(syncPoint, NoLocal, NoRemote, null, null, null));
                 }
             }
         }
@@ -406,7 +422,7 @@ public interface CoordinationAdapter<R>
                 if (txnId.is(Routable.Domain.Range))
                 {
                     node.configService().reportEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
-                    node.durability().report(new DurabilityResult((SyncPoint<Range>) syncPoint, NoLocal, NoRemote, null, null));
+                    node.durability().report(new DurabilityResult((SyncPoint<Range>) syncPoint, NoLocal, NoRemote, null, null, null));
                 }
             }
         }

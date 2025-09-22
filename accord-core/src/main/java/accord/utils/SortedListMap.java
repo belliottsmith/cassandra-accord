@@ -260,6 +260,31 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         return foldlNonNull((f, k, v, cur) -> f.apply(v, cur), foldl, zero);
     }
 
+    public <O> O foldlNonNullValues(SortedList<K> subset, BiFunction<V, O, O> foldl, O zero)
+    {
+        if (subset.size() == domainSize())
+            return foldlNonNullValues(foldl, zero);
+
+        if (subset.isEmpty())
+            return zero;
+
+        int j = list.find(subset.get(0));
+        Invariants.require(j >= 0, "%s is not a subset of %s", subset, list);
+
+        O result = zero;
+        if (values[j] != null)
+            result = foldl.apply((V)values[j], result);
+
+        for (int i = 1 ; i < subset.size() ; ++i)
+        {
+            j = list.findNext(j + 1, subset.get(i));
+            Invariants.require(j >= 0, "%s is not a subset of %s", subset, list);
+            if (values[j] != null)
+                result = foldl.apply((V)values[j], result);
+        }
+        return result;
+    }
+
     public <O> O foldlNonNull(TriFunction<K, V, O, O> foldl, O zero)
     {
         return foldlNonNull(TriFunction::apply, foldl, zero);

@@ -61,7 +61,7 @@ import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.messages.ReadEphemeralTxnData.retryInLaterEpoch;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.TruncatedApply;
-import static accord.messages.ReadData.CommitOrReadNack.Insufficient;
+import static accord.messages.ReadData.CommitOrReadNack.InsufficientAndWaiting;
 import static accord.primitives.Routables.Slice.Minimal;
 
 public abstract class AbstractFetchCoordinator extends FetchCoordinator
@@ -146,7 +146,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
             {
                 if (!reply.isOk())
                 {
-                    if (reply == Insufficient)
+                    if (reply == InsufficientAndWaiting)
                     {
                         CoordinateSyncPoint.sendApply(node, from, syncPoint);
                     }
@@ -218,11 +218,6 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     public void start()
     {
         super.start();
-    }
-
-    void abort(Ranges abort)
-    {
-        // TODO (expected): implement abort
     }
 
     public static abstract class FetchRequest extends ReadData

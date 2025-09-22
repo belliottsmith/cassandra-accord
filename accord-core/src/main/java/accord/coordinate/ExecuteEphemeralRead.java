@@ -18,7 +18,6 @@
 
 package accord.coordinate;
 
-import java.util.List;
 import java.util.function.BiConsumer;
 
 import org.slf4j.Logger;
@@ -102,12 +101,6 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
 
 
     @Override
-    protected void start(List<Id> to)
-    {
-        to.forEach(this::contact);
-    }
-
-    @Override
     public void contact(Id to)
     {
         node.send(to, new ReadEphemeralTxnData(to, allTopologies, txnId, route, txn, deps, route, flags.get(to)), executor, this);
@@ -152,7 +145,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
                 // TODO (expected): shouldn't be preemptible (can be made redundant, but should be a special case)
                 invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 return Action.Aborted;
-            case Insufficient:
+            case InsufficientAndWaiting:
             case InsufficientEpochs:
                 // the replica may be missing the original commit, or the additional commit, so send everything
                 // also try sending a read command to another replica, in case they're ready to serve a response

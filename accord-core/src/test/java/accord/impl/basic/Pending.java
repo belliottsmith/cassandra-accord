@@ -28,33 +28,33 @@ public interface Pending
     class Global
     {
         public static final Pending NONE = () -> null;
-        private static Pending activeOrigin;
+        private static final ThreadLocal<Pending> activeOrigin = new ThreadLocal<>();
 
         public static void setActiveOrigin(Pending newActive)
         {
-            Invariants.require(activeOrigin == null);
-            activeOrigin = newActive.origin();
-            Invariants.require(activeOrigin != null);
+            Invariants.require(activeOrigin.get() == null);
+            activeOrigin.set(newActive.origin());
+            Invariants.require(activeOrigin.get() != null);
         }
 
         public static void unsafeSetActiveOrigin(Pending newActiveOrigin)
         {
-            activeOrigin = newActiveOrigin;
+            activeOrigin.set(newActiveOrigin);
         }
 
         public static void clearActiveOrigin()
         {
-            activeOrigin = null;
+            activeOrigin.set(null);
         }
 
         public static void setNoActiveOrigin()
         {
-            activeOrigin = NONE;
+            activeOrigin.set(NONE);
         }
 
         public static Pending activeOrigin()
         {
-            return Invariants.nonNull(activeOrigin);
+            return Invariants.nonNull(activeOrigin.get());
         }
     }
 }
