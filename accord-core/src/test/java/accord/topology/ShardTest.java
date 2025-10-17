@@ -18,17 +18,8 @@
 
 package accord.topology;
 
-import accord.local.Node;
-import accord.utils.SortedArrays.SortedArrayList;
-
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
-
-import java.util.HashSet;
-import java.util.Set;
-
-import static accord.Utils.ids;
-import static accord.impl.IntKey.range;
 
 public class ShardTest
 {
@@ -140,17 +131,5 @@ public class ShardTest
         assertSimpleFastQuorumSize(6, 9, 6);
         assertSimpleFastQuorumSize(5, 9, 5);
         assertInvalidFastPathElectorateSize(9, 4);
-    }
-
-    @Test
-    void pendingNodeValidation()
-    {
-        SortedArrayList<Node.Id> nodes = ids(0, 3);
-        Set<Node.Id> fpNodes = new HashSet<>(ids(0, 2));
-        // pending nodes are part of electorate
-        Shard.create(range(0, 100), nodes, fpNodes);
-        // pending nodes are not part of electorate
-        assertIllegalArgument(() -> Shard.create(range(0, 100), nodes, fpNodes),
-                              "Expected exception for non-electorate pending nodes");
     }
 }

@@ -35,4 +35,12 @@ public interface MessageSink
     Cancellable send(Id to, Request request, int attempt, AsyncExecutor executor, Callback<?> callback);
     void reply(Id replyingToNode, ReplyContext replyContext, Reply reply);
     void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure);
+
+    class NoOpSink implements MessageSink
+    {
+        @Override public void send(Id to, Request request) {}
+        @Override public Cancellable send(Id to, Request request, int attempt, AsyncExecutor executor, Callback<?> callback) { return null; }
+        @Override public void reply(Id replyingToNode, ReplyContext replyContext, Reply reply) {}
+        @Override public void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure) {}
+    }
 }

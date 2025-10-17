@@ -19,7 +19,6 @@
 package accord.local;
 
 import accord.impl.mock.MockCluster;
-import accord.impl.mock.MockConfigurationService;
 import accord.primitives.Timestamp;
 import accord.topology.TopologyUtils;
 
@@ -63,13 +62,12 @@ public class NodeTest
         try (MockCluster cluster = MockCluster.builder().time(clock).build())
         {
             Node node = cluster.get(1);
-            MockConfigurationService configService = (MockConfigurationService) node.configService();
 
             clock.increment();
             Timestamp timestamp1 = node.uniqueTimestamp();
             Assertions.assertEquals(ts(1, 101, 1), timestamp1);
 
-            configService.reportTopology(TopologyUtils.withEpoch(node.topology().current(), 2));
+            node.topology().reportTopology(TopologyUtils.withEpoch(node.topology().current(), 2));
             Timestamp timestamp2 = node.uniqueTimestamp();
             Assertions.assertEquals(ts(2, 102, 1), timestamp2);
         }

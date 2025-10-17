@@ -204,6 +204,12 @@ public class TestAgent implements Agent, OwnershipEventListener
     }
 
     @Override
+    public long retryTopologyDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(1L, MINUTES);
+    }
+
+    @Override
     public long retryDurabilityDelay(Node node, int attempt, TimeUnit units)
     {
         return units.convert(1L, MINUTES);

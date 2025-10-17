@@ -131,7 +131,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         try
         {
             Invariants.requireArgument(txnId.isSyncPoint());
-            TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
+            TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().active().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
             if (mismatch != null)
                 throw mismatch;
 
@@ -201,7 +201,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
-        Topologies topologies = node.topology().preciseEpochs(syncPoint.route(), minEpoch, maxEpoch, SHARE);
+        Topologies topologies = node.topology().active().preciseEpochs(syncPoint.route(), minEpoch, maxEpoch, SHARE);
         sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
     }
 

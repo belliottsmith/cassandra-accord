@@ -111,7 +111,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
 
             case InsufficientEpochs:
                 Invariants.requireArgument(txnId.isSyncPoint());
-                node.send(from, factory.create(Maximal, from, node.topology().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), SHARE) , txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
+                node.send(from, factory.create(Maximal, from, node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), SHARE) , txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
                 break;
         }
     }

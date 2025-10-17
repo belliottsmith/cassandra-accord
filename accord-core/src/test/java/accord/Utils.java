@@ -28,12 +28,14 @@ import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import javax.annotation.Nullable;
+
 import com.google.common.collect.Sets;
 
 import accord.api.Agent;
 import accord.api.Key;
 import accord.api.MessageSink;
-import accord.api.TopologySorter;
+import accord.api.TopologyService;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultRemoteListeners;
@@ -47,14 +49,13 @@ import accord.impl.list.ListQuery;
 import accord.impl.list.ListRead;
 import accord.impl.list.ListUpdate;
 import accord.impl.mock.MockCluster;
-import accord.impl.mock.MockConfigurationService;
+import accord.impl.mock.MockTopologyService;
 import accord.impl.mock.MockStore;
 import accord.impl.progresslog.DefaultProgressLogs;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.ShardDistributor;
-import accord.local.TimeService;
 import accord.local.UniqueTimeService;
 import accord.primitives.Keys;
 import accord.primitives.Range;
@@ -63,9 +64,7 @@ import accord.primitives.Txn;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.topology.Topology;
-import accord.topology.TopologyManager;
 import accord.utils.DefaultRandom;
-import accord.utils.EpochFunction;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -181,15 +180,28 @@ public class Utils
 
     public static Node createNode(Node.Id nodeId, Topology topology, MessageSink messageSink, MockCluster.Clock clock, Agent agent)
     {
+        return createNode(nodeId, topology, messageSink, clock, agent, null);
+    }
+
+    public static Node createNode(Node.Id nodeId, Topology topology, MessageSink messageSink, MockCluster.Clock clock, Agent agent, @Nullable ShardDistributor shardDistributor)
+    {
+        return createNode(nodeId, new MockTopologyService(ignore -> null, topology), messageSink, clock, agent, shardDistributor);
+    }
+
+    public static Node createNode(Node.Id nodeId, TopologyService topologyService, MessageSink messageSink, MockCluster.Clock clock, Agent agent, @Nullable ShardDistributor shardDistributor)
+    {
+        if (shardDistributor == null)
+            shardDistributor = new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter());
+
         MockStore store = new MockStore();
         ThreadPoolScheduler scheduler = new ThreadPoolScheduler();
         RandomSource randomSource = new DefaultRandom();
         Node node = new Node(nodeId,
                              messageSink,
-                             new MockConfigurationService(messageSink, EpochFunction.noop(), topology),
+                             topologyService,
                              clock, new UniqueTimeService.AtomicUniqueTime(clock),
                              () -> store,
-                             new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()),
+                             shardDistributor,
                              agent,
                              randomSource,
                              scheduler,
@@ -204,12 +216,6 @@ public class Utils
                              new InMemoryJournal(nodeId, randomSource));
         awaitUninterruptibly(node.unsafeStart());
         return node;
-    }
-
-    public static TopologyManager testTopologyManager(TopologySorter.Supplier sorter, Id node)
-    {
-        TimeService time = new MockCluster.Clock(0);
-        return new TopologyManager(sorter, new TestAgent.RethrowAgent(time), node, time, new DefaultTimeouts(time));
     }
 
     public static void spinUntilSuccess(ThrowingRunnable runnable)

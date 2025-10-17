@@ -27,7 +27,9 @@ import java.util.TreeMap;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import accord.api.ConfigurationService;
+import javax.annotation.Nullable;
+
+import accord.api.TopologyListener;
 import accord.api.DataStore;
 import accord.api.Key;
 import accord.api.Scheduler;
@@ -49,14 +51,13 @@ import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.Timestamped;
 import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.LongArrayList;
 
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
 
-public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataStore, ConfigurationService.Listener
+public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataStore, TopologyListener
 {
     private static class ChangeAt
     {
@@ -522,23 +523,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     }
 
     @Override
-    public AsyncResult<Void> onTopologyUpdate(Topology topology)
-    {
-        return AsyncResults.success(null);
-    }
-
-    @Override
-    public void onRemoteSyncComplete(Node.Id node, long epoch)
-    {
-    }
-
-    @Override
-    public void onEpochClosed(Ranges ranges, long epoch)
-    {
-    }
-
-    @Override
-    public void onEpochRetired(Ranges ranges, long epoch)
+    public void onEpochRetired(Ranges ranges, long epoch, @Nullable Topology topology)
     {
         if (pendingRemoves.containsLong(epoch))
         {

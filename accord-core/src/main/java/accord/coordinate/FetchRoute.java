@@ -64,7 +64,7 @@ public class FetchRoute extends CheckShards<Route<?>, Participants<?>>
 
     private static Object fetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> participants, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback, @Nullable Tracing tracing)
     {
-        if (!node.topology().hasEpoch(txnId.epoch()))
+        if (!node.topology().active().hasAtLeastEpoch(txnId.epoch()))
         {
             if (tracing != null)
                 tracing.trace(null, "Waiting for epoch %d", txnId.epoch());

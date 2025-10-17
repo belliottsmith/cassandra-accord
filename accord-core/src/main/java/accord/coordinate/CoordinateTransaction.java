@@ -100,7 +100,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
 
     public static void coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
     {
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), txn.keys());
+        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().active().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), txn.keys());
         if (mismatch != null)
         {
             callback.accept(null, mismatch);

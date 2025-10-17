@@ -51,7 +51,7 @@ import accord.primitives.Route;
 import accord.primitives.SyncPoint;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
-import accord.topology.TopologyManager;
+import accord.topology.TopologyRetiredException;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import org.agrona.collections.ObjectHashSet;
@@ -293,7 +293,7 @@ public class DurabilityQueue
             if (fail != null)
             {
                 if (logger.isTraceEnabled()) logger.trace("{}: failed awaiting durability for {}{}.", txnId, ranges, requestor, fail);
-                if (fail instanceof SyncPointErased || fail instanceof TopologyManager.TopologyRetiredException)
+                if (fail instanceof SyncPointErased || fail instanceof TopologyRetiredException)
                 {
                     if (isDone)
                         return;

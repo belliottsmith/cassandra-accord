@@ -44,6 +44,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
 import accord.primitives.Writes;
+import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
 import accord.topology.Topologies.SelectNodeOwnership;
 import accord.utils.Invariants;
@@ -141,8 +142,9 @@ public interface CoordinationAdapter<R>
                 ProposeTxn propose;
                 try
                 {
-                    Topologies accept = node.topology().reselect(preacceptOrRecovery, QuorumEpochIntersections.preacceptOrRecover,
-                                                                 route, txnId, executeAt, SHARE, QuorumEpochIntersections.accept);
+                    ActiveEpochs epochs = node.topology().active();
+                    Topologies accept = epochs.reselect(preacceptOrRecovery, QuorumEpochIntersections.preacceptOrRecover,
+                                                        route, txnId, executeAt, SHARE, QuorumEpochIntersections.accept);
                     propose = new ProposeTxn(node, executor, accept, route, kind, ballot, txnId, txn, executeAt, deps, callback);
                 }
                 catch (Throwable t)
@@ -159,8 +161,9 @@ public interface CoordinationAdapter<R>
                 ProposeOnly propose;
                 try
                 {
-                    Topologies accept = node.topology().reselect(null, QuorumEpochIntersections.preacceptOrRecover,
-                                                                 sendTo, txnId, executeAt, selectNodeOwnership, QuorumEpochIntersections.accept);
+                    ActiveEpochs epochs = node.topology().active();
+                    Topologies accept = epochs.reselect(null, QuorumEpochIntersections.preacceptOrRecover,
+                                                        sendTo, txnId, executeAt, selectNodeOwnership, QuorumEpochIntersections.accept);
                     propose = new ProposeOnly(node, executor, accept, sendTo, route, kind, ballot, txnId, txn, executeAt, deps, callback);
                 }
                 catch (Throwable t)
@@ -174,7 +177,8 @@ public interface CoordinationAdapter<R>
             @Override
             public void stabilise(Node node, SequentialAsyncExecutor executor, Topologies accept, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Result, Throwable> callback)
             {
-                if (!node.topology().hasAtLeastEpoch(executeAt.epoch()))
+                ActiveEpochs epochs = node.topology().active();
+                if (!epochs.hasAtLeastEpoch(executeAt.epoch()))
                 {
                     node.withEpochAtLeast(executeAt.epoch(), executor, (success, fail) -> {
                         if (fail != null) callback.accept(null, fail);
@@ -186,8 +190,8 @@ public interface CoordinationAdapter<R>
                 StabiliseTxn stabilise;
                 try
                 {
-                    Topologies all = node.topology().reselect(accept, QuorumEpochIntersections.accept,
-                                                              route, txnId, executeAt, SHARE, QuorumEpochIntersections.commit);
+                    Topologies all = epochs.reselect(accept, QuorumEpochIntersections.accept,
+                                                     route, txnId, executeAt, SHARE, QuorumEpochIntersections.commit);
                     Topologies coordinates = all.size() == 1 ? all : accept.forEpoch(txnId.epoch());
 
                     if (ProtocolModifiers.Faults.txnInstability)
@@ -209,7 +213,8 @@ public interface CoordinationAdapter<R>
             @Override
             public void stabiliseOnly(Node node, SequentialAsyncExecutor executor, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback)
             {
-                if (!node.topology().hasAtLeastEpoch(executeAt.epoch()))
+                ActiveEpochs epochs = node.topology().active();
+                if (!epochs.hasAtLeastEpoch(executeAt.epoch()))
                 {
                     node.withEpochAtLeast(executeAt.epoch(), executor, (success, fail) -> {
                         if (fail != null) callback.accept(null, fail);
@@ -221,8 +226,8 @@ public interface CoordinationAdapter<R>
                 StabiliseOnly stabilise;
                 try
                 {
-                    Topologies all = node.topology().reselect(null, QuorumEpochIntersections.accept,
-                                                              sendTo, txnId, executeAt, selectNodeOwnership, QuorumEpochIntersections.commit);
+                    Topologies all = epochs.reselect(null, QuorumEpochIntersections.accept,
+                                                     sendTo, txnId, executeAt, selectNodeOwnership, QuorumEpochIntersections.commit);
                     Topologies coordinates = all.size() == 1 ? all : all.forEpoch(txnId.epoch());
 
                     stabilise = new StabiliseOnly(node, executor, coordinates, all, require, route, ballot, txnId, txn, executeAt, deps, callback);
@@ -292,9 +297,10 @@ public interface CoordinationAdapter<R>
 
             protected Topologies execution(Node node, @Nullable Topologies preacceptOrCommit, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Timestamp executeAt)
             {
+                ActiveEpochs epochs = node.topology().active();
                 if (route != sendTo) preacceptOrCommit = null;
-                return node.topology().reselect(preacceptOrCommit, QuorumEpochIntersections.preacceptOrCommit,
-                                                sendTo, txnId, executeAt, selectNodeOwnership, QuorumEpochIntersections.stable);
+                return epochs.reselect(preacceptOrCommit, QuorumEpochIntersections.preacceptOrCommit,
+                                       sendTo, txnId, executeAt, selectNodeOwnership, QuorumEpochIntersections.stable);
             }
         }
 
@@ -368,13 +374,13 @@ public interface CoordinationAdapter<R>
             @Override
             Topologies forDecision(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt)
             {
-                return node.topology().withOpenEpochs(route, null, txnId);
+                return node.topology().active().withOpenEpochs(route, null, txnId);
             }
 
             @Override
             Topologies forExecution(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt, Deps deps)
             {
-                return node.topology().withUncompletedEpochs(route, txnId, txnId);
+                return node.topology().active().withUncompletedEpochs(route, txnId, txnId);
             }
 
             @Override
@@ -401,7 +407,7 @@ public interface CoordinationAdapter<R>
                 if (txnId.is(Routable.Domain.Range))
                 {
                     SyncPoint<Range> syncPoint = new SyncPoint<>(txnId, executeAt, deps, (FullRoute<Range>)route);
-                    node.configService().reportEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
+                    node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
                     node.durability().report(new DurabilityResult(syncPoint, NoLocal, NoRemote, null, null, null));
                 }
             }
@@ -421,7 +427,7 @@ public interface CoordinationAdapter<R>
                 }
                 if (txnId.is(Routable.Domain.Range))
                 {
-                    node.configService().reportEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
+                    node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
                     node.durability().report(new DurabilityResult((SyncPoint<Range>) syncPoint, NoLocal, NoRemote, null, null, null));
                 }
             }

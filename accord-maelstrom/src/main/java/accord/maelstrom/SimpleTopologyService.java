@@ -18,62 +18,33 @@
 
 package accord.maelstrom;
 
-import accord.api.ConfigurationService;
-import accord.primitives.Ranges;
+import accord.api.TopologyService;
+import accord.local.Node;
 import accord.topology.Topology;
+import accord.utils.Invariants;
+import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 
-public class SimpleConfigService implements ConfigurationService
+public class SimpleTopologyService implements TopologyService
 {
     private final Topology topology;
 
-    public SimpleConfigService(Topology topology)
+    public SimpleTopologyService(Topology topology)
     {
         this.topology = topology;
     }
 
     @Override
-    public void registerListener(Listener listener)
+    public AsyncResult<Topology> fetchTopologyForEpoch(long epoch)
     {
-
+        Invariants.require(epoch == topology.epoch());
+        return AsyncResults.success(topology);
     }
 
     @Override
-    public Topology currentTopology()
+    public void onStartup(Node node)
     {
-        return topology;
-    }
-
-    @Override
-    public Topology getTopologyForEpoch(long epoch)
-    {
-        assert epoch == topology.epoch();
-        return topology;
-    }
-
-    @Override
-    public void fetchTopologyForEpoch(long epoch)
-    {
-    }
-
-    @Override
-    public boolean acknowledgeEpoch(EpochReady ready)
-    {
-        return true;
-    }
-
-    @Override
-    public void reportEpochClosed(Ranges ranges, long epoch)
-    {
-    }
-
-    @Override
-    public void reportEpochRetired(Ranges ranges, long epoch)
-    {
-    }
-
-    @Override
-    public void reportEpochRemoved(long epoch)
-    {
+        node.topology().reportTopology(topology);
     }
 }
 

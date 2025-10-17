@@ -19,7 +19,7 @@
 package accord.coordinate;
 
 import accord.impl.mock.MockCluster;
-import accord.impl.mock.MockConfigurationService;
+import accord.impl.mock.MockTopologyService;
 import accord.local.Command;
 import accord.local.Node;
 import accord.local.StoreParticipants;
@@ -27,7 +27,6 @@ import accord.messages.Message;
 import accord.messages.PreAccept;
 import accord.primitives.*;
 import accord.topology.Topology;
-import accord.utils.EpochFunction;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChainUtils;
 import accord.utils.async.AsyncResult;
@@ -39,6 +38,7 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.LongFunction;
 
 import static accord.Utils.*;
 import static accord.impl.IntKey.keys;
@@ -58,14 +58,14 @@ public class TopologyChangeTest
         Range range = range(100, 200);
         Topology topology1 = topology(1, shard(range, idList(1, 2, 3), idSet(1, 2)));
         Topology topology2 = topology(2, shard(range, idList(3, 4, 5), idSet(4, 5)));
-        EpochFunction<MockConfigurationService> fetchTopology = (epoch, service) -> {
+        LongFunction<Topology> fetchTopology = (epoch) -> {
             Assertions.assertEquals(2, epoch);
-            service.reportTopology(topology2);
+            return topology2;
         };
         try (MockCluster cluster = MockCluster.builder()
                                               .nodes(5)
                                               .topology(topology1)
-                                              .setOnFetchTopology(fetchTopology)
+                                              .setFetchTopology(fetchTopology)
                                               .build())
         {
             Node node1 = cluster.get(1);
@@ -79,11 +79,12 @@ public class TopologyChangeTest
                 Assertions.assertTrue(command.partialDeps().isEmpty());
             }));
 
-            cluster.configServices(4).forEach(config -> {
+            cluster.nodes(4).forEach(node -> {
                 try
                 {
-                    config.fetchTopologyForEpoch(2);
-                    getUninterruptibly(config.ackFor(topology2.epoch()).coordinate);
+                    getUninterruptibly(node.topology().await(2, null));
+                    MockTopologyService topologyService = (MockTopologyService) node.topology().topologyService();
+                    getUninterruptibly(topologyService.ackFor(topology2.epoch()).coordinate);
                 }
                 catch (ExecutionException e)
                 {
@@ -186,16 +187,17 @@ public class TopologyChangeTest
             cluster.nodes(1, 2, 3).forEach(node -> assertEpochRejection(node, keys, 1, false));
             cluster.networkFilter.addFilter(Predicates.alwaysTrue(), to -> id(4).equals(to), TopologyChangeTest::isExclSyncPoint);
 
-            cluster.configServices(1, 2, 3, 4, 5).forEach(configService -> configService.reportTopology(topology2));
+            cluster.nodes(1, 2, 3, 4, 5).forEach(node -> node.topology().reportTopology(topology2));
             cluster.nodes(4).forEach(node -> {
-                MockConfigurationService configService = (MockConfigurationService) node.configService();
-                getUncheckedTimeout(configService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
+                getUncheckedTimeout(node.topology().await(2, null), 5, TimeUnit.SECONDS);
+                MockTopologyService topologyService = (MockTopologyService) node.topology().topologyService();
+                getUncheckedTimeout(topologyService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
                 assertEpochRejection(node, keys, 1, false);  // shouldn't have received the sync point preaccept
             });
 
             cluster.nodes(2, 3).forEach(node -> {
-                MockConfigurationService configService = (MockConfigurationService) node.configService();
-                getUncheckedTimeout(configService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
+                MockTopologyService topologyService = (MockTopologyService) node.topology().topologyService();
+                getUncheckedTimeout(topologyService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
                 assertEpochRejection(node, keys, 1, true);
             });
 
@@ -203,17 +205,17 @@ public class TopologyChangeTest
             TxnId epoch2txnId = node4.nextTxnIdWithDefaultFlags(Write, Key);
             Assertions.assertEquals(2, epoch2txnId.epoch());
 
-            cluster.configServices(1, 2, 3, 4, 5).forEach(configService -> configService.reportTopology(topology3));
+            cluster.nodes(1, 2, 3, 4, 5).forEach(node -> node.topology().reportTopology(topology3));
             cluster.nodes(2, 3).forEach(node -> {
-                MockConfigurationService configService = (MockConfigurationService) node.configService();
-                getUncheckedTimeout(configService.ackFor(3).coordinate, 5, TimeUnit.SECONDS);
+                MockTopologyService topologyService = (MockTopologyService) node.topology().topologyService();
+                getUncheckedTimeout(topologyService.ackFor(3).coordinate, 5, TimeUnit.SECONDS);
                 assertEpochRejection(node, keys, 2, true);
             });
 
             // node 4 shouldn't have up to date rejectBefore data
             cluster.nodes(4).forEach(node -> {
-                MockConfigurationService configService = (MockConfigurationService) node.configService();
-                getUncheckedTimeout(configService.ackFor(3).coordinate, 5, TimeUnit.SECONDS);
+                MockTopologyService topologyService = (MockTopologyService) node.topology().topologyService();
+                getUncheckedTimeout(topologyService.ackFor(3).coordinate, 5, TimeUnit.SECONDS);
                 assertEpochRejection(node, keys, 1, false);  // shouldn't have received the sync point preaccept
                 assertEpochRejection(node, keys, 2, false);  // shouldn't have received the sync point preaccept
             });
@@ -252,12 +254,13 @@ public class TopologyChangeTest
             cluster.networkFilter.addFilter(Predicates.alwaysTrue(), to -> id(3).equals(to), TopologyChangeTest::isExclSyncPoint);
             cluster.networkFilter.addFilter(Predicates.alwaysTrue(), to -> id(4).equals(to), TopologyChangeTest::isExclSyncPoint);
 
-            cluster.configServices(1, 2, 3, 4, 5).forEach(configService -> configService.reportTopology(topology2));
+            cluster.nodes(1, 2, 3, 4, 5).forEach(node -> node.topology().reportTopology(topology2));
             cluster.nodes(   4).forEach(node -> {
-                MockConfigurationService configService = (MockConfigurationService) node.configService();
+                getUncheckedTimeout(node.topology().await(2, null), 5, TimeUnit.SECONDS);
+                MockTopologyService topologyService = (MockTopologyService) node.topology().topologyService();
                 try
                 {
-                    AsyncChainUtils.getUninterruptibly(configService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
+                    AsyncChainUtils.getUninterruptibly(topologyService.ackFor(2).coordinate, 5, TimeUnit.SECONDS);
                     Assertions.fail("Expected to timeout on node " + node.id());
                 }
                 catch (ExecutionException e)

@@ -75,7 +75,7 @@ public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoor
     private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch)
     {
         // TODO (desired): only fetch data from source epoch
-        return node.topology().preciseEpochs(contact, txnId.epoch(), epoch, SHARE);
+        return node.topology().active().preciseEpochs(contact, txnId.epoch(), epoch, SHARE);
     }
 
     @Override

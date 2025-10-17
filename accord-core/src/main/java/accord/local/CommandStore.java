@@ -41,7 +41,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
-import accord.api.ConfigurationService.EpochReady;
+import accord.topology.EpochReady;
 import accord.api.DataStore;
 import accord.api.DataStore.FetchKind;
 import accord.api.Journal;
@@ -72,12 +72,13 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableByCallback;
+import accord.utils.async.AsyncResults.SettableWithDescription;
 import accord.utils.async.Cancellable;
 import accord.utils.async.AsyncResults.SettableResult;
 import org.agrona.collections.LongHashSet;
 
-import static accord.api.ConfigurationService.EpochReady.DONE;
-import static accord.api.ConfigurationService.EpochReady.done;
+import static accord.topology.EpochReady.DONE;
+import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Image;
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_DURABLE;
@@ -189,12 +190,13 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     static class WaitingOnVisibility
     {
-        final SettableResult<Void> whenDone = new SettableResult<>();
+        final SettableResult<Void> whenDone;
         final Ranges allRanges;
         Ranges waitingOn, waitingOnDurable;
 
-        WaitingOnVisibility(Ranges ranges)
+        WaitingOnVisibility(SettableResult<Void> whenDone, Ranges ranges)
         {
+            this.whenDone = whenDone;
             this.allRanges = this.waitingOn = this.waitingOnDurable = ranges;
         }
     }
@@ -646,7 +648,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     {
         AsyncResult<Void> readyToCoordinate = readyToCoordinate(newRanges, epoch);
         return new EpochReady(epoch,
-                              bootstrap.metadata,
+                              bootstrap.active,
                               readyToCoordinate,
                               bootstrap.data,
                               bootstrap.reads);
@@ -659,7 +661,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         });
     }
 
-    private static final AsyncResult<Void> HIDDEN_COORDINATION = AsyncResults.failure(new IllegalStateException());
+    private static final AsyncResult<Void> MUST_OVERWRITE = AsyncResults.failure(new IllegalStateException());
     private EpochReady startSafeBootstrapInternal(Node node, SafeCommandStore safeStore, Ranges newRanges, long epoch)
     {
         logger.info("{}: Starting Safe Bootstrap for {} for epoch {}", this, newRanges, epoch);
@@ -667,8 +669,8 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         bootstraps.add(bootstrap);
         bootstrap.start(safeStore);
         return new EpochReady(epoch,
-                              AsyncResults.success(null),
-                              HIDDEN_COORDINATION,
+                              MUST_OVERWRITE,
+                              MUST_OVERWRITE,
                               bootstrap.data,
                               bootstrap.reads);
     }
@@ -689,7 +691,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         return submit((Empty) () -> "Refuse Requests for " + fetch + " Bootstrap", safeStore -> {
             unsafeRefuseRequests(ranges);
             safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
-            return new EpochReady(epoch, new SettableResult<>(), readyToCoordinate(ranges, epoch), new SettableByCallback<>(), new SettableByCallback<>());
+            // TODO (expected): rationalise with startSafeBootstrap
+            String description = "Bootstrap " + ranges + " for epoch " + epoch + " in " + this;
+            return new EpochReady(epoch, MUST_OVERWRITE, readyToCoordinate(ranges, epoch), new SettableWithDescription<>(description), new SettableWithDescription<>(description));
         }).invoke((success, fail) -> {
             if (fail != null) logger.error("Fatal error initiating {} bootstrap for {}", this, fetch, fail);
             else rebootstrap(node, ranges, epoch, 1, success, fetch);
@@ -727,7 +731,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
             safeStore.unsafeUpsertRedundantBefore(RedundantBefore.create(ranges, unreadyBefore, LOG_UNAVAILABLE_ONLY));
             updateMaxConflicts(ranges, unreadyBefore);
             // TODO (desired): we could start accepting non-dep requests here
-            ((AsyncResult.Settable<Void>)ready.metadata).setSuccess(null);
             bootstrap.data.invoke((SettableByCallback<Void>)ready.data);
             bootstrap.reads.invoke((SettableByCallback<Void>)ready.reads);
             ready.coordinate.invokeIfSuccess(() -> {
@@ -745,7 +748,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      * So, the outer future's success is sufficient for the topology to be acknowledged, and the inner future for the
      * bootstrap to be complete.
      */
-    protected Supplier<EpochReady> sync(Node node, Ranges ranges, long epoch)
+    protected Supplier<EpochReady> refreshReadyToCoordinate(Node node, Ranges ranges, long epoch)
     {
         return () -> {
             AsyncResult<Void> readyToCoordinate = readyToCoordinate(ranges, epoch);
@@ -759,10 +762,10 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         if (redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).epoch() >= epoch)
             return DONE;
 
+        SettableResult<Void> whenDone = new SettableWithDescription<>(this + " is ready to coordinate " + ranges + " on epoch " + epoch);
         TxnId minForEpoch = TxnId.minForEpoch(epoch);
         Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
-        WaitingOnVisibility sync = new WaitingOnVisibility(remaining);
-        SettableResult<Void> whenDone = sync.whenDone;
+        WaitingOnVisibility sync = new WaitingOnVisibility(whenDone, remaining);
         synchronized (waitingOnVisibility)
         {
             WaitingOnVisibility prev = waitingOnVisibility.putIfAbsent(epoch, sync);
@@ -901,7 +904,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
             if (awaiting.isEmpty())
                 return AsyncResults.success(null);
-            return AsyncResults.reduce(awaiting, Reduce.toNull());
+            return AsyncResults.debuggableReduce(awaiting, Reduce.toNull());
         }
     }
 

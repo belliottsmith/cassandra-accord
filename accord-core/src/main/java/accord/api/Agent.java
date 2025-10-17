@@ -142,6 +142,7 @@ public interface Agent extends UncaughtExceptionListener
      */
     long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, @Nullable BlockedUntil retrying, TimeUnit units);
     long retrySyncPointDelay(Node node, int attempt, TimeUnit units);
+    long retryTopologyDelay(Node node, int attempt, TimeUnit units);
     long retryDurabilityDelay(Node node, int attempt, TimeUnit units);
     long expireEpochWait(TimeUnit units);
 

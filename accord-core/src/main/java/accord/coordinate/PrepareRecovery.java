@@ -80,7 +80,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
 
     public static PrepareRecovery recover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        return recover(node, executor, node.topology().forEpoch(route, txnId.epoch(), SHARE), txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
+        return recover(node, executor, node.topology().active().forEpoch(route, txnId.epoch(), SHARE), txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
     }
 
     private static PrepareRecovery recover(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)

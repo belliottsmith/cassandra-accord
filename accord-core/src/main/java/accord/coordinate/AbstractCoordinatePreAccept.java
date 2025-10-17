@@ -41,7 +41,7 @@ abstract class AbstractCoordinatePreAccept<Result, Reply extends accord.messages
 
     AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<? super Result, Throwable> callback)
     {
-        this(node, executor, route, txnId, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
+        this(node, executor, route, txnId, node.topology().active().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
     AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies, BiConsumer<? super Result, Throwable> callback)
@@ -63,7 +63,7 @@ abstract class AbstractCoordinatePreAccept<Result, Reply extends accord.messages
 
     final void onPreAcceptedInNewEpoch(Topologies topologies, long latestEpoch)
     {
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().globalForEpoch(latestEpoch), txnId, scope.homeKey(), scope);
+        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().active().globalForEpoch(latestEpoch), txnId, scope.homeKey(), scope);
         if (mismatch == null) onPreAccepted(topologies);
         else onNewEpochTopologyMismatch(mismatch);
     }

@@ -16,14 +16,17 @@
  * limitations under the License.
  */
 
-package accord.utils;
+package accord.topology;
 
-public interface EpochFunction<V>
+public class TopologyRetiredException extends RuntimeException
 {
-    static <V> EpochFunction<V> noop()
+    public TopologyRetiredException(long epoch, long minEpoch)
     {
-        return (e, v) -> {};
+        super(String.format("Topology %s retired. Min topology %d", epoch, minEpoch));
     }
 
-    void apply(long epoch, V value);
+    public TopologyRetiredException(String message, TopologyRetiredException t)
+    {
+        super(message, t);
+    }
 }

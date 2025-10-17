@@ -16,11 +16,11 @@
  * limitations under the License.
  */
 
-package accord.api;
+package accord.topology;
 
-import accord.topology.Topology;
+import accord.primitives.Unseekables;
 
-public interface TestableConfigurationService extends ConfigurationService
+public interface SelectTopology
 {
-    void reportTopology(Topology topology);
+    Topology apply(Topology topology, Unseekables<?> select, Topologies.SelectNodeOwnership selectNodeOwnership);
 }

@@ -31,7 +31,6 @@ import accord.api.Agent;
 import accord.api.ProgressLog.NoOpProgressLog;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
-import accord.api.TestableConfigurationService;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultTimeouts;
 import accord.impl.InMemoryCommandStore;
@@ -45,7 +44,7 @@ import accord.impl.TestAgent.RethrowAgent;
 import accord.impl.TopologyFactory;
 import accord.impl.basic.InMemoryJournal;
 import accord.impl.mock.MockCluster;
-import accord.impl.mock.MockConfigurationService;
+import accord.impl.mock.MockTopologyService;
 import accord.impl.mock.MockStore;
 import accord.local.Node.Id;
 import accord.local.UniqueTimeService.AtomicUniqueTime;
@@ -105,7 +104,7 @@ public class ImmutableCommandTest
         MockCluster.Clock clock = new MockCluster.Clock(100);
         Agent agent = new TestAgent(clock);
         RandomSource random = new DefaultRandom();
-        Node node = new Node(id, null, new MockConfigurationService(null, (epoch, service) -> { }, storeSupport.local.get()),
+        Node node = new Node(id, null, new MockTopologyService(ignore -> null, storeSupport.local.get()),
                              clock, new AtomicUniqueTime(clock),
                              () -> storeSupport.data, new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()), agent, random.fork(), Scheduler.NEVER_RUN_SCHEDULED,
                              SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new, ignore -> ignore2 -> new NoOpProgressLog(), DefaultLocalListeners.Factory::new,
@@ -114,7 +113,6 @@ public class ImmutableCommandTest
                              DurableBefore.NOOP_PERSISTER,
                              new InMemoryJournal(id, random.fork()));
         awaitUninterruptibly(node.unsafeStart().chain());
-        node.onTopologyUpdate(storeSupport.local.get());
         return node;
     }
 
@@ -154,7 +152,8 @@ public class ImmutableCommandTest
     }
 
     @Test
-    void supersedingEpochWitnessTest() throws ExecutionException {
+    void supersedingEpochWitnessTest() throws ExecutionException
+    {
         CommandStoreSupport support = new CommandStoreSupport();
         Node node = createNode(ID1, support);
         CommandStore commands = node.unsafeByIndex(0);
@@ -172,7 +171,7 @@ public class ImmutableCommandTest
         PreLoadContext context = PreLoadContext.contextFor(txnId, "Test");
 
         setTopologyEpoch(support.local, 2);
-        ((TestableConfigurationService)node.configService()).reportTopology(TopologyUtils.withEpoch(support.local.get(), 2));
+        node.topology().reportTopology(TopologyUtils.withEpoch(support.local.get(), 2));
         Timestamp expectedTimestamp = Timestamp.fromValues(2, 110, ID1);
         getUninterruptibly(commands.chain(context, (Consumer<? super SafeCommandStore>) safeStore -> {
             StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, 2);

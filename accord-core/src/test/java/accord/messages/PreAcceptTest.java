@@ -60,7 +60,6 @@ import static accord.Utils.id;
 import static accord.Utils.writeTxn;
 import static accord.impl.InMemoryCommandStore.inMemory;
 import static accord.impl.IntKey.routing;
-import static accord.impl.mock.MockCluster.configService;
 import static accord.local.LoadKeys.SYNC;
 import static accord.local.LoadKeysFor.WRITE;
 import static accord.primitives.Routable.Domain.Key;
@@ -164,7 +163,7 @@ public class PreAcceptTest
             Txn txn = writeTxn(Keys.of(key));
 
             Participants<?> invalidateWith = txn.keys().toParticipants();
-            BeginInvalidation invalidate = new BeginInvalidation(ID1, node.topology().forEpoch(invalidateWith, txnId.epoch(), SHARE), txnId, invalidateWith, Ballot.fromValues(txnId.epoch(), txnId.hlc(), txnId.node));
+            BeginInvalidation invalidate = new BeginInvalidation(ID1, node.topology().active().forEpoch(invalidateWith, txnId.epoch(), SHARE), txnId, invalidateWith, Ballot.fromValues(txnId.epoch(), txnId.hlc(), txnId.node));
             invalidate.process(node, ID2, REPLY_CONTEXT);
 
             messageSink.assertHistorySizes(0, 1);
@@ -265,7 +264,7 @@ public class PreAcceptTest
             Keys keys = Keys.of(key);
             CommandStore commandStore = node.unsafeForKey(key.toUnseekable());
 
-            configService(node).reportTopology(TopologyUtils.withEpoch(node.topology().current(), 2));
+            node.topology().reportTopology(TopologyUtils.withEpoch(node.topology().current(), 2));
             messageSink.clearHistory();
 
             TxnId txnId = clock.idForNode(1, ID2);

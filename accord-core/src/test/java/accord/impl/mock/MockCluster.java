@@ -27,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
+import java.util.function.LongFunction;
 import java.util.function.ToLongFunction;
 
 import org.slf4j.Logger;
@@ -62,7 +63,6 @@ import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.topology.TopologyUtils;
 import accord.utils.DefaultRandom;
-import accord.utils.EpochFunction;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.ThreadPoolScheduler;
@@ -89,7 +89,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
 
     private long nextMessageId = 0;
     Map<Long, SafeCallback> callbacks = new ConcurrentHashMap<>();
-    private final EpochFunction<MockConfigurationService> onFetchTopology;
+    private final LongFunction<Topology> fetchTopology;
 
     private MockCluster(Builder builder)
     {
@@ -97,7 +97,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         this.random = new DefaultRandom(config.seed);
         this.time = builder.time;
         this.messageSinkFactory = builder.messageSinkFactory;
-        this.onFetchTopology = builder.onFetchTopology;
+        this.fetchTopology = builder.fetchTopology;
 
         init(builder.topology);
     }
@@ -132,7 +132,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
     {
         MockStore store = new MockStore();
         MessageSink messageSink = messageSinkFactory.apply(id, this);
-        MockConfigurationService configurationService = new MockConfigurationService(messageSink, onFetchTopology, topology);
+        MockTopologyService configurationService = new MockTopologyService(fetchTopology, topology);
         Agent agent = new TestAgent(time);
         Journal journal = new InMemoryJournal(id, random.fork());
         ThreadPoolScheduler scheduler = new ThreadPoolScheduler();
@@ -156,7 +156,8 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                              journal);
         journal.start(node);
         awaitUninterruptibly(node.unsafeStart());
-        node.onTopologyUpdate(topology);
+        node.durability().start();
+        node.topology().reportTopology(topology);
         return node;
     }
 
@@ -269,33 +270,6 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         return get(id(i));
     }
 
-    public static MockConfigurationService configService(Node node)
-    {
-        return (MockConfigurationService) node.configService();
-    }
-
-    public MockConfigurationService configService(Id id)
-    {
-        Node node = nodes.get(id);
-        if (node == null)
-            throw new NoSuchElementException("No node exists with id " + id);
-        return configService(node);
-    }
-
-    public MockConfigurationService configService(int i)
-    {
-        return configService(id(i));
-    }
-
-    public Iterable<MockConfigurationService> configServices(int... ids)
-    {
-        assert ids.length > 0;
-        List<MockConfigurationService> result = new ArrayList<>(ids.length);
-        for (int id : ids)
-            result.add(configService(id));
-        return result;
-    }
-
     public List<Node> nodes(Iterable<Id> ids)
     {
         List<Node> rlist = new ArrayList<>();
@@ -335,7 +309,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         private Topology topology = null;
         private TimeService time = TimeService.ofNonMonotonic(System::currentTimeMillis, TimeUnit.MILLISECONDS);
         private BiFunction<Id, Network, MessageSink> messageSinkFactory = SimpleMessageSink::new;
-        private EpochFunction<MockConfigurationService> onFetchTopology = EpochFunction.noop();
+        private LongFunction<Topology> fetchTopology = ignore -> null;
 
         public Builder seed(long seed)
         {
@@ -379,9 +353,9 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
             return this;
         }
 
-        public Builder setOnFetchTopology(EpochFunction<MockConfigurationService> onFetchTopology)
+        public Builder setFetchTopology(LongFunction<Topology> fetchTopology)
         {
-            this.onFetchTopology = onFetchTopology;
+            this.fetchTopology = fetchTopology;
             return this;
         }
 

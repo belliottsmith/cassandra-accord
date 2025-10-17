@@ -18,6 +18,7 @@
 
 package accord.utils.async;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.BiConsumer;
@@ -55,6 +56,43 @@ public abstract class AsyncCombiner<A, I, O> extends AsyncChains.Head<O>
         }
     }
 
+    public static abstract class DebuggableResultCombiner<I, O> extends ResultCombiner<I, O>
+    {
+        AsyncResult<? extends I>[] waitingOn;
+        public DebuggableResultCombiner(List<? extends AsyncResult<? extends I>> inputs)
+        {
+            super(inputs);
+            waitingOn = inputs.toArray(new AsyncResult[0]);
+        }
+
+        @Override
+        void callback(int idx, I success, Throwable failure)
+        {
+            if (failure != null) Arrays.fill(waitingOn, null);
+            else waitingOn[idx] = null;
+            super.callback(idx, success, failure);
+        }
+
+        @Override
+        public String toString()
+        {
+            StringBuilder sb = new StringBuilder("[");
+            for (AsyncResult<?> waiting : waitingOn)
+            {
+                if (waiting == null)
+                    continue;
+
+                if (sb.length() > 1)
+                    sb.append(", ");
+                sb.append(waiting);
+            }
+            if (sb.length() == 1)
+                return "Done";
+            sb.append("]");
+            return sb.toString();
+        }
+    }
+
     private static final AtomicIntegerFieldUpdater<AsyncCombiner> REMAINING = AtomicIntegerFieldUpdater.newUpdater(AsyncCombiner.class, "remaining");
     private volatile Object state;
     private volatile BiConsumer<? super O, Throwable> callback;
@@ -79,27 +117,27 @@ public abstract class AsyncCombiner<A, I, O> extends AsyncChains.Head<O>
         return (I[]) current;
     }
 
-    private void callback(int idx, I result, Throwable throwable)
+    void callback(int idx, I success, Throwable failure)
     {
         int current = remaining;
         if (current <= 0)
             return;
 
-        if (throwable != null && REMAINING.getAndSet(this, 0) > 0)
+        if (failure != null && REMAINING.getAndSet(this, 0) > 0)
         {
-            callback.accept(null, throwable);
+            callback.accept(null, failure);
             return;
         }
 
         I[] results = results();
-        results[idx] = result;
+        results[idx] = success;
         if (REMAINING.decrementAndGet(this) == 0)
             callback.accept(process(results), null);
     }
 
-    private BiConsumer<I, Throwable> callbackFor(int idx)
+    BiConsumer<I, Throwable> callbackFor(int idx)
     {
-        return (result, failure) -> callback(idx, result, failure);
+        return (success, failure) -> callback(idx, success, failure);
     }
 
     abstract O process(I[] inputs);

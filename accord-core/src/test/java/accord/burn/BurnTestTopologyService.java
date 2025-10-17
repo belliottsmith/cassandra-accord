@@ -19,17 +19,17 @@
 package accord.burn;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Supplier;
-import javax.annotation.concurrent.GuardedBy;
+
+import javax.annotation.Nullable;
 
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
-import accord.impl.AbstractTestConfigurationService;
+import accord.api.TopologyListener;
+import accord.api.TopologyService;
+import accord.coordinate.Exhausted;
 import accord.local.Node;
 import accord.messages.Callback;
 import accord.messages.MessageType;
@@ -37,26 +37,38 @@ import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.primitives.Ranges;
+import accord.topology.ActiveEpoch;
 import accord.topology.Topology;
 import accord.utils.RandomSource;
+import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-public class BurnTestConfigurationService extends AbstractTestConfigurationService
+public class BurnTestTopologyService implements TopologyService, TopologyListener
 {
+    private final Node.Id self;
     private final AsyncExecutor executor;
+    private final Agent agent;
     private final Function<Node.Id, Node> lookup;
     private final Supplier<RandomSource> randomSupplier;
     private final TopologyUpdates topologyUpdates;
-    private final Map<Long, FetchTopology> pendingEpochs = new HashMap<>();
+    private final Topology initialTopology;
 
-    public BurnTestConfigurationService(Node.Id node, AsyncExecutor executor, Agent agent, Supplier<RandomSource> randomSupplier, Topology topology, Function<Node.Id, Node> lookup, TopologyUpdates topologyUpdates)
+    public BurnTestTopologyService(Node.Id self, AsyncExecutor executor, Agent agent, Supplier<RandomSource> randomSupplier, Topology topology, Function<Node.Id, Node> lookup, TopologyUpdates topologyUpdates)
     {
-        super(node, agent);
+        this.self = self;
         this.executor = executor;
+        this.agent = agent;
         this.randomSupplier = randomSupplier;
         this.lookup = lookup;
         this.topologyUpdates = topologyUpdates;
-        reportTopology(topology);
+        this.initialTopology = topology;
+    }
+
+    @Override
+    public void onStartup(Node node)
+    {
+        node.topology().reportTopology(initialTopology);
+        node.topology().addListener(this);
     }
 
     private static class FetchTopologyRequest implements Request
@@ -71,7 +83,7 @@ public class BurnTestConfigurationService extends AbstractTestConfigurationServi
         @Override
         public void process(Node on, Node.Id from, ReplyContext replyContext)
         {
-            Topology topology = on.configService().getTopologyForEpoch(epoch);
+            Topology topology = on.topology().active().maybeGlobalForEpoch(epoch);
             on.reply(from, replyContext, new FetchTopologyReply(topology), null);
         }
 
@@ -111,25 +123,26 @@ public class BurnTestConfigurationService extends AbstractTestConfigurationServi
         }
     }
 
-    private class FetchTopology extends AsyncResults.SettableResult<Void> implements Callback<FetchTopologyReply>
+    private class FetchTopology extends AsyncResults.SettableResult<Topology> implements Callback<FetchTopologyReply>
     {
         private final FetchTopologyRequest request;
         private final List<Node.Id> candidates;
 
-        public FetchTopology(long epoch)
+        public FetchTopology(long epoch, List<Node.Id> candidates)
         {
             this.request = new FetchTopologyRequest(epoch);
-            this.candidates = new ArrayList<>();
-            executor.execute(this::sendNext);
+            this.candidates = new ArrayList<>(candidates);
+            executor.execute(this::trySendNext);
         }
 
-        void sendNext()
+        void trySendNext()
         {
             if (candidates.isEmpty())
             {
-                candidates.addAll(currentTopology().nodes());
-                candidates.remove(localId);
+                tryFailure(Exhausted.exhausted(agent, null, null, null));
+                return;
             }
+
             int idx = randomSupplier.get().nextInt(candidates.size());
             Node.Id node = candidates.remove(idx);
             originator().send(node, request, executor, this);
@@ -138,19 +151,14 @@ public class BurnTestConfigurationService extends AbstractTestConfigurationServi
         @Override
         public void onSuccess(Node.Id from, FetchTopologyReply reply)
         {
-            if (reply.topology != null)
-            {
-                reportTopology(reply.topology);
-                pendingEpochs.remove(reply.topology.epoch());
-            }
-            else
-                sendNext();
+            if (reply.topology != null) trySuccess(reply.topology);
+            else trySendNext();
         }
 
         @Override
         public void onFailure(Node.Id from, Throwable failure)
         {
-            sendNext();
+            trySendNext();
         }
 
         @Override
@@ -160,66 +168,38 @@ public class BurnTestConfigurationService extends AbstractTestConfigurationServi
         }
     }
 
-    @Override
-    public void reportTopology(Topology topology)
+    public AsyncResult<Topology> fetchTopologyForEpoch(long epoch)
     {
-        // we process via scheduler.selfRecurring only to logically detach from any client task so we can terminate
-        Node node = lookup.apply(localId);
-        if (node == null) super.reportTopology(topology);
-        else node.scheduler().selfRecurring(() -> super.reportTopology(topology), 0, TimeUnit.MILLISECONDS);
-    }
-
-    @GuardedBy("this")
-    private long maxRequestedEpoch;
-
-    public void fetchTopologyForEpoch(long epoch)
-    {
-        synchronized (this)
-        {
-            while (maxRequestedEpoch < epoch)
-                pendingEpochs.computeIfAbsent(++maxRequestedEpoch, FetchTopology::new);
-        }
+        List<Node.Id> ids = lookup.apply(self).topology().current().nodes();
+        if (ids.isEmpty())
+            ids = initialTopology.nodes();
+        return new FetchTopology(epoch, ids);
     }
 
     @Override
-    protected void onReadyToCoordinate(Topology topology)
+    public void onActive(ActiveEpoch active)
     {
-        topologyUpdates.syncComplete(lookup.apply(localId), topology.nodes(), topology.epoch());
-    }
-
-    @Override
-    protected void topologyUpdatePostListenerNotify(Topology topology)
-    {
-        FetchTopology fetch = pendingEpochs.remove(topology.epoch());
-        if (fetch == null)
-            return;
-
-        fetch.setSuccess(null);
+        active.epochReady().coordinate.invokeIfSuccess(() -> {
+            topologyUpdates.syncComplete(lookup.apply(self), active.global().nodes(), active.global().epoch());
+        });
     }
 
     private Node originator()
     {
-        return lookup.apply(localId);
+        return lookup.apply(self);
     }
 
     @Override
-    public void reportEpochClosed(Ranges ranges, long epoch)
+    public void onEpochClosed(Ranges ranges, long epoch, @Nullable Topology topology)
     {
-        Topology topology = lookup.apply(localId).topology().maybeGlobalForEpoch(epoch);
         if (topology != null)
-            topologyUpdates.epochClosed(lookup.apply(localId), topology.nodes(), ranges, epoch);
+            topologyUpdates.epochClosed(lookup.apply(self), topology.nodes(), ranges, topology.epoch());
     }
 
     @Override
-    public void reportEpochRetired(Ranges ranges, long epoch)
+    public void onEpochRetired(Ranges ranges, long epoch, @Nullable Topology topology)
     {
-        Topology topology = lookup.apply(localId).topology().maybeGlobalForEpoch(epoch);
         if (topology != null)
-            topologyUpdates.epochRetired(lookup.apply(localId), topology.nodes(), ranges, epoch);
-    }
-
-    @Override
-    public void reportEpochRemoved(long epoch)
-    {
+            topologyUpdates.epochRetired(lookup.apply(self), topology.nodes(), ranges, topology.epoch());
     }
 }
