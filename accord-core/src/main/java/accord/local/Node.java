@@ -38,8 +38,9 @@ import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
-import accord.api.ConfigurationService;
-import accord.api.ConfigurationService.EpochReady;
+import accord.api.TopologyService;
+import accord.topology.ActiveEpochs;
+import accord.topology.EpochReady;
 import accord.api.DataStore;
 import accord.api.Journal;
 import accord.api.LocalListeners;
@@ -83,6 +84,7 @@ import accord.primitives.TxnId.Cardinality;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.topology.TopologyManager;
+import accord.topology.TopologyRetiredException;
 import accord.utils.DeterministicSet;
 import accord.utils.Invariants;
 import accord.utils.PersistentField;
@@ -112,7 +114,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class Node implements ConfigurationService.Listener, NodeCommandStoreService
+public class Node implements NodeCommandStoreService
 {
     public static class Id implements Comparable<Id>
     {
@@ -158,7 +160,6 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     private final Id id;
     private final MessageSink messageSink;
-    private final ConfigurationService configService;
     private final TopologyManager topology;
     private final RemoteListeners listeners;
     private final Timeouts timeouts;
@@ -191,7 +192,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     private volatile boolean replaying;
 
     public Node(Id id, MessageSink messageSink,
-                ConfigurationService configService, TimeService time, UniqueTimeService uniqueTime,
+                TopologyService topologyService, TimeService time, UniqueTimeService uniqueTime,
                 Supplier<DataStore> dataSupplier, ShardDistributor shardDistributor, Agent agent, RandomSource random, Scheduler scheduler, TopologySorter.Supplier topologySorter,
                 Function<Node, RemoteListeners> remoteListenersFactory, Function<Node, Timeouts> requestTimeoutsFactory, Function<Node, ProgressLog.Factory> progressLogFactory,
                 Function<Node, LocalListeners.Factory> localListenersFactory, CommandStores.Factory factory, CoordinationAdapter.Factory coordinationAdapters,
@@ -201,12 +202,10 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         this.id = id;
         this.scheduler = scheduler; // we set scheduler first so that e.g. requestTimeoutsFactory and progressLogFactory can take references to it
         this.messageSink = messageSink;
-        this.configService = configService;
         this.coordinationAdapters = coordinationAdapters;
         this.time = time;
         this.uniqueTime = uniqueTime;
         this.timeouts = requestTimeoutsFactory.apply(this);
-        this.topology = new TopologyManager(topologySorter, agent, id, time, timeouts);
         this.listeners = remoteListenersFactory.apply(this);
         this.agent = agent;
         this.random = random;
@@ -220,11 +219,11 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
                                                           safeDurableBeforePersister(durableBeforePersister),
                                                           this::setPersistedDurableBefore);
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
+        this.topology = new TopologyManager(topologySorter, this, topologyService, time, timeouts);
         this.durabilityService = new DurabilityService(this);
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forAllUnsafe(store -> store.progressLog.maybeNotify()), 1, SECONDS);
         scheduler.recurring(timeouts::maybeNotify, 100, MILLISECONDS);
-        configService.registerListener(this);
     }
 
     public void load()
@@ -240,25 +239,22 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
     /**
      * This starts the node for tests and makes sure that the provided topology is acknowledged correctly.  This method is not
      * safe for production systems as it doesn't handle restarts and partially acknowledged histories
-     * @return {@link EpochReady#metadata}
+     * @return {@link EpochReady#active}
      */
     @VisibleForTesting
     public AsyncResult<Void> unsafeStart()
     {
-        EpochReady ready = onTopologyUpdateInternal(configService.currentTopology());
-        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, ready.epoch));
-        configService.acknowledgeEpoch(ready);
-        return ready.metadata;
+        topology.topologyService().onStartup(this);
+        ActiveEpochs epochs = topology.active();
+        if (epochs.isEmpty())
+            return AsyncResults.success(null);
+
+        return epochs.epochReady(epochs.epoch()).active;
     }
 
     public CommandStores commandStores()
     {
         return commandStores;
-    }
-
-    public ConfigurationService configService()
-    {
-        return configService;
     }
 
     public MessageSink messageSink()
@@ -338,64 +334,9 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         return topology().epoch();
     }
 
-    private synchronized EpochReady onTopologyUpdateInternal(Topology topology)
-    {
-        Supplier<EpochReady> bootstrap = commandStores.updateTopology(this, topology);
-        Supplier<EpochReady> orderFastPathReporting = () -> {
-            if (this.topology.isEmpty()) return bootstrap.get();
-            return orderReporting(this.topology.epochReady(topology.epoch() - 1), bootstrap.get());
-        };
-
-        return this.topology.onTopologyUpdate(topology, orderFastPathReporting, configService::reportEpochRemoved);
-    }
-
-    private static EpochReady orderReporting(EpochReady previous, EpochReady next)
-    {
-        if (previous.epoch + 1 != next.epoch)
-            throw new IllegalArgumentException("Attempted to order epochs but they are not next to each other... previous=" + previous.epoch + ", next=" + next.epoch);
-        if (previous.coordinate.isDone() && previous.data.isDone() && previous.reads.isDone())
-            return next;
-
-        return new EpochReady(next.epoch,
-                              next.metadata,
-                              previous.coordinate.flatMap(ignore -> next.coordinate),
-                              previous.data.flatMap(ignore -> next.data),
-                              previous.reads.flatMap(ignore -> next.reads)
-        );
-    }
-
-    @Override
-    public synchronized AsyncResult<Void> onTopologyUpdate(Topology topology)
-    {
-        if (topology.epoch() <= this.topology.epoch())
-            return AsyncResults.success(null);
-        EpochReady ready = onTopologyUpdateInternal(topology);
-        long epoch = topology.epoch();
-        ready.coordinate.invokeIfSuccess(() -> this.topology.onEpochSyncComplete(id, epoch)).invoke(agent);
-        configService.acknowledgeEpoch(ready);
-        return ready.coordinate;
-    }
-
-    @Override
-    public void onRemoteSyncComplete(Id node, long epoch)
-    {
-        topology.onEpochSyncComplete(node, epoch);
-    }
-
-    @Override
-    public void onEpochClosed(Ranges ranges, long epoch)
-    {
-        topology.onEpochClosed(ranges, epoch);
-    }
-
-    @Override
-    public void onEpochRetired(Ranges ranges, long epoch)
-    {
-        topology.onEpochRetired(ranges, epoch);
-    }
-
     // TODO (required): audit use of withEpochAtLeast vs withEpochExact
     // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
+    // TODO (expected): move into TopologyManager
     // TODO (expected): provide a deadline
     public void withEpochAtLeast(EpochSupplier epochSupplier, @Nullable AsyncExecutor executor, BiConsumer<Void, Throwable> callback)
     {
@@ -407,28 +348,28 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public void withEpochAtLeast(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<Void, Throwable> callback)
     {
-        if (topology.hasAtLeastEpoch(epoch))
+        ActiveEpochs epochs = topology().active();
+        if (epochs.hasAtLeastEpoch(epoch))
         {
             callback.accept(null, null);
         }
         else
         {
-            topology.awaitEpoch(epoch, ifAsync).begin(callback);
-            configService.fetchTopologyForEpoch(epoch);
+            topology.await(epoch, ifAsync).begin(callback);
         }
     }
 
     public Object withEpochAtLeast(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<?, ? super Throwable> ifFailure, Runnable ifSuccess)
     {
-        if (topology.hasAtLeastEpoch(epoch))
+        ActiveEpochs epochs = topology().active();
+        if (epochs.hasAtLeastEpoch(epoch))
         {
             ifSuccess.run();
             return ifSuccess;
         }
         else
         {
-            configService.fetchTopologyForEpoch(epoch);
-            return topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
+            return topology.await(epoch, ifAsync).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, fail);
                 else ifSuccess.run();
             });
@@ -437,71 +378,69 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     public void withEpochExact(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
-        if (epoch < topology.minEpoch())
+        ActiveEpochs epochs = topology().active();
+        if (epoch < epochs.minEpoch())
         {
-            ifFailure.accept(null, onFailure.apply(new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch())));
+            ifFailure.accept(null, onFailure.apply(new TopologyRetiredException(epoch, epochs.minEpoch())));
         }
-        else if (topology.hasEpoch(epoch))
+        else if (epochs.hasEpoch(epoch))
         {
             ifSuccess.run();
         }
         else
         {
-            topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
+            topology.await(epoch, ifAsync).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, onFailure.apply(fail));
                 else ifSuccess.run();
             });
-            configService.fetchTopologyForEpoch(epoch);
         }
     }
 
     @Inline
     public <T> AsyncChain<T> withEpochExact(long epoch, @Nullable AsyncExecutor executor, Supplier<? extends AsyncChain<T>> supplier)
     {
-        if (epoch < topology.minEpoch())
+        ActiveEpochs epochs = topology().active();
+        if (epoch < epochs.minEpoch())
         {
-            return AsyncChains.failure(new TopologyManager.TopologyRetiredException(epoch, topology.minEpoch()));
+            return AsyncChains.failure(new TopologyRetiredException(epoch, epochs.minEpoch()));
         }
-        else if (topology.hasEpoch(epoch))
+        else if (epochs.hasEpoch(epoch))
         {
             return supplier.get();
         }
         else
         {
-            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMapOverride(supplier);
-            configService.fetchTopologyForEpoch(epoch);
-            return res;
+            return topology.await(epoch, executor).flatMapOverride(supplier);
         }
     }
 
     @Inline
     public <T> AsyncChain<T> withEpochAtLeast(long epoch, @Nullable AsyncExecutor executor, Supplier<? extends AsyncChain<T>> supplier)
     {
-        if (topology.hasAtLeastEpoch(epoch))
+        ActiveEpochs epochs = topology().active();
+        if (epochs.hasAtLeastEpoch(epoch))
         {
             return supplier.get();
         }
         else
         {
-            AsyncChain<T> res = topology.awaitEpoch(epoch, executor).flatMapOverride(supplier);
-            configService.fetchTopologyForEpoch(epoch);
-            return res;
+            return topology.await(epoch, executor).flatMapOverride(supplier);
         }
     }
 
     public void withEpochAtLeast(long epoch, @Nullable AsyncExecutor ifAsync, BiConsumer<?, Throwable> ifFailure, Function<Throwable, Throwable> onFailure, Runnable ifSuccess)
     {
-        if (topology.hasAtLeastEpoch(epoch))
+        ActiveEpochs epochs = topology().active();
+        if (epochs.hasAtLeastEpoch(epoch))
         {
             ifSuccess.run();
         }
         else
         {
-            topology.awaitEpoch(epoch, ifAsync).begin((success, fail) -> {
+            topology.await(epoch, ifAsync).begin((success, fail) -> {
                 if (fail != null) ifFailure.accept(null, onFailure.apply(fail));
                 else ifSuccess.run();
             });
-            configService.fetchTopologyForEpoch(epoch);
         }
     }
 
@@ -725,15 +664,17 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     private int computeBestDefaultTxnIdFlags(Routables<?> keys, long epoch)
     {
-        if (!topology.hasEpoch(epoch) || !usePrivilegedCoordinator())
+        ActiveEpochs epochs = topology().active();
+        if (!epochs.hasEpoch(epoch) || !usePrivilegedCoordinator())
             return defaultMediumPath().bit();
 
-        TxnId.FastPath fastPath = ensurePermitted(topology().selectFastPath(keys, epoch));
+        TxnId.FastPath fastPath = ensurePermitted(epochs.selectFastPath(keys, epoch));
         return fastPath.bits | defaultMediumPath().bit();
     }
 
     public TxnId nextTxnId(Txn txn, TxnId.FastPath fastPath, TxnId.MediumPath mediumPath)
     {
+        ActiveEpochs epochs = topology().active();
         Seekables<?, ?> keys = txn.keys();
         Txn.Kind kind = txn.kind();
         Domain domain = keys.domain();
@@ -741,7 +682,7 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
         long epoch = epoch();
         long now = uniqueNow();
         fastPath = ensurePermitted(fastPath);
-        if (fastPath != Unoptimised && (!topology.hasEpoch(epoch) || !topology.supportsPrivilegedFastPath(keys, epoch)))
+        if (fastPath != Unoptimised && (!epochs.hasEpoch(epoch) || !epochs.supportsPrivilegedFastPath(keys, epoch)))
             fastPath = Unoptimised;
 
         Cardinality cardinality = cardinality(domain, keys);
@@ -788,7 +729,8 @@ public class Node implements ConfigurationService.Listener, NodeCommandStoreServ
 
     private RoutingKey selectHomeKey(long epoch, Routables<?> keysOrRanges)
     {
-        Ranges owned = topology().localForEpoch(epoch).ranges();
+        ActiveEpochs epochs = topology().active();
+        Ranges owned = epochs.localForEpoch(epoch).ranges();
         int i = (int)keysOrRanges.findNextIntersection(0, owned, 0);
         if (i >= 0)
             return keysOrRanges.get(i).someIntersectingRoutingKey(owned);

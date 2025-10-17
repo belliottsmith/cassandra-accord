@@ -705,7 +705,7 @@ public class StoreParticipants
 
     private static long computeUnsyncedEpoch(SafeCommandStore safeStore, long txnIdEpoch, Participants<?> participants)
     {
-        Participants<?> unsynced = safeStore.node().topology().unsyncedOnly(participants, txnIdEpoch);
+        Participants<?> unsynced = safeStore.node().topology().active().unsyncedOnly(participants, txnIdEpoch);
         if (unsynced == null || unsynced.isEmpty())
             return txnIdEpoch;
 

@@ -36,13 +36,14 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Agent;
 import accord.api.AsyncExecutorFactory;
 import accord.api.AsyncExecutor;
-import accord.api.ConfigurationService.EpochReady;
+import accord.topology.EpochReady;
 import accord.api.DataStore;
 import accord.api.Journal;
 import accord.api.LocalListeners;
@@ -74,11 +75,12 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
+import accord.utils.async.NestedAsyncResult;
 import org.agrona.collections.Hashing;
 import org.agrona.collections.Int2IntHashMap;
 import org.agrona.collections.Int2ObjectHashMap;
 
-import static accord.api.ConfigurationService.EpochReady.done;
+import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Sync;
 import static accord.local.CommandStores.BootstrapRangeAction.BOOTSTRAP_NOT_NEEDED;
 import static accord.local.CommandStores.BootstrapRangeAction.SAFE_BOOTSTRAP;
@@ -761,7 +763,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             if (epoch > 1 && requiresSync(ranges, prev.global, newTopology))
             {
                 logger.debug("Epoch {} requires visibility sync for {}", epoch, ranges);
-                bootstrapUpdates.add(shard.store.sync(node, ranges, epoch));
+                bootstrapUpdates.add(shard.store.refreshReadyToCoordinate(node, ranges, epoch));
             }
             result.add(shard);
         }
@@ -801,10 +803,10 @@ public abstract class CommandStores implements AsyncExecutorFactory
             bootstrap = () -> {
                 List<EpochReady> list = bootstrapUpdates.stream().map(Supplier::get).collect(toList());
                 return new EpochReady(epoch,
-                                      AsyncResults.reduce(list.stream().map(b -> b.metadata).collect(toList()), Reduce.toNull()),
-                                      AsyncResults.reduce(list.stream().map(b -> b.coordinate).collect(toList()), Reduce.toNull()),
-                                      AsyncResults.reduce(list.stream().map(b -> b.data).collect(toList()), Reduce.toNull()),
-                                      AsyncResults.reduce(list.stream().map(b -> b.reads).collect(toList()), Reduce.toNull())
+                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::active), Reduce.toNull()),
+                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::coordinate), Reduce.toNull()),
+                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::data), Reduce.toNull()),
+                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::reads), Reduce.toNull())
                 );
             };
         }
@@ -1012,16 +1014,17 @@ public abstract class CommandStores implements AsyncExecutorFactory
         TopologyUpdate update = updateTopology(node, current, newTopology);
         if (update.snapshot != current)
         {
-            AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableResult<>();
+            AsyncResults.SettableResult<Void> flush = new AsyncResults.SettableWithDescription<>("Write Topology To Journal");
             journal.saveTopology(update.snapshot.asTopologyUpdate(), () -> flush.setSuccess(null));
             current = update.snapshot;
             return () -> {
                 EpochReady ready = update.bootstrap.get();
                 return new EpochReady(ready.epoch,
-                                      flush.flatMap(ignore -> ready.metadata),
-                                      flush.flatMap(ignore -> ready.coordinate),
-                                      flush.flatMap(ignore -> ready.data),
-                                      flush.flatMap(ignore -> ready.reads));
+                                      ready.active,
+                                      NestedAsyncResult.flatMap(flush, ignore -> ready.coordinate),
+                                      NestedAsyncResult.flatMap(flush, ignore -> ready.data),
+                                      NestedAsyncResult.flatMap(flush, ignore -> ready.reads)
+                );
             };
         }
         return update.bootstrap;

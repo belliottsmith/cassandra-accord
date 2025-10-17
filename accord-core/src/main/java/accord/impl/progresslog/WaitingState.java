@@ -279,7 +279,7 @@ abstract class WaitingState extends HomeState
     Topologies contact(DefaultProgressLog owner, Unseekables<?> forKeys, long epoch)
     {
         Node node = owner.node();
-        Topologies topologies = node.topology().forEpoch(forKeys, epoch, SHARE);
+        Topologies topologies = node.topology().active().forEpoch(forKeys, epoch, SHARE);
         return node.agent().selectPreferred(node.id(), topologies);
     }
 

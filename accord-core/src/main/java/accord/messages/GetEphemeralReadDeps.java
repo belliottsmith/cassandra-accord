@@ -74,7 +74,7 @@ public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeral
 
         // TODO (desired): only return failure if we've participated in a sync point that could migrate coordination to the newer epoch
         StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, latestEpoch);
-        if (latestEpoch > executionEpoch && (safeStore.ranges().removed(executionEpoch, latestEpoch).intersects(participants.owns()) || node.topology().hasReplicationMaybeChanged(participants.owns(), executionEpoch)))
+        if (latestEpoch > executionEpoch && (safeStore.ranges().removed(executionEpoch, latestEpoch).intersects(participants.owns()) || node.topology().active().hasReplicationMaybeChanged(participants.owns(), executionEpoch)))
             return new GetEphemeralReadDepsOk(latestEpoch);
 
         Deps deps;

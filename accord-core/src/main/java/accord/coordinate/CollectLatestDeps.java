@@ -64,7 +64,7 @@ public class CollectLatestDeps extends AbstractCoordination<Route<?>, List<Lates
     public static void withLatestDeps(Node node, TxnId txnId, FullRoute<?> fullRoute, Unseekables<?> collectFrom, @Nullable Ballot ballot, Timestamp executeAt, BiConsumer<List<LatestDeps>, Throwable> callback)
     {
         Route<?> route = fullRoute.intersecting(collectFrom, Minimal);
-        Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, executeAt);
+        Topologies topologies = node.topology().active().withUnsyncedEpochs(route, txnId, executeAt);
         CollectLatestDeps collect = new CollectLatestDeps(node, topologies, txnId, route, ballot, executeAt, callback);
         collect.start();
     }

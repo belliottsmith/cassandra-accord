@@ -53,7 +53,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
 
     private CoordinateMaxConflict(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, long executionEpoch, BiConsumer<? super Timestamp, Throwable> callback)
     {
-        this(node, executor, route, executionEpoch, node.topology().withUnsyncedEpochs(route, executionEpoch, executionEpoch), callback);
+        this(node, executor, route, executionEpoch, node.topology().active().withUnsyncedEpochs(route, executionEpoch, executionEpoch), callback);
     }
 
     private CoordinateMaxConflict(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, long executionEpoch, Topologies topologies, BiConsumer<? super Timestamp, Throwable> callback)
@@ -81,7 +81,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     {
         long epoch = node.epoch();
         FullRoute<?> route = node.computeRoute(epoch, keysOrRanges);
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(epoch), null, route.homeKey(), keysOrRanges);
+        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().active().globalForEpoch(epoch), null, route.homeKey(), keysOrRanges);
         if (mismatch != null)
         {
             callback.accept(null, mismatch);

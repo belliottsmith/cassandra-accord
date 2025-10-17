@@ -1136,6 +1136,12 @@ public class CommandsForKeyTest
         }
 
         @Override
+        public long retryTopologyDelay(Node node, int attempt, TimeUnit units)
+        {
+            return 0;
+        }
+
+        @Override
         public long retryDurabilityDelay(Node node, int attempt, TimeUnit units)
         {
             return 0;

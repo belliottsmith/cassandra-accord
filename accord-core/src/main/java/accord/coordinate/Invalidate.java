@@ -60,7 +60,7 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
 
     private Invalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        this(node, executor, node.topology().forEpoch(invalidateWith, txnId.epoch(), SHARE), ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
+        this(node, executor, node.topology().active().forEpoch(invalidateWith, txnId.epoch(), SHARE), ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
     }
     private Invalidate(Node node, SequentialAsyncExecutor executor, Topologies topologies, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {

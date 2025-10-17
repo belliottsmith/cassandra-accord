@@ -200,15 +200,38 @@ public class AsyncResults
         @Override
         public String toString()
         {
-            return getClass().getSimpleName() + "{status=" + (isDone() ? isSuccess() ? "success" : "failure" : "pending") + "}";
+            return getClass().getSimpleName() + statusString();
+        }
+
+        protected String statusString()
+        {
+            return "{status=" + (isDone() ? isSuccess() ? "success" : "failure" : "pending") + "}";
         }
     }
 
     static class Chain<V> extends AbstractResult<V>
     {
+        private AsyncChain<V> chain;
         public Chain(AsyncChain<V> chain)
         {
+            this.chain = chain;
             chain.begin(this::setResult);
+        }
+
+        @Override
+        void setResult(V result, Throwable failure)
+        {
+            super.setResult(result, failure);
+            chain = null;
+        }
+
+        @Override
+        public String toString()
+        {
+            AsyncChain<V> chain = this.chain;
+            if (chain != null)
+                return "Waiting On: " + chain;
+            return super.toString();
         }
     }
 
@@ -234,6 +257,22 @@ public class AsyncResults
         {
             if (throwable == null) trySuccess(v);
             else tryFailure(throwable);
+        }
+    }
+
+    public static class SettableWithDescription<V> extends SettableByCallback<V>
+    {
+        final String description;
+
+        public SettableWithDescription(String description)
+        {
+            this.description = description;
+        }
+
+        @Override
+        public String toString()
+        {
+            return description + statusString();
         }
     }
 
@@ -316,7 +355,7 @@ public class AsyncResults
         @Override
         public String toString()
         {
-            return "ImmediateSuccess{" + success + "}";
+            return "Success" + (success != null ? "{" + success + '}' : "");
         }
     }
 
@@ -345,7 +384,7 @@ public class AsyncResults
         @Override
         public String toString()
         {
-            return "ImmediateFailure{" + failure + "}";
+            return "Failure{" + failure + "}";
         }
     }
 
@@ -434,12 +473,33 @@ public class AsyncResults
             @Override
             V process(V[] inputs)
             {
-                V result = inputs[0];
-                for (int i = 1; i < inputs.length ; ++i)
-                    result = reducer.reduce(result, inputs[i]);
-                return result;
+                return reduce(inputs, reducer);
             }
         }.beginAsResult();
     }
+
+    public static <V> AsyncResult<V> debuggableReduce(List<? extends AsyncResult<? extends V>> results, Reduce<V, V> reducer)
+    {
+        if (results.size() == 1)
+            return (AsyncResult<V>) results.get(0);
+
+        return new AsyncCombiner.DebuggableResultCombiner<V, V>(results)
+        {
+            @Override
+            V process(V[] inputs)
+            {
+                return reduce(inputs, reducer);
+            }
+        }.beginAsResult();
+    }
+
+    private static <V> V reduce(V[] inputs, Reduce<V, V> reducer)
+    {
+        V result = inputs[0];
+        for (int i = 1; i < inputs.length ; ++i)
+            result = reducer.reduce(result, inputs[i]);
+        return result;
+    }
+
 
 }

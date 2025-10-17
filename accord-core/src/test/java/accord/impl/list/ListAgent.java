@@ -63,7 +63,7 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.topology.TopologyManager;
+import accord.topology.TopologyRetiredException;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
@@ -75,6 +75,7 @@ import org.agrona.collections.Int2ObjectHashMap;
 import static accord.local.Node.Id.NONE;
 import static com.google.common.base.Functions.identity;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class ListAgent implements InMemoryAgent, CoordinatorEventListener, OwnershipEventListener
@@ -166,7 +167,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         ownershipEventListener.onFailedBootstrap(attempt, phase, ranges, retry, fail, failure);
     }
 
-    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyManager.TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class, LogUnavailableException.class));
+    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class, LogUnavailableException.class));
     @Override
     public void onUncaughtException(Throwable t)
     {
@@ -250,6 +251,12 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     public long retrySyncPointDelay(Node node, int attempt, TimeUnit units)
     {
         return units.convert(rnd.nextInt(30, 300), SECONDS);
+    }
+
+    @Override
+    public long retryTopologyDelay(Node node, int attempt, TimeUnit units)
+    {
+        return units.convert(1L, MINUTES);
     }
 
     @Override

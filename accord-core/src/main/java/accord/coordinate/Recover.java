@@ -174,7 +174,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
 
     public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp committedExecuteAt, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        Topologies topologies = node.topology().select(route, txnId, committedExecuteAt == null ? txnId : committedExecuteAt, SHARE, QuorumEpochIntersections.recover);
+        Topologies topologies = node.topology().active().select(route, txnId, committedExecuteAt == null ? txnId : committedExecuteAt, SHARE, QuorumEpochIntersections.recover);
         return recover(node, topologies, ballot, txnId, txn, route, committedExecuteAt, isFastPathDecided, reportTo, callback);
     }
 
@@ -613,7 +613,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
     {
         Topologies topologies = tracker.topologies();
         if (executeAt != null && executeAt.epoch() != (this.committedExecuteAt == null ? txnId : this.committedExecuteAt).epoch())
-            topologies = node.topology().select(scope, txnId, executeAt, SHARE, QuorumEpochIntersections.recover);
+            topologies = node.topology().active().select(scope, txnId, executeAt, SHARE, QuorumEpochIntersections.recover);
 
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
         Recover.recover(node, topologies, ballot, txnId, txn, scope, executeAt, TinyEnumSet.contains(flags, FAST_PATH_DECIDED), reportTo, callback);
@@ -636,7 +636,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
 
                 Topologies topologies;
                 if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
-                else topologies = node.topology().forEpochAtLeast(participants, awaitId.epoch(), SHARE);
+                else topologies = node.topology().active().forEpochAtLeast(participants, awaitId.epoch(), SHARE);
                 requests.add(SynchronousRecoverAwait.awaitAny(node, executor, topologies, awaitId, awaitUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())
@@ -707,7 +707,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
 
                 Topologies topologies;
                 if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
-                else topologies = node.topology().forEpoch(participants, awaitId.epoch(), SHARE);
+                else topologies = node.topology().active().forEpoch(participants, awaitId.epoch(), SHARE);
                 requests.add(SynchronousRecoverAwait.awaitAny(node, executor, topologies, awaitId, awaitUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())

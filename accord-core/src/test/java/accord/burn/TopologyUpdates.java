@@ -19,7 +19,6 @@
 package accord.burn;
 
 import accord.api.AsyncExecutor;
-import accord.api.TestableConfigurationService;
 import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.topology.Topology;
@@ -55,7 +54,7 @@ public class TopologyUpdates
             long nodeEpoch = node.epoch();
             if (nodeEpoch + 1 < update.epoch())
                 onDone.accept(false);
-            ((TestableConfigurationService) node.configService()).reportTopology(update);
+            node.topology().reportTopology(update);
             onDone.accept(true);
         });
     }
@@ -72,7 +71,7 @@ public class TopologyUpdates
             pendingSyncTopologies.remove(epoch);
 
         MessageTask.begin(originator, cluster, executors.apply(originator.id()), "SyncComplete:" + epoch, (node, from, onDone) -> {
-            node.onRemoteSyncComplete(originator.id(), epoch);
+            node.topology().onReadyToCoordinate(originator.id(), epoch);
             onDone.accept(true);
         });
     }
@@ -81,7 +80,7 @@ public class TopologyUpdates
     {
         executors.apply(originator.id()).execute(() -> {
             MessageTask.begin(originator, cluster, executors.apply(originator.id()), "EpochClosed:" + epoch, (node, from, onDone) -> {
-                node.onEpochClosed(ranges, epoch);
+                node.topology().onEpochClosed(ranges, epoch);
                 onDone.accept(true);
             });
         });
@@ -91,7 +90,7 @@ public class TopologyUpdates
     {
         executors.apply(originator.id()).execute(() -> {
             MessageTask.begin(originator, cluster, executors.apply(originator.id()), "EpochComplete:" + epoch, (node, from, onDone) -> {
-                node.onEpochRetired(ranges, epoch);
+                node.topology().onEpochRetired(ranges, epoch);
                 onDone.accept(true);
             });
         });

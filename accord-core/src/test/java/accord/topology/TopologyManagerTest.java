@@ -30,15 +30,22 @@ import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
+import javax.annotation.Nullable;
+
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.Iterators;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import accord.api.MessageSink;
 import accord.burn.TopologyUpdates;
 import accord.impl.AbstractAsyncExecutor;
+import accord.impl.DefaultTimeouts;
 import accord.impl.PrefixedIntHashKey;
+import accord.impl.TestAgent;
+import accord.impl.mock.MockCluster;
 import accord.local.Node;
+import accord.local.ShardDistributor;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutingKeys;
@@ -51,11 +58,11 @@ import accord.utils.RandomSource;
 import accord.utils.SortedArrays.SortedArrayList;
 import org.agrona.collections.Long2ObjectHashMap;
 
+import static accord.Utils.createNode;
 import static accord.Utils.id;
 import static accord.Utils.idList;
 import static accord.Utils.idSet;
 import static accord.Utils.shard;
-import static accord.Utils.testTopologyManager;
 import static accord.Utils.topologies;
 import static accord.Utils.topology;
 import static accord.impl.IntKey.keys;
@@ -82,18 +89,19 @@ public class TopologyManagerTest
                                shard(range(100, 200), idList(2, 3, 5), idSet(2, 3, 5)));
         int[] unmoved = { 1, 3, 5 };
         int[] moved = { 2, 4 };
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
-        service.onTopologyUpdate(t1, () -> null, e -> {});
-        service.onTopologyUpdate(t2, () -> null, e -> {});
+
+        TopologyManager tm = createTopologyManager();
+        tm.reportTopology(t1);
+        tm.reportTopology(t2);
 
         for (Unseekables<?> select : Arrays.asList(Ranges.ofSortedAndDeoverlapped(range(10, 20)), Ranges.ofSortedAndDeoverlapped(range(110, 120))))
         {
-            Topologies t = service.preciseEpochs(select, 1, 2, SHARE);
+            Topologies t = tm.active().preciseEpochs(select, 1, 2, SHARE);
             for (int i : unmoved)
                 org.assertj.core.api.Assertions.assertThat(computeWaitForEpoch(new Node.Id(i), t, select)).isEqualTo(1);
             for (int i : moved)
                 org.assertj.core.api.Assertions.assertThat(computeWaitForEpoch(new Node.Id(i), t, select)).isEqualTo(2);
-            t = service.withUnsyncedEpochs(select, 1, 2);
+            t = tm.active().withUnsyncedEpochs(select, 1, 2);
             for (int i : unmoved)
                 org.assertj.core.api.Assertions.assertThat(computeWaitForEpoch(new Node.Id(i), t, select)).isEqualTo(1);
             for (int i : moved)
@@ -108,20 +116,20 @@ public class TopologyManagerTest
         Topology topology1 = topology(1, shard(range, idList(1, 2, 3), idSet(1, 2)));
         Topology topology2 = topology(2, shard(range, idList(1, 2, 3), idSet(2, 3)));
 
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
+        TopologyManager tm = createTopologyManager();
 
-        Assertions.assertSame(Topology.EMPTY, service.current());
-        service.onTopologyUpdate(topology1, () -> null, e -> {});
-        service.onTopologyUpdate(topology2, () -> null, e -> {});
+        Assertions.assertSame(Topology.EMPTY, tm.current());
+        tm.reportTopology(topology1);
+        tm.reportTopology(topology2);
 
-        Assertions.assertTrue(service.getEpochStateUnsafe(1).syncComplete());
-        Assertions.assertFalse(service.getEpochStateUnsafe(2).syncComplete());
+        Assertions.assertTrue(tm.unsafeGetActiveEpoch(1).isQuorumReady());
+        Assertions.assertFalse(tm.unsafeGetActiveEpoch(2).isQuorumReady());
 
-        service.onEpochSyncComplete(id(1), 2);
-        Assertions.assertFalse(service.getEpochStateUnsafe(2).syncComplete());
+        tm.onReadyToCoordinate(id(1), 2);
+        Assertions.assertFalse(tm.unsafeGetActiveEpoch(2).isQuorumReady());
 
-        service.onEpochSyncComplete(id(2), 2);
-        Assertions.assertTrue(service.getEpochStateUnsafe(2).syncComplete());
+        tm.onReadyToCoordinate(id(2), 2);
+        Assertions.assertTrue(tm.unsafeGetActiveEpoch(2).isQuorumReady());
     }
 
     private static TopologyManager tracker()
@@ -133,46 +141,46 @@ public class TopologyManagerTest
                                       shard(range(100, 200), idList(1, 2, 3), idSet(2, 3)),
                                       shard(range(200, 300), idList(4, 5, 6), idSet(5, 6)));
 
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
-        service.onTopologyUpdate(topology1, () -> null, e -> {});
-        service.onTopologyUpdate(topology2, () -> null, e -> {});
+        TopologyManager tm = createTopologyManager();
+        tm.reportTopology(topology1);
+        tm.reportTopology(topology2);
 
-        return service;
+        return tm;
     }
 
     @Test
-    void syncCompleteFor()
+    void quorumReadyFor()
     {
         TopologyManager service = tracker();
 
-        Assertions.assertFalse(service.getEpochStateUnsafe(2).syncComplete());
+        Assertions.assertFalse(service.unsafeGetActiveEpoch(2).isQuorumReady());
         // shards to nodes: [[1, 2, 3], [4, 5, 6]]
         // by syncing node 1/2 shard 1 has reached quorum, but not shard 2
-        service.onEpochSyncComplete(id(1), 2);
-        service.onEpochSyncComplete(id(2), 2);
-        Assertions.assertFalse(service.getEpochStateUnsafe(2).syncComplete());
-        Assertions.assertTrue(service.getEpochStateUnsafe(2).syncCompleteFor(keys(150).toParticipants()));
-        Assertions.assertFalse(service.getEpochStateUnsafe(2).syncCompleteFor(keys(250).toParticipants()));
+        service.onReadyToCoordinate(id(1), 2);
+        service.onReadyToCoordinate(id(2), 2);
+        Assertions.assertFalse(service.unsafeGetActiveEpoch(2).isQuorumReady());
+        Assertions.assertTrue(service.unsafeGetActiveEpoch(2).isQuorumReady(keys(150).toParticipants()));
+        Assertions.assertFalse(service.unsafeGetActiveEpoch(2).isQuorumReady(keys(250).toParticipants()));
     }
 
     @Test
-    void syncCompletePastEpochs()
+    void quorumReadyPastEpochs()
     {
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
+        TopologyManager service = createTopologyManager();
         Shard[] shards = { shard(range(0, 100), idList(1, 2, 3), idSet(1, 2, 3)),
                            shard(range(100, 200), idList(3, 4, 5), idSet(3, 4, 5)) };
 
-        service.onTopologyUpdate(topology(1, shards), () -> null, e -> {});
-        service.onTopologyUpdate(topology(2, shards), () -> null, e -> {});
-        service.onTopologyUpdate(topology(3, shards), () -> null, e -> {});
+        service.reportTopology(topology(1, shards));
+        service.reportTopology(topology(2, shards));
+        service.reportTopology(topology(3, shards));
 
         for (int i = 1; i <= 5; i++)
-            service.onEpochSyncComplete(id(i), service.epoch());
+            service.onReadyToCoordinate(id(i), service.epoch());
 
         Ranges expected = service.current().ranges().mergeTouching();
-        org.assertj.core.api.Assertions.assertThat(service.syncComplete(3)).describedAs("Unexpected sync complte for node 3").isEqualTo(expected);
-        org.assertj.core.api.Assertions.assertThat(service.syncComplete(2)).describedAs("Unexpected sync complte for node 2").isEqualTo(expected);
-        org.assertj.core.api.Assertions.assertThat(service.syncComplete(1)).describedAs("Unexpected sync complte for node 1").isEqualTo(expected);
+        org.assertj.core.api.Assertions.assertThat(service.unsafeQuorumReady(3)).describedAs("Unexpected sync complte for node 3").isEqualTo(expected);
+        org.assertj.core.api.Assertions.assertThat(service.unsafeQuorumReady(2)).describedAs("Unexpected sync complte for node 2").isEqualTo(expected);
+        org.assertj.core.api.Assertions.assertThat(service.unsafeQuorumReady(1)).describedAs("Unexpected sync complte for node 1").isEqualTo(expected);
     }
 
     /**
@@ -185,17 +193,17 @@ public class TopologyManagerTest
         Topology topology1 = topology(1, shard(range, idList(1, 2, 3), idSet(1, 2)));
         Topology topology2 = topology(2, shard(range, idList(1, 2, 3), idSet(2, 3)));
 
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
-        service.onTopologyUpdate(topology1, () -> null, e -> {});
+        TopologyManager tm = createTopologyManager();
+        tm.reportTopology(topology1);
 
         // sync epoch 2
-        service.onEpochSyncComplete(id(2), 2);
-        service.onEpochSyncComplete(id(3), 2);
+        tm.onReadyToCoordinate(id(2), 2);
+        tm.onReadyToCoordinate(id(3), 2);
 
         // learn of epoch 2
-        service.onTopologyUpdate(topology2, () -> null, e -> {});
-        Assertions.assertTrue(service.getEpochStateUnsafe(1).syncComplete());
-        Assertions.assertTrue(service.getEpochStateUnsafe(2).syncComplete());
+        tm.reportTopology(topology2);
+        Assertions.assertTrue(tm.unsafeGetActiveEpoch(1).isQuorumReady());
+        Assertions.assertTrue(tm.unsafeGetActiveEpoch(2).isQuorumReady());
     }
 
     @Test
@@ -206,24 +214,24 @@ public class TopologyManagerTest
         Topology topology2 = topology(2, shard(range, idList(1, 2, 3), idSet(1, 2)));
         Topology topology3 = topology(3, shard(range, idList(1, 2, 3), idSet(2, 3)));
 
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
+        TopologyManager service = createTopologyManager();
 
         Assertions.assertSame(Topology.EMPTY, service.current());
-        service.onTopologyUpdate(topology1, () -> null, e -> {});
-        service.onTopologyUpdate(topology2, () -> null, e -> {});
-        service.onTopologyUpdate(topology3, () -> null, e -> {});
-        Assertions.assertFalse(service.getEpochStateUnsafe(2).syncComplete());
+        service.reportTopology(topology1);
+        service.reportTopology(topology2);
+        service.reportTopology(topology3);
+        Assertions.assertFalse(service.unsafeGetActiveEpoch(2).isQuorumReady());
 
         RoutingKeys keys = keys(150).toParticipants();
         Assertions.assertEquals(topologies(topology3.select(keys, SHARE), topology2.select(keys, SHARE), topology1.select(keys, SHARE)),
-                                service.withUnsyncedEpochs(keys, 3, 3));
+                                service.active().withUnsyncedEpochs(keys, 3, 3));
 
-        service.onEpochSyncComplete(id(2), 2);
-        service.onEpochSyncComplete(id(3), 2);
-        service.onEpochSyncComplete(id(2), 3);
-        service.onEpochSyncComplete(id(3), 3);
+        service.onReadyToCoordinate(id(2), 2);
+        service.onReadyToCoordinate(id(3), 2);
+        service.onReadyToCoordinate(id(2), 3);
+        service.onReadyToCoordinate(id(3), 3);
         Assertions.assertEquals(topologies(topology3.select(keys, SHARE)),
-                                service.withUnsyncedEpochs(keys, 3, 3));
+                                service.active().withUnsyncedEpochs(keys, 3, 3));
     }
 
     @Test
@@ -236,27 +244,28 @@ public class TopologyManagerTest
                                       shard(range(100, 200), idList(1, 2, 3), idSet(1, 2)),
                                       shard(range(200, 300), idList(4, 5, 6), idSet(5, 6)));
 
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
-        service.onTopologyUpdate(topology5, () -> null, e -> {});
-        service.onTopologyUpdate(topology6, () -> null, e -> {});
+        TopologyManager service = createTopologyManager();
+        service.reportTopology(topology5);
+        service.reportTopology(topology6);
 
-        Assertions.assertSame(topology6, service.getEpochStateUnsafe(6).global());
-        Assertions.assertSame(topology5, service.getEpochStateUnsafe(5).global());
-        for (int i=1; i<=6; i++) service.onEpochSyncComplete(id(i), 6);
-        Assertions.assertTrue(service.getEpochStateUnsafe(5).syncComplete());
-        Assertions.assertNull(service.getEpochStateUnsafe(4));
+        Assertions.assertSame(topology6, service.unsafeGetActiveEpoch(6L).global());
+        Assertions.assertSame(topology5, service.unsafeGetActiveEpoch(5L).global());
+        for (int i=1; i<=6; i++) service.onReadyToCoordinate(id(i), 6);
+        Assertions.assertTrue(service.unsafeGetActiveEpoch(5).isQuorumReady());
+        try { service.unsafeGetActiveEpoch(4); Assertions.fail(); }
+        catch (TopologyRetiredException e) {}
 
-        service.onEpochSyncComplete(id(1), 4);
+        service.onReadyToCoordinate(id(1), 4);
     }
 
     private static void markTopologySynced(TopologyManager service, long epoch)
     {
-        service.getEpochStateUnsafe(epoch).global().nodes().forEach(id -> service.onEpochSyncComplete(id, epoch));
+        service.unsafeGetActiveEpoch(epoch).global().nodes().forEach(id -> service.onReadyToCoordinate(id, epoch));
     }
 
     private static void addAndMarkSynced(TopologyManager service, Topology topology)
     {
-        service.onTopologyUpdate(topology, () -> null, e -> {});
+        service.reportTopology(topology);
         markTopologySynced(service, topology.epoch());
     }
 
@@ -264,22 +273,22 @@ public class TopologyManagerTest
     void truncateTopologyHistory()
     {
         Range range = range(100, 200);
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
+        TopologyManager service = createTopologyManager();
         addAndMarkSynced(service, topology(1, shard(range, idList(1, 2, 3), idSet(1, 2))));
         addAndMarkSynced(service, topology(2, shard(range, idList(1, 2, 3), idSet(2, 3))));
         addAndMarkSynced(service, topology(3, shard(range, idList(1, 2, 3), idSet(1, 2))));
         addAndMarkSynced(service, topology(4, shard(range, idList(1, 2, 3), idSet(1, 3))));
 
-        Assertions.assertTrue(service.hasEpoch(1));
-        Assertions.assertTrue(service.hasEpoch(2));
-        Assertions.assertTrue(service.hasEpoch(3));
-        Assertions.assertTrue(service.hasEpoch(4));
+        Assertions.assertTrue(service.active().hasEpoch(1));
+        Assertions.assertTrue(service.active().hasEpoch(2));
+        Assertions.assertTrue(service.active().hasEpoch(3));
+        Assertions.assertTrue(service.active().hasEpoch(4));
 
         service.truncateTopologiesUntil(3);
-        Assertions.assertFalse(service.hasEpoch(1));
-        Assertions.assertFalse(service.hasEpoch(2));
-        Assertions.assertTrue(service.hasEpoch(3));
-        Assertions.assertTrue(service.hasEpoch(4));
+        Assertions.assertFalse(service.active().hasEpoch(1));
+        Assertions.assertFalse(service.active().hasEpoch(2));
+        Assertions.assertTrue(service.active().hasEpoch(3));
+        Assertions.assertTrue(service.active().hasEpoch(4));
 
     }
 
@@ -305,7 +314,7 @@ public class TopologyManagerTest
                                         shard(PrefixedIntHashKey.range(1, 0, 100), idList(1, 2, 3), idSet(1, 2))));
             topologies.add(topology(epochCounter++,
                                     shard(PrefixedIntHashKey.range(1, 0, 100), idList(1, 2, 3), idSet(1, 2))));;
-            History history = new History(testTopologyManager(SUPPLIER, ID), topologies.iterator()) {
+            History history = new History(createTopologyManager(new ShardDistributor.EvenSplit<>(1, ignore -> new PrefixedIntHashKey.Splitter())), topologies.iterator()) {
 
                 @Override
                 protected void postTopologyUpdate(int id, Topology t)
@@ -314,9 +323,9 @@ public class TopologyManagerTest
                 }
 
                 @Override
-                protected void postEpochSyncComplete(int id, long epoch, Node.Id node)
+                protected void postEpochisQuorumReady(int id, long epoch, Node.Id node)
                 {
-                    test(tm.globalForEpoch(epoch));
+                    test(tm.active().globalForEpoch(epoch));
                 }
 
                 private void test(Topology topology)
@@ -327,13 +336,13 @@ public class TopologyManagerTest
                         Unseekables<?> unseekables = TopologyUtils.select(ranges, rs);
                         long maxEpoch = topology.epoch();
                         long minEpoch = tm.minEpoch() == maxEpoch ? maxEpoch : rs.nextLong(tm.minEpoch(), maxEpoch + 1);
-                        assertThat(tm.preciseEpochs(unseekables, minEpoch, maxEpoch, SHARE))
+                        assertThat(tm.active().preciseEpochs(unseekables, minEpoch, maxEpoch, SHARE))
                                 .isNotEmpty()
                                 .epochsBetween(minEpoch, maxEpoch)
                                 .containsAll(unseekables)
                                 .topology(maxEpoch, a -> a.isNotEmpty());
 
-                        assertThat(tm.withUnsyncedEpochs(unseekables, minEpoch, maxEpoch))
+                        assertThat(tm.active().withUnsyncedEpochs(unseekables, minEpoch, maxEpoch))
                                 .isNotEmpty()
                                 .epochsBetween(minEpoch, maxEpoch, false) // older epochs are allowed
                                 .containsAll(unseekables)
@@ -353,7 +362,7 @@ public class TopologyManagerTest
     @Test
     void aba()
     {
-        TopologyManager service = testTopologyManager(SUPPLIER, ID);
+        TopologyManager service = createTopologyManager(new ShardDistributor.EvenSplit<>(1, ignore -> new PrefixedIntHashKey.Splitter()));
         SortedArrayList<Node.Id> dc1Nodes = idList(1, 2, 3);
         Set<Node.Id> dc1Fp = idSet(1, 2);
         SortedArrayList<Node.Id> dc2Nodes = idList(4, 5, 6);
@@ -370,8 +379,8 @@ public class TopologyManagerTest
         // prefix=0 was added in epoch=1, removed in epoch=2, and added back to epoch=3; the ABA problem
         RoutingKeys unseekables = RoutingKeys.of(PrefixedIntHashKey.forHash(0, 42));
 
-        for (Supplier<Topologies> fn : Arrays.<Supplier<Topologies>>asList(() -> service.preciseEpochs(unseekables, 1, 3, SHARE),
-                                                                           () -> service.withUnsyncedEpochs(unseekables, 1, 3)))
+        for (Supplier<Topologies> fn : Arrays.<Supplier<Topologies>>asList(() -> service.active().preciseEpochs(unseekables, 1, 3, SHARE),
+                                                                           () -> service.active().withUnsyncedEpochs(unseekables, 1, 3)))
         {
             assertThat(fn.get())
                     .isNotEmpty()
@@ -405,7 +414,7 @@ public class TopologyManagerTest
                     return t == null ? endOfData() : t;
                 }
             }, 42);
-            History history = new History(testTopologyManager(SUPPLIER, ID), next) {
+            History history = new History(createTopologyManager(), next) {
 
                 @Override
                 protected void postTopologyUpdate(int id, Topology t)
@@ -414,7 +423,7 @@ public class TopologyManagerTest
                 }
 
                 @Override
-                protected void postEpochSyncComplete(int id, long epoch, Node.Id node)
+                protected void postEpochisQuorumReady(int id, long epoch, Node.Id node)
                 {
                     check(tm, rs);
                 }
@@ -430,12 +439,12 @@ public class TopologyManagerTest
             EpochRange range = EpochRange.from(service, rand);
             Unseekables<?> select = select(service, range, rand);
 
-            assertThat(service.preciseEpochs(select, range.min, range.max, SHARE))
+            assertThat(service.active().preciseEpochs(select, range.min, range.max, SHARE))
                     .isNotEmpty()
                     .epochsBetween(range.min, range.max)
                     .containsAll(select);
 
-            assertThat(service.withUnsyncedEpochs(select, range.min, range.max))
+            assertThat(service.active().withUnsyncedEpochs(select, range.min, range.max))
                     .isNotEmpty()
                     .epochsBetween(range.min, range.max, false) // older epochs are allowed
                     .containsAll(select);
@@ -447,7 +456,7 @@ public class TopologyManagerTest
         long epoch = range.min == range.max ?
                      range.min :
                      rs.pickLong(range.min, range.max);
-        Ranges ranges = service.globalForEpoch(epoch).ranges();
+        Ranges ranges = service.active().globalForEpoch(epoch).ranges();
         return TopologyUtils.select(ranges, rs);
     }
 
@@ -485,11 +494,11 @@ public class TopologyManagerTest
 
     private static class History
     {
-        private enum Action { OnEpochSyncComplete, OnTopologyUpdate;}
+        private enum Action { OnEpochisQuorumReady, OnTopologyUpdate;}
 
         protected final TopologyManager tm;
         private final Iterator<Topology> next;
-        private final Long2ObjectHashMap<Set<Node.Id>> pendingSyncComplete = new Long2ObjectHashMap<>();
+        private final Long2ObjectHashMap<Set<Node.Id>> pendingisQuorumReady = new Long2ObjectHashMap<>();
         private final Map<EnumMap<Action, Integer>, Gen<Action>> cache = new HashMap<>();
         private int id = 0;
 
@@ -509,12 +518,12 @@ public class TopologyManagerTest
 
         }
 
-        protected void preEpochSyncComplete(int id, long epoch, Node.Id node)
+        protected void preEpochisQuorumReady(int id, long epoch, Node.Id node)
         {
 
         }
 
-        protected void postEpochSyncComplete(int id, long epoch, Node.Id node)
+        protected void postEpochisQuorumReady(int id, long epoch, Node.Id node)
         {
 
         }
@@ -528,8 +537,8 @@ public class TopologyManagerTest
         private boolean process(RandomSource rs)
         {
             EnumMap<Action, Integer> possibleActions = new EnumMap<>(Action.class);
-            if (!pendingSyncComplete.isEmpty())
-                possibleActions.put(Action.OnEpochSyncComplete, 10); // TODO (correctness): should the weight be based off the backlog?
+            if (!pendingisQuorumReady.isEmpty())
+                possibleActions.put(Action.OnEpochisQuorumReady, 10); // TODO (correctness): should the weight be based off the backlog?
             if (next.hasNext())
                 possibleActions.put(Action.OnTopologyUpdate, 1);
             if (possibleActions.isEmpty())
@@ -546,25 +555,37 @@ public class TopologyManagerTest
                 case OnTopologyUpdate:
                     Topology t = next.next();
                     preTopologyUpdate(id, t);
-                    tm.onTopologyUpdate(t, () -> null, e -> {});
-                    pendingSyncComplete.put(t.epoch, new HashSet<>(t.nodes()));
+                    tm.reportTopology(t);
+                    pendingisQuorumReady.put(t.epoch, new HashSet<>(t.nodes()));
                     postTopologyUpdate(id, t);
                     break;
-                case OnEpochSyncComplete:
-                    long epoch = rs.pickUnorderedSet(pendingSyncComplete.keySet());
-                    Set<Node.Id> pendingNodes = pendingSyncComplete.get(epoch);
+                case OnEpochisQuorumReady:
+                    long epoch = rs.pickUnorderedSet(pendingisQuorumReady.keySet());
+                    Set<Node.Id> pendingNodes = pendingisQuorumReady.get(epoch);
                     Node.Id node = rs.pickUnorderedSet(pendingNodes);
                     pendingNodes.remove(node);
                     if (pendingNodes.isEmpty())
-                        pendingSyncComplete.remove(epoch);
-                    preEpochSyncComplete(id, epoch, node);
-                    tm.onEpochSyncComplete(node, epoch);
-                    postEpochSyncComplete(id, epoch, node);
+                        pendingisQuorumReady.remove(epoch);
+                    preEpochisQuorumReady(id, epoch, node);
+                    tm.onReadyToCoordinate(node, epoch);
+                    postEpochisQuorumReady(id, epoch, node);
                     break;
                 default:
                     throw new IllegalArgumentException("Unknown action: " + action);
             }
             return true;
         }
+    }
+
+    private static TopologyManager createTopologyManager()
+    {
+        return createTopologyManager(null);
+    }
+
+    private static TopologyManager createTopologyManager(@Nullable ShardDistributor shardDistributor)
+    {
+        MockCluster.Clock time = new MockCluster.Clock(0);
+        Node node = createNode(ID, Topology.EMPTY, new MessageSink.NoOpSink(), time, new TestAgent(time), shardDistributor);
+        return new TopologyManager(SUPPLIER, node, ignore -> {throw new UnsupportedOperationException();}, time, new DefaultTimeouts(time));
     }
 }

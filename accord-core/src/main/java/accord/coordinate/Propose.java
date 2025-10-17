@@ -241,7 +241,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
             try
             {
                 Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
-                Topologies topologies = node.topology().forEpoch(participants, txnId.epoch(), SHARE);
+                Topologies topologies = node.topology().active().forEpoch(participants, txnId.epoch(), SHARE);
                 NotAccept notAccept = new NotAccept(node, executor, status, topologies, ballot, txnId, participants, callback);
                 notAccept.start();
             }

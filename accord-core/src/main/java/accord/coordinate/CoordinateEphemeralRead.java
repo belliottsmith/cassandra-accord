@@ -79,7 +79,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
 
     public static void coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
     {
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
+        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().active().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
         if (mismatch != null)
         {
             callback.accept(null, mismatch);
@@ -89,7 +89,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         CoordinateEphemeralRead coordinate;
         try
         {
-            Topologies topologies = node.topology().withUnsyncedEpochs(route, txnId, txnId);
+            Topologies topologies = node.topology().active().withUnsyncedEpochs(route, txnId, txnId);
             coordinate = new CoordinateEphemeralRead(node, node.someSequentialExecutor(), topologies, route, txnId, txn, callback);
         }
         catch (Throwable t)
@@ -174,7 +174,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     {
         SortedListMap<Node.Id, GetEphemeralReadDepsOk> oks = finishOks();
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
-        topologies = node.topology().reselect(topologies, QuorumEpochIntersections.preaccept.include, scope, executeAtEpoch, executeAtEpoch, SHARE, Owned);
+        topologies = node.topology().active().reselect(topologies, QuorumEpochIntersections.preaccept.include, scope, executeAtEpoch, executeAtEpoch, SHARE, Owned);
         CoordinationFlags flags = oks.foldlNonNull((d, k, v, out) -> {
             ExecuteFlags.collect(out, k, v.flags, d, v.deps);
             return out;

@@ -20,7 +20,6 @@ package accord.local;
 
 import accord.api.Key;
 import accord.api.RoutingKey;
-import accord.api.TestableConfigurationService;
 import accord.coordinate.Preempted;
 import accord.coordinate.Timeout;
 import accord.coordinate.TopologyMismatch;
@@ -99,7 +98,7 @@ class CommandsTest
                     TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Routable.Domain.Key);
 
                     for (Node n : nodeMap.values())
-                        ((TestableConfigurationService) n.configService()).reportTopology(updatedTopology);
+                        node.topology().reportTopology(updatedTopology);
 
                     node.coordinate(txnId, txn).invoke((success, failure) -> {
                         if (failure == null)

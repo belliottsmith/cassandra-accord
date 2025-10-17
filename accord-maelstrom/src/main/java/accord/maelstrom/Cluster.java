@@ -353,7 +353,7 @@ public class Cluster implements Scheduler
                 MessageSink messageSink = sinks.create(node, randomSupplier.get());
                 LongSupplier nowSupplier = nowSupplierSupplier.get();
                 TimeService time = TimeService.of(nowSupplier, elapsedWrapperFromNonMonotonicSource(TimeUnit.MICROSECONDS, nowSupplier));
-                lookup.put(node, new Node(node, messageSink, new SimpleConfigService(topology),
+                lookup.put(node, new Node(node, messageSink, new SimpleTopologyService(topology),
                                           time, new UniqueTimeService.AtomicUniqueTime(time),
                                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                                           MaelstromAgent.INSTANCE,

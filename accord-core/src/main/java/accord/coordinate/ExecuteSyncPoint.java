@@ -217,7 +217,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
         if (retryInFutureEpoch > tracker.topologies().currentEpoch())
         {
             awaitEpochAtLeastToFinish(retryInFutureEpoch, () -> {
-                ExecuteSyncPoint continuation = new ExecuteSyncPoint(node, syncPoint, node.topology().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE), executor, attempt, current(), (DurabilityResults) finishAndTakeCallback());
+                ExecuteSyncPoint continuation = new ExecuteSyncPoint(node, syncPoint, node.topology().active().preciseEpochs(syncPoint.route(), tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE), executor, attempt, current(), (DurabilityResults) finishAndTakeCallback());
                 continuation.start();
             });
         }
@@ -226,11 +226,13 @@ public class ExecuteSyncPoint extends AbstractCoordination<FullRoute<?>, Durabil
             DurabilityResult result = current();
             if (result.achievedRemote == SyncRemote.All)
             {
-                node.configService().reportEpochRetired(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
+                node.topology().onEpochRetired(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
+                // TODO (required): do not send to faulty
                 node.send(tracker.nodes(), new SetShardDurable(syncPoint, Universal));
             }
             else if (result.achievedRemote == SyncRemote.Quorum)
             {
+                // TODO (required): do not send to faulty
                 node.send(tracker.nodes(), new SetShardDurable(syncPoint, Quorum));
             }
             else

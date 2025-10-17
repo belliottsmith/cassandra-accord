@@ -60,7 +60,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
 
     CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<? super T, Throwable> callback)
     {
-        this(node, executor, txnId, txn, route, node.topology().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
+        this(node, executor, txnId, txn, route, node.topology().active().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
     }
 
     CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiConsumer<? super T, Throwable> callback)

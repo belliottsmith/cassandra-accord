@@ -109,7 +109,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
                                                txnId, txn, scope, ballot, executeAt, stabiliseDeps));
                     break;
                 case InsufficientEpochs:
-                    node.send(from, new Commit(CommitWithTxn, from, node.topology().preciseEpochs(scope, Math.min(allTopologies.oldestEpoch(), nack.minEpoch()), allTopologies.currentEpoch(), SHARE),
+                    node.send(from, new Commit(CommitWithTxn, from, node.topology().active().preciseEpochs(scope, Math.min(allTopologies.oldestEpoch(), nack.minEpoch()), allTopologies.currentEpoch(), SHARE),
                                                txnId, txn, scope, ballot, executeAt, stabiliseDeps));
                     break;
             }

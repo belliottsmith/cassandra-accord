@@ -59,7 +59,7 @@ import accord.api.OwnershipEventListener;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.Scheduler.Scheduled;
-import accord.burn.BurnTestConfigurationService;
+import accord.burn.BurnTestTopologyService;
 import accord.burn.TopologyUpdates;
 import accord.burn.random.FrequentLargeRange;
 import accord.coordinate.CoordinationAdapter;
@@ -687,9 +687,9 @@ public class Cluster
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);
-                BurnTestConfigurationService configService = new BurnTestConfigurationService(id, nodeExecutor, agent, randomSupplier, topology, nodeMap::get, topologyUpdates);
+                BurnTestTopologyService topologyService = new BurnTestTopologyService(id, nodeExecutor, agent, randomSupplier, topology, nodeMap::get, topologyUpdates);
                 DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);
-                Node node = new Node(id, messageSink, configService, timeService, new AtomicUniqueTimeWithStaleReservation(timeService),
+                Node node = new Node(id, messageSink, topologyService, timeService, new AtomicUniqueTimeWithStaleReservation(timeService),
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      agent,
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
@@ -703,8 +703,8 @@ public class Cluster
 
             for (Node node : nodeMap.values())
             {
-                node.configService().registerListener((ListStore) node.commandStores().dataStore());
-                node.configService().registerListener(node.durability());
+                node.topology().addListener((ListStore) node.commandStores().dataStore());
+                node.topology().addListener(node.durability());
             }
 
             Runnable updateDurabilityRate;

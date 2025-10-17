@@ -42,6 +42,7 @@ import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -302,13 +303,15 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
         {
             // TODO (expected, safety): this kind of check needs to be inserted in all equivalent methods
             Invariants.require(untilEpoch >= txnId.epoch());
-            Invariants.require(node.topology().hasAtLeastEpoch(untilEpoch));
-            Topologies commitTo = node.topology().preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, SHARE);
+            ActiveEpochs epochs = node.topology().active();
+            Invariants.require(epochs.hasAtLeastEpoch(untilEpoch));
+            Topologies commitTo = epochs.preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, SHARE);
             commitInvalidate(node, commitTo, txnId, inform);
         }
 
         public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Participants<?> inform)
         {
+            // TODO (required): do not send to faulty
             node.send(commitTo.nodes(), to -> new Invalidate(to, commitTo, txnId, inform));
         }
 

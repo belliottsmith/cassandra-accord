@@ -1,0 +1,182 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package accord.topology;
+
+import java.util.ArrayDeque;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import javax.annotation.concurrent.GuardedBy;
+
+import accord.api.Timeouts;
+import accord.api.Timeouts.RegisteredTimeout;
+import accord.coordinate.EpochTimeout;
+import accord.local.Node;
+import accord.primitives.Ranges;
+import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
+import org.agrona.collections.ObjectHashSet;
+
+import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
+
+class PendingEpoch implements Timeouts.Timeout
+{
+    private static final AtomicReferenceFieldUpdater<PendingEpoch, RegisteredTimeout> timeoutUpdater = AtomicReferenceFieldUpdater.newUpdater(PendingEpoch.class, RegisteredTimeout.class, "timeout");
+    private static final RegisteredTimeout DONE = () -> {};
+
+    final long epoch;
+
+    private final TopologyManager manager;
+    private boolean isActive;
+    private final ArrayDeque<WaitingForEpoch> waiting = new ArrayDeque<>();
+    private volatile RegisteredTimeout timeout;
+    private volatile Topology topology;
+    volatile int fetchAttempts;
+    AsyncResult<Topology> fetching;
+
+    @GuardedBy("manager")
+    final Set<Node.Id> ready = new ObjectHashSet<>();
+    @GuardedBy("manager")
+    Ranges closed = Ranges.EMPTY, retired = Ranges.EMPTY;
+
+    public PendingEpoch(long epoch, TopologyManager manager)
+    {
+        this.epoch = epoch;
+        this.manager = manager;
+    }
+
+    @GuardedBy("manager")
+    void remoteReadyToCoordinate(Node.Id id)
+    {
+        ready.add(id);
+    }
+
+    @GuardedBy("manager")
+    Ranges closed(Ranges ranges)
+    {
+        ranges = ranges.without(closed);
+        closed = closed.union(MERGE_ADJACENT, ranges);
+        return ranges;
+    }
+
+    @GuardedBy("manager")
+    Ranges retired(Ranges ranges)
+    {
+        ranges = ranges.without(retired);
+        retired = retired.union(MERGE_ADJACENT, ranges);
+        return ranges;
+    }
+
+    Topology topology()
+    {
+        return topology;
+    }
+
+    void setTopology(Topology topology)
+    {
+        this.topology = topology;
+    }
+
+    // TODO (expected): pass through request deadline
+    AsyncResult<Void> whenActive()
+    {
+        WaitingForEpoch result, last;
+        synchronized (this)
+        {
+            if (isActive)
+                return AsyncResults.success(null);
+
+            long timeoutMicros = manager.node.agent().expireEpochWait(MICROSECONDS);
+            long deadlineMicros = manager.time.elapsed(MICROSECONDS) + timeoutMicros;
+            result = last = waiting.peekLast();
+            if (last == null || last.deadlineMicros < deadlineMicros)
+                waiting.add(result = new WaitingForEpoch(deadlineMicros + (timeoutMicros / 10)));
+        }
+        if (last == null)
+        {
+            RegisteredTimeout timeout = manager.timeouts.registerAt(this, result.deadlineMicros, MICROSECONDS);
+            if (!timeoutUpdater.compareAndSet(this, null, timeout))
+                timeout.cancel();
+        }
+        return result;
+    }
+
+    void setActive()
+    {
+        synchronized (this)
+        {
+            isActive = true;
+            WaitingForEpoch next;
+            while (null != (next = waiting.poll()))
+                next.trySuccess(null);
+        }
+        RegisteredTimeout cancel = timeoutUpdater.getAndSet(this, DONE);
+        if (cancel != null)
+            cancel.cancel();
+    }
+
+    @Override
+    public void timeout()
+    {
+        RegisteredTimeout curTimeout = this.timeout;
+        long nextDeadlineMicros = 0;
+        synchronized (this)
+        {
+            if (isActive || curTimeout == DONE)
+                return;
+
+            long nowMicros = manager.time.elapsed(MICROSECONDS);
+            while (true)
+            {
+                WaitingForEpoch next = waiting.peek();
+                if (next == null)
+                    break;
+
+                if (next.deadlineMicros > nowMicros)
+                {
+                    nextDeadlineMicros = next.deadlineMicros;
+                    break;
+                }
+
+                waiting.poll().tryFailure(EpochTimeout.timeout(epoch, manager.node.agent()));
+            }
+        }
+        if (nextDeadlineMicros > 0)
+        {
+            RegisteredTimeout newTimeout = manager.timeouts.registerAt(this, nextDeadlineMicros, MICROSECONDS);
+            if (!timeoutUpdater.compareAndSet(this, curTimeout, newTimeout))
+                newTimeout.cancel();
+        }
+    }
+
+    @Override
+    public int stripe()
+    {
+        return (int) epoch;
+    }
+
+    static class WaitingForEpoch extends AsyncResults.SettableResult<Void>
+    {
+        final long deadlineMicros;
+        WaitingForEpoch(long deadlineMicros)
+        {
+            this.deadlineMicros = deadlineMicros;
+        }
+    }
+}

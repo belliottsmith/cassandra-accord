@@ -93,11 +93,13 @@ public class InformDurable extends RouteRequest<Reply> implements PreLoadContext
         Shard homeShard = homeShard(node, any, txnId, route.homeKey());
         Topology latest = any.current();
         Topologies homeTopology = new Topologies.Single(any, new Topology(txnId.epoch(), latest.removedIds(), latest.hardRemovedIds(), latest.staleIds(), homeShard));
+        // TODO (required): do not send to faulty
         node.send(homeShard.nodes, to -> new InformDurable(to, homeTopology, route.homeKeyOnlyRoute(), txnId, executeAt, txnId.epoch(), txnId.epoch(), durability));
     }
 
     public static void informAll(Node node, Topologies inform, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability)
     {
+        // TODO (required): do not send to faulty
         node.send(inform.nodes(), to -> new InformDurable(to, inform, route, txnId, executeAt, inform.oldestEpoch(), inform.currentEpoch(), durability));
     }
 
@@ -113,7 +115,7 @@ public class InformDurable extends RouteRequest<Reply> implements PreLoadContext
         }
         if (homeShardIndex < 0)
         {
-            homeEpochTopology = node.topology().globalForEpoch(homeEpoch);
+            homeEpochTopology = node.topology().active().globalForEpoch(homeEpoch);
             homeShardIndex = homeEpochTopology.indexForKey(homeKey);
         }
 

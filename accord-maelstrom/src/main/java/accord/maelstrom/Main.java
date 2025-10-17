@@ -181,7 +181,7 @@ public class Main
             sink = new StdoutSink(System::currentTimeMillis, scheduler, start, init.self, out, err);
             Journal journal = new Cluster.NoOpJournal();
             TimeService time = TimeService.ofNonMonotonic(System::currentTimeMillis, TimeUnit.MILLISECONDS);
-            on = new Node(init.self, sink, new SimpleConfigService(topology),
+            on = new Node(init.self, sink, new SimpleTopologyService(topology),
                           time, new UniqueTimeService.AtomicUniqueTime(time),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                           MaelstromAgent.INSTANCE, new DefaultRandom(), scheduler, SizeOfIntersectionSorter.SUPPLIER,

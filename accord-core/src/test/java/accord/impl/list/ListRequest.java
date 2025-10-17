@@ -50,7 +50,7 @@ import accord.messages.Request;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.topology.TopologyManager;
+import accord.topology.TopologyRetiredException;
 
 import javax.annotation.Nullable;
 
@@ -223,7 +223,7 @@ public class ListRequest implements Request
             if (txnId.epoch() < node.topology().minEpoch())
             {
                 node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null);
-                node.agent().onUncaughtException(new TopologyManager.TopologyRetiredException(txnId.epoch(), node.topology().minEpoch()));
+                node.agent().onUncaughtException(new TopologyRetiredException(txnId.epoch(), node.topology().minEpoch()));
                 return;
             }
 

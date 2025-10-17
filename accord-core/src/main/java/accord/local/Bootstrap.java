@@ -36,8 +36,10 @@ import accord.api.DataStore.StartingRangeFetch;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
+import accord.primitives.Routable.Domain;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.primitives.TxnId.Cardinality;
 import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
 import accord.utils.ReducingRangeMap;
@@ -117,7 +119,7 @@ class Bootstrap
 
         TxnId start(SafeCommandStore safeStore)
         {
-            globalSyncId = node.nextTxnIdWithDefaultFlags(ExclusiveSyncPoint, Routable.Domain.Range);
+            globalSyncId = node.nextTxnIdWithDefaultFlags(epoch, 0, ExclusiveSyncPoint, Domain.Range, Cardinality.Any);
             Invariants.require(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
 
             if (valid.isEmpty())
@@ -126,7 +128,7 @@ class Bootstrap
                 return globalSyncId;
             }
 
-            if (!node.topology().hasEpoch(globalSyncId.epoch()))
+            if (!node.topology().active().hasAtLeastEpoch(globalSyncId.epoch()))
             {
                 // Ignore timeouts fetching the epoch, always keep trying to bootstrap
                 node.withEpochAtLeast(globalSyncId.epoch(), null, (ignored, failure) -> commandStore.execute((PreLoadContext.Empty) () -> "Start Bootstrap", (Consumer<SafeCommandStore>) Attempt.this::start, (ignored1, failure2) -> {
@@ -391,7 +393,8 @@ class Bootstrap
 
                 commandStore.agent().ownershipEvents().onFailedBootstrap(attempt, "Fetch", missing, retry, fail, fetchOutcome);
             }
-            commandStore.agent().ownershipEvents().onSuccessfulBootstrap(commandStore, attempt, epoch, fetchedAndSafeToRead);
+            if (!fetchedAndSafeToRead.isEmpty())
+                commandStore.agent().ownershipEvents().onSuccessfulBootstrap(commandStore, attempt, epoch, fetchedAndSafeToRead);
         }
     }
 
@@ -400,8 +403,8 @@ class Bootstrap
     final CommandStore commandStore;
     final long epoch;
     // TODO (required): make sure this is triggered in event of partial expiration of work to do
-    final AsyncResult.Settable<Void> data = AsyncResults.settable();
-    final AsyncResult.Settable<Void> reads = AsyncResults.settable();
+    final AsyncResult.Settable<Void> data;
+    final AsyncResult.Settable<Void> reads;
     final Set<Attempt> inProgress = new DeterministicIdentitySet<>();
 
     final Ranges all;
@@ -421,6 +424,9 @@ class Bootstrap
         this.commandStore = commandStore;
         this.epoch = epoch;
         this.remaining = allValid = all = ranges;
+        String description = "Bootstrap " + ranges + " for epoch " + epoch + " in " + commandStore;
+        this.data = new AsyncResults.SettableWithDescription<>(description);
+        this.reads = new AsyncResults.SettableWithDescription<>(description);
     }
 
     TxnId start(SafeCommandStore safeStore0)

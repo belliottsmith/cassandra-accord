@@ -604,6 +604,12 @@ public class AsyncChains
             {
                 return executor.execute(new AsyncCallbacks.CallAndCallback<>(call, callback));
             }
+
+            @Override
+            public String toString()
+            {
+                return call.toString();
+            }
         };
     }
 

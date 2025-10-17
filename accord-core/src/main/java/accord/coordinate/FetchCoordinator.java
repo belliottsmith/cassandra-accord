@@ -152,7 +152,7 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRo
         this.fetchRanges = fetchRanges;
         // TODO (expected): prioritise nodes that were members in the "prior" epoch also
         //  (by prior, we mean the prior epoch affecting ownership of this shard, not the prior numerical epoch)
-        Topology topology = node.topology().forEpoch(ranges, syncPoint.syncId.epoch(), SHARE).get(0);
+        Topology topology = node.topology().active().forEpoch(ranges, syncPoint.syncId.epoch(), SHARE).get(0);
         this.stateMap = new SortedListMap<>(topology.nodes(), State[]::new);
         for (int i = 0 ; i < stateMap.domainSize() ; ++i)
         {

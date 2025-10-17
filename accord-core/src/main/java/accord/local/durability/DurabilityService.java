@@ -30,7 +30,7 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.ConfigurationService;
+import accord.api.TopologyListener;
 import accord.api.Timeouts.Timeout;
 import accord.local.Node;
 import accord.primitives.Range;
@@ -43,11 +43,10 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.async.AsyncResult;
-import accord.utils.async.AsyncResults;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-public class DurabilityService implements ConfigurationService.Listener
+public class DurabilityService implements TopologyListener
 {
     private static final Logger logger = LoggerFactory.getLogger(DurabilityService.class);
 
@@ -89,6 +88,7 @@ public class DurabilityService implements ConfigurationService.Listener
         {
             Invariants.require(!started);
             started = true;
+            node.topology().addListener(this);
         }
         Topology current = node.topology().current();
         shards.updateTopology(current);
@@ -99,9 +99,17 @@ public class DurabilityService implements ConfigurationService.Listener
 
     public void stop()
     {
+        synchronized (this)
+        {
+            if (!started)
+                return;
+
+            Invariants.require(started);
+            started = false;
+            node.topology().removeListener(this);
+        }
         shards.stop();
         global.stop();
-        started = false;
     }
 
     public AsyncResult<Void> close(String requestedBy, Txn.Kind kind, Ranges ranges, long timeoutDelay, TimeUnit timeoutUnits)
@@ -222,29 +230,19 @@ public class DurabilityService implements ConfigurationService.Listener
             next.reportSuccess();
     }
 
+
     @Override
-    public AsyncResult<Void> onTopologyUpdate(Topology topology)
+    public void onReceived(Topology topology)
     {
         shards.updateTopology(topology);
         global.updateTopology(topology);
-        return AsyncResults.success(null);
     }
 
     @Override
-    public void onRemoteSyncComplete(Node.Id node, long epoch)
-    {
-    }
-
-    @Override
-    public void onEpochClosed(Ranges ranges, long epoch)
-    {
-    }
-
-    @Override
-    public void onEpochRetired(Ranges retiredRanges, long epoch)
+    public void onEpochRetired(Ranges retiredRanges, long epoch, @Nullable Topology topology)
     {
         // No need to cancel work for ranges that are still active
-        if (!node.topology().isFullyRetired(retiredRanges))
+        if (!node.topology().active().isFullyRetired(retiredRanges))
             return;
 
         shards.retireRanges(retiredRanges, epoch);

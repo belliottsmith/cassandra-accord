@@ -73,7 +73,7 @@ public class PackedKeyTracker
         int start = roundSize * roundIndex;
         int end = Math.min((roundSize + 1) * roundIndex, route.size());
 
-        Ranges sliceRanges = instance.node().topology().globalForEpoch(txnId.epoch()).rangesForNode(from);
+        Ranges sliceRanges = instance.node().topology().active().globalForEpoch(txnId.epoch()).rangesForNode(from);
         Route<?> ready = route.slice(start, end)
                               .slice(sliceRanges);
 
