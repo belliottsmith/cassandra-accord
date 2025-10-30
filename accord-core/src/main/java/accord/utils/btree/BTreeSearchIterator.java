@@ -20,7 +20,7 @@ package accord.utils.btree;
 
 import java.util.Iterator;
 
-public interface BTreeSearchIterator<K, V> extends IndexedSearchIterator<K, V>, Iterator<V>
+public interface BTreeSearchIterator<K, V> extends IndexedSearchIterator<K, V>, Iterator<V>, PeekingSearchIterator<K, V>
 {
     /**
      * Reset this Iterator to its starting position

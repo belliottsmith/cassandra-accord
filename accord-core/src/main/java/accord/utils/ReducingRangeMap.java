@@ -376,7 +376,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return new ReducingRangeMap<>(range.endInclusive(), new RoutingKey[] { range.start(), range.end() }, (V[])new Object[] { value });
     }
 
-    public static <V, M extends ReducingRangeMap<V>> M create(Unseekables<?> keysOrRanges, V value, BuilderFactory<RoutingKey, V, M> builder)
+    protected static <V, M extends ReducingRangeMap<V>> M create(Unseekables<?> keysOrRanges, V value, BuilderFactory<RoutingKey, V, M> builder)
     {
         switch (keysOrRanges.domain())
         {
@@ -386,7 +386,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         }
     }
 
-    public static <V, M extends ReducingRangeMap<V>> M create(Seekables<?, ?> keysOrRanges, V value, BuilderFactory<RoutingKey, V, M> builder)
+    protected static <V, M extends ReducingRangeMap<V>> M create(Seekables<?, ?> keysOrRanges, V value, BuilderFactory<RoutingKey, V, M> builder)
     {
         switch (keysOrRanges.domain())
         {
@@ -396,7 +396,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         }
     }
 
-    public static <V, M extends ReducingRangeMap<V>> M create(AbstractRanges ranges, V value, BuilderFactory<RoutingKey, V, M> factory)
+    protected static <V, M extends ReducingRangeMap<V>> M create(AbstractRanges ranges, V value, BuilderFactory<RoutingKey, V, M> factory)
     {
         if (value == null)
             throw new IllegalArgumentException("value is null");
@@ -404,8 +404,8 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(ranges.get(0).endInclusive(), ranges.size() * 2);
         for (Range cur : ranges)
         {
-            builder.append(cur.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(cur.end(), null, (a, b) -> { throw new IllegalStateException(); });
+            builder.appendNoOverlap(cur.start(), value);
+            builder.appendNoOverlap(cur.end(), null);
         }
 
         return builder.build();
@@ -420,8 +420,8 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         for (int i = 0 ; i < keys.size() ; ++i)
         {
             Range range = keys.get(i).asRange();
-            builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(range.end(), null, (a, b) -> { throw new IllegalStateException(); });
+            builder.appendNoOverlap(range.start(), value);
+            builder.appendNoOverlap(range.end(), null);
         }
 
         return builder.build();
@@ -437,8 +437,8 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         {
             Range range = prev.asRange();
             builder = factory.create(prev.asRange().endInclusive(), keys.size() * 2);
-            builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(range.end(), null, (a, b) -> { throw new IllegalStateException(); });
+            builder.appendNoOverlap(range.start(), value);
+            builder.appendNoOverlap(range.end(), null);
         }
 
         for (int i = 1 ; i < keys.size() ; ++i)
@@ -448,8 +448,8 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
                 continue;
 
             Range range = unseekable.asRange();
-            builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(range.end(), null, (a, b) -> { throw new IllegalStateException(); });
+            builder.appendNoOverlap(range.start(), value);
+            builder.appendNoOverlap(range.end(), null);
             prev = unseekable;
         }
 

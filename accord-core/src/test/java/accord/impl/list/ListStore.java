@@ -43,6 +43,7 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Seekable;
+import accord.primitives.MinimalSyncPoint;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -85,10 +86,10 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     private static class FetchComplete
     {
         private final int storeId;
-        private final SyncPoint syncPoint;
+        private final MinimalSyncPoint syncPoint;
         private final Ranges ranges;
 
-        private FetchComplete(int storeId, SyncPoint syncPoint, Ranges ranges)
+        private FetchComplete(int storeId, MinimalSyncPoint syncPoint, Ranges ranges)
         {
             this.storeId = storeId;
             this.syncPoint = syncPoint;
@@ -341,7 +342,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
         return sb.toString();
     }
 
-    private static String format(SyncPoint sp)
+    private static String format(MinimalSyncPoint sp)
     {
         return String.format("(%s -> %s)", sp.syncId, sp.route);
     }

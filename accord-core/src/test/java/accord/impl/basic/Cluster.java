@@ -76,6 +76,7 @@ import accord.impl.basic.DelayedCommandStores.DelayedCommandStore;
 import accord.impl.basic.TestProgressLogs.TestProgressLog;
 import accord.impl.list.ListAgent;
 import accord.impl.list.ListStore;
+import accord.local.Catchup;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -108,6 +109,7 @@ import accord.topology.TopologyRandomizer;
 import accord.utils.Gens;
 import accord.utils.Invariants;
 import accord.utils.LazyToString;
+import accord.utils.QueueScheduler;
 import accord.utils.RandomSource;
 import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
@@ -177,55 +179,17 @@ public class Cluster
         }
     }
 
-    public class ClusterScheduler implements Scheduler
+    public class ClusterScheduler extends QueueScheduler
     {
-        final int source;
-
         ClusterScheduler(int source)
         {
-            this.source = source;
-        }
-
-        @Override
-        public void now(Runnable run)
-        {
-            run.run();
-        }
-
-        @Override
-        public Scheduled recurring(Runnable run, long delay, TimeUnit units)
-        {
-            return recurring(run, constant(delay), units);
-        }
-
-        @Override
-        public Scheduled once(Runnable run, long delay, TimeUnit units)
-        {
-            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, constant(delay), units, false);
-            pending.add(result, delay, units);
-            return result;
-        }
-
-        @Override
-        public Scheduled selfRecurring(Runnable run, long delay, TimeUnit units)
-        {
-            RecurringPendingRunnable result = new RecurringPendingRunnable(source, null, run, constant(delay), units, true);
-            pending.add(result, delay, units);
-            return result;
-        }
-
-        public Scheduled recurring(Runnable run, LongSupplier delay, TimeUnit units)
-        {
-            RecurringPendingRunnable result = new RecurringPendingRunnable(source, pending, run, delay, units, true);
-            pending.add(result, delay.getAsLong(), units);
-            return result;
+            super(source, pending);
         }
 
         public void onDone(Runnable run)
         {
             Cluster.this.onDone(run);
         }
-
     }
 
     final Map<MessageType, Stats> statsMap = new HashMap<>();
@@ -813,6 +777,7 @@ public class Cluster
 
                     // TODO (expected): we seem to hit Log exceotions when rebootstrapping, suggesting we are handling them poorly
                     stores.rebootstrap(node).invoke(node.agent());
+                    Catchup.catchup(node);
 
                     while (sinks.drain(getPendingPredicate(id, stores.all())));
 
@@ -828,6 +793,7 @@ public class Cluster
                     for (CommandStore store : stores.all())
                         ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
                     journal.replay(stores);
+                    Catchup.catchup(node);
 
                     // Re-enable safety checks
                     while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
@@ -1437,29 +1403,4 @@ public class Cluster
         return new BlockingTransaction(command.txnId(), command, store, blockedOn, blockedVia);
     }
 
-    public static class ConstantLongSupplier implements LongSupplier
-    {
-        final long v;
-
-        public ConstantLongSupplier(long v)
-        {
-            this.v = v;
-        }
-
-        @Override
-        public long getAsLong()
-        {
-            return v;
-        }
-
-        @Override
-        public String toString()
-        {
-            return "" + v;
-        }
-    }
-    private LongSupplier constant(long delay)
-    {
-        return new ConstantLongSupplier(delay);
-    }
 }

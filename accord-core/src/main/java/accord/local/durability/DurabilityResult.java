@@ -18,64 +18,62 @@
 
 package accord.local.durability;
 
-import java.util.Collection;
-
-import javax.annotation.Nullable;
-
 import accord.coordinate.FailureAccumulator;
-import accord.local.Node;
-import accord.local.durability.DurabilityService.SyncLocal;
-import accord.local.durability.DurabilityService.SyncRemote;
-import accord.primitives.Range;
-import accord.primitives.SyncPoint;
-import accord.utils.SortedArrays;
+import accord.primitives.Ranges;
+import accord.primitives.MinimalSyncPoint;
+import accord.utils.Invariants;
+import accord.utils.ReducingRangeMap;
 
 public class DurabilityResult
 {
-    public final SyncPoint<Range> syncPoint;
-    public final SyncLocal achievedLocal;
-    public final SyncRemote achievedRemote;
-    public final @Nullable Collection<Node.Id> including;
-    public final @Nullable Collection<Node.Id> excluding;
+    public final MinimalSyncPoint syncPoint;
+    public final ReducingRangeMap<DurabilityLevel> achieved;
+    public final DurabilityLevel min;
     public final Throwable failure;
 
-    public DurabilityResult(SyncPoint<Range> syncPoint, SyncLocal achievedLocal, SyncRemote achievedRemote, @Nullable Collection<Node.Id> including, @Nullable Collection<Node.Id> excluding, Throwable failure)
+    public DurabilityResult(MinimalSyncPoint syncPoint, DurabilityLevel result, Throwable failure)
+    {
+        this(syncPoint, ReducingRangeMap.create(syncPoint.route, result), failure);
+    }
+
+    public DurabilityResult(MinimalSyncPoint syncPoint, ReducingRangeMap<DurabilityLevel> achieved, Throwable failure)
     {
         this.syncPoint = syncPoint;
-        this.achievedLocal = achievedLocal;
-        this.achievedRemote = achievedRemote;
-        this.including = including;
-        this.excluding = excluding;
+        this.achieved = achieved;
         this.failure = failure;
+        this.min = achieved.foldl(DurabilityLevel::min);
     }
 
-    public DurabilityResult merge(DurabilityResult that)
+    public DurabilityResult min(DurabilityResult that)
     {
-        SyncLocal achievedLocal = min(this.achievedLocal, that.achievedLocal);
-        SyncRemote achievedRemote = min(this.achievedRemote, that.achievedRemote);
-        Collection<Node.Id> including = merge(this.including, that.including);
-        Collection<Node.Id> excluding = merge(this.excluding, that.excluding);
+        Invariants.require(this.syncPoint.syncId.equals(that.syncPoint.syncId));
         Throwable failure = this.failure == null ? that.failure
-                                 : that.failure == null ? this.failure
-                                        : FailureAccumulator.append(this.failure, that.failure);
-        return new DurabilityResult(syncPoint, achievedLocal, achievedRemote, including, excluding, failure);
+                                                 : that.failure == null ? this.failure
+                                                                        : FailureAccumulator.append(this.failure, that.failure);
+        return new DurabilityResult(syncPoint, ReducingRangeMap.merge(this.achieved, that.achieved, DurabilityLevel::min), failure);
     }
 
-    private static Collection<Node.Id> merge(Collection<Node.Id> a, Collection<Node.Id> b)
+    public DurabilityResult max(DurabilityResult that)
     {
-        return a == null ? b : b == null ? a :SortedArrays.SortedArrayList.copyUnsorted(a, Node.Id[]::new).with(SortedArrays.SortedArrayList.copyUnsorted(b, Node.Id[]::new));
+        Invariants.require(this.syncPoint.syncId.equals(that.syncPoint.syncId));
+        Throwable failure = this.failure == null || that.failure == null ? null : FailureAccumulator.append(this.failure, that.failure);
+        return new DurabilityResult(syncPoint, ReducingRangeMap.merge(this.achieved, that.achieved, DurabilityLevel::max), failure);
     }
 
     @Override
     public String toString()
     {
-        return syncPoint.syncId + " for " + syncPoint.route.toRanges()
-               + " achieved: (" + achievedLocal + ',' + achievedRemote
-               + ", including: " + including + ')';
+        return syncPoint.syncId + " achieved " + achieved;
     }
 
-    private static <E extends Enum<E>> E min(E a, E b)
+    public Ranges satisfies(DurabilityLevel require)
     {
-        return a.compareTo(b) <= 0 ? a : b;
+        if (require.isSatisfiedBy(min))
+            return syncPoint.route.toRanges();
+        return achieved.foldlWithBounds((l, rs, s, e) -> {
+            if (require.isSatisfiedBy(l))
+                rs = rs.with(Ranges.of(s.rangeFactory().newRange(s, e)));
+            return rs;
+        }, Ranges.EMPTY, ignore -> false);
     }
 }

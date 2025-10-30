@@ -25,9 +25,9 @@ import accord.api.DataStore.StartingRangeFetch;
 import accord.api.DataStore.FetchRanges;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
-import accord.primitives.FullRoute;
-import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
+import accord.primitives.Ranges;
+import accord.primitives.Route;
 import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.SortedList;
@@ -43,7 +43,7 @@ import static accord.utils.Invariants.illegalState;
  * This coordinates both the fetching of data, and the point-in-time that data will be safe to read,
  * i.e. some point-in-time known to occur after any entry in the data that was fetched.
  */
-public abstract class FetchCoordinator extends AbstractSimpleCoordination<FullRoute<?>>
+public abstract class FetchCoordinator extends AbstractSimpleCoordination<Route<?>>
 {
     /**
      * For each node, maintain what ranges have been requested, successfully retrieved or not, and whether we are

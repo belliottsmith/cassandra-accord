@@ -39,10 +39,10 @@ import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.ShardDistributor;
 import accord.primitives.FullRoute;
+import accord.primitives.SyncPoint;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
-import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -236,7 +236,7 @@ public class ShardDurability
                 start();
         }
 
-        synchronized void success(SyncPoint<Range> success, Ranges ranges)
+        synchronized void success(SyncPoint success, Ranges ranges)
         {
             Object requestedBy = null;
             if (activeRequest != null)

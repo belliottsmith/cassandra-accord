@@ -35,7 +35,6 @@ import accord.api.DataStore.FetchKind;
 import accord.api.DataStore.StartingRangeFetch;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.primitives.Ranges;
-import accord.primitives.Routable;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;

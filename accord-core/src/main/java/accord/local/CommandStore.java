@@ -169,6 +169,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     private int maxConflictsUpdates = 0;
     protected RangesForEpoch rangesForEpoch;
     protected @Nullable Ranges refuses;
+    List<SyncPointListener> syncPointListeners;
 
     /**
      * safeToRead is related to RedundantBefore, but a distinct concept.
@@ -1263,5 +1264,28 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public NodeCommandStoreService node()
     {
         return node;
+    }
+
+    void unsafeRegister(SyncPointListener listener)
+    {
+        Invariants.require(inStore());
+        List<SyncPointListener> newListeners = new ArrayList<>();
+        if (syncPointListeners != null)
+            newListeners.addAll(syncPointListeners);
+        newListeners.add(listener);
+        syncPointListeners = newListeners;
+    }
+
+    void unsafeUnregister(SyncPointListener listener)
+    {
+        Invariants.require(inStore());
+        if (syncPointListeners != null)
+        {
+            List<SyncPointListener> newListeners = new ArrayList<>(syncPointListeners);
+            newListeners.remove(listener);
+            if (newListeners.isEmpty())
+                newListeners = null;
+            syncPointListeners = newListeners;
+        }
     }
 }

@@ -364,7 +364,7 @@ public class RedundantStatus
         long unreadyMask = 0, leMask = 0;
         for (Property property : Property.values())
         {
-            if (!property.overrideWasOwned)
+            if (property.overrideWasOwned)
                 wasOwnedMask |= encodeAll(property);
             if (property.mergeWithUnready)
                 unreadyMask |= encodeAny(property);

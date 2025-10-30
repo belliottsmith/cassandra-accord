@@ -21,11 +21,14 @@ package accord.coordinate.tracking;
 import java.util.Set;
 
 import accord.local.Node;
+import accord.local.durability.DurabilityLevel;
 import accord.local.durability.DurabilityService.SyncLocal;
 import accord.local.durability.DurabilityService.SyncRemote;
 import accord.topology.Shard;
 import accord.topology.Topologies;
+import accord.topology.Topology;
 import accord.utils.Invariants;
+import accord.utils.ReducingRangeMap;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListSet;
 import org.agrona.collections.IntHashSet;
@@ -55,7 +58,8 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
     {
         static final IntHashSet EMPTY_SET = new IntHashSet();
 
-        protected final IntHashSet successes = new IntHashSet();
+        // TODO (expected): support partial success (but perhaps requires support also from execution)
+        protected final SortedListSet<Node.Id> including;
         protected final IntHashSet exclude;
         protected int waitingOnSuccess;
         protected int waitingOn;
@@ -63,6 +67,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
         public DurabilityShardTracker(SortedArrayList<Node.Id> exclude, Shard shard)
         {
             super(shard);
+            this.including = SortedListSet.noneOf(shard.nodes);
             if (!exclude.isEmpty() || !shard.hardRemoved.isEmpty())
             {
                 this.exclude = new IntHashSet();
@@ -84,10 +89,10 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
 
         public ShardOutcome<? super DurabilityTracker> onSuccess(Node.Id from)
         {
-            successes.add(from.id);
+            including.add(from);
             if (!exclude.contains(from.id))
                 --waitingOnSuccess;
-            return onResponse(successes.size() == shard.slowQuorumSize);
+            return onResponse(including.size() == shard.slowQuorumSize);
         }
 
         // return true iff hasFailed()
@@ -111,12 +116,12 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
 
         public boolean hasQuorumSuccess()
         {
-            return successes.size() >= shard.slowQuorumSize;
+            return including.size() >= shard.slowQuorumSize;
         }
 
         public boolean hasMinorityQuorumSuccess()
         {
-            return successes.size() >= shard.minorityQuorumSize();
+            return including.size() >= shard.minorityQuorumSize();
         }
 
         boolean hasFailed()
@@ -128,9 +133,24 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
         public String summarise()
         {
             if (exclude == null)
-                return successes.size() + "/" + shard.rf;
+                return including.size() + "/" + shard.rf;
 
-            return successes.size() + "/" + (shard.rf - exclude.size()) + '(' + shard.rf + ')';
+            return including.size() + "/" + (shard.rf - exclude.size()) + '(' + shard.rf + ')';
+        }
+
+        DurabilityLevel result(Node.Id self)
+        {
+            SyncLocal local = including.contains(self) || !shard.nodes.contains(self) ? SyncLocal.Self : SyncLocal.NoLocal;
+            SyncRemote remote;
+            if (hasSucceeded()) remote = SyncRemote.All;
+            else if (hasQuorumSuccess()) remote = SyncRemote.Quorum;
+            else if (hasMinorityQuorumSuccess()) remote = SyncRemote.MinorityQuorum;
+            else remote = SyncRemote.NoRemote;
+
+            SortedArrayList<Node.Id> including = SortedArrayList.copySorted(this.including, Node.Id[]::new);
+            SortedArrayList<Node.Id> excluding = shard.nodes.without(including);
+
+            return new DurabilityLevel(local, remote, including, excluding);
         }
     }
 
@@ -190,6 +210,41 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
     public Set<Node.Id> excluding()
     {
         return topologies.nodes().without(successes::contains);
+    }
+
+    public ReducingRangeMap<DurabilityLevel> results(Node.Id self)
+    {
+        boolean endInclusive = false;
+        for (int i = 0 ; i < topologies.size() ; ++i)
+        {
+            Topology topology = topologies.get(i);
+            if (topology.ranges().isEmpty())
+                continue;
+
+            endInclusive = topology.ranges().get(0).endInclusive();
+            break;
+        }
+
+        ReducingRangeMap<DurabilityLevel> result = null;
+        ReducingRangeMap.Builder<DurabilityLevel> builder = new ReducingRangeMap.Builder<>(endInclusive, trackers.length);
+        for (int topologyIndex = 0 ; topologyIndex < topologies.size() ; ++topologyIndex)
+        {
+            for (int i = topologyOffset(topologyIndex), max = topologyOffset(topologyIndex + 1); i < max ; ++i)
+            {
+                DurabilityShardTracker tracker = trackers[i];
+                if (tracker == null)
+                    continue;
+
+                builder.appendNoOverlap(tracker.shard.range.start(), tracker.result(self));
+                builder.appendNoOverlap(tracker.shard.range.end(), null);
+            }
+
+            ReducingRangeMap<DurabilityLevel> add = builder.build();
+            if (result == null) result = add;
+            else result = ReducingRangeMap.merge(result, add, DurabilityLevel::min);
+            builder.clear();
+        }
+        return result;
     }
 
     public boolean hasQuorumSuccess()

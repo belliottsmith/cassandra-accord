@@ -112,6 +112,12 @@ class SimpleBitSetTest
         }
 
         @Override
+        public void setRange(int from, int to)
+        {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
         public boolean unset(int i)
         {
             boolean expected = model.get(i);

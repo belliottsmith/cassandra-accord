@@ -36,13 +36,14 @@
         </filter>
     </appender>
 
+    <logger name="accord.local.CommandStore" level="ERROR"/>
     <logger name="accord.local.CommandStores" level="ERROR"/>
     <logger name="accord.local.durability.DurabilityService" level="ERROR"/>
-    <logger name="accord.impl.progresslog.DefaultProgressLog" level="ERROR"/>
+    <logger name="accord.local.durability.DurabilityRequest" level="ERROR"/>
     <logger name="accord.local.durability.DurabilityQueue" level="ERROR"/>
     <logger name="accord.local.durability.ShardDurability" level="ERROR"/>
     <logger name="accord.local.durability.GlobalDurability" level="ERROR"/>
-    <logger name="accord.local.CommandStore" level="ERROR"/>
+    <logger name="accord.impl.progresslog.DefaultProgressLog" level="ERROR"/>
 
     <root level="INFO">
         <appender-ref ref="FILE"/>
