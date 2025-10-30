@@ -16,22 +16,9 @@
  * limitations under the License.
  */
 
-package accord.utils;
+package accord.local;
 
-public interface SimpleBitSet
+public interface SyncPointListener
 {
-    boolean get(int i);
-    boolean set(int i);
-    void setRange(int from, int to);
-    boolean unset(int i);
-    void clear();
-    boolean isEmpty();
-    int nextSetBit(int fromIndex);
-    int getSetBitCount();
-
-    static SimpleBitSet allocate(int size)
-    {
-        if (size <= 64) return new SmallBitSet();
-        else return new LargeBitSet(size);
-    }
+    void update(SafeCommandStore safeStore, Command command);
 }

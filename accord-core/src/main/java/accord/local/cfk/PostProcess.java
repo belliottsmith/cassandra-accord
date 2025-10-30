@@ -152,7 +152,6 @@ abstract class PostProcess
      */
     static CommandsForKeyUpdate notifyManagedUnready(CommandsForKey prev, QuickBounds newBounds, CommandsForKeyUpdate update)
     {
-        Timestamp maxApplied = null;
         TxnId[] notify = NO_TXNIDS;
         int notifyCount = 0;
         // <= because maxAppliedWrite is actually maxAppliedOrUnreadyWrite
@@ -166,7 +165,6 @@ abstract class PostProcess
                 if (notifyCount == notify.length)
                     notify = cachedTxnIds().resize(notify, notifyCount, Math.max(notifyCount * 2, 8));
                 notify[notifyCount++] = txn.plainTxnId();
-                maxApplied = txn.executeAt;
             }
         }
 

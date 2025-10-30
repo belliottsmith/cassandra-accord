@@ -414,7 +414,7 @@ public class AsyncChains
             this.reducer = reducer;
         }
 
-        public void add(AsyncChain<V> add)
+        public synchronized void add(AsyncChain<V> add)
         {
             inputs().add(add);
         }

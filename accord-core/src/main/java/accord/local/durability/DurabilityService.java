@@ -33,9 +33,8 @@ import org.slf4j.LoggerFactory;
 import accord.api.TopologyListener;
 import accord.api.Timeouts.Timeout;
 import accord.local.Node;
-import accord.primitives.Range;
-import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
+import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -43,6 +42,7 @@ import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -121,7 +121,7 @@ public class DurabilityService implements TopologyListener
     {
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, SyncLocal.NoLocal, SyncRemote.NoRemote, null, startedAt, timeoutAt)).result;
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(SyncLocal.NoLocal, SyncRemote.NoRemote, null, null), startedAt, timeoutAt)).result;
     }
 
     public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
@@ -131,9 +131,12 @@ public class DurabilityService implements TopologyListener
 
     public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
+        if (ranges.isEmpty())
+            return AsyncResults.success(null);
+
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, local, remote, null, startedAt, timeoutAt)).result;
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(local, remote, null, null), startedAt, timeoutAt)).result;
     }
 
     public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
@@ -143,19 +146,22 @@ public class DurabilityService implements TopologyListener
 
     public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
+        if (ranges.isEmpty())
+            return AsyncResults.success(null);
+
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
         SortedArrayList<Node.Id> sortedInclude = include == null || include instanceof SortedArrayList<?>
                                                  ? (SortedArrayList<Node.Id>) include
                                                  : SortedArrayList.copyUnsorted(include, Node.Id[]::new);
-        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, local, remote, sortedInclude, startedAt, timeoutAt)).result;
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(local, remote, sortedInclude, null), startedAt, timeoutAt)).result;
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, SyncPoint<Range> syncPoint, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<Void> sync(Object requestedBy, SyncPoint syncPoint, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        DurabilityRequest request = new DurabilityRequest(requestedBy, syncPoint.syncId.kind(), syncPoint.syncId, syncPoint.route.toRanges(), local, remote, null, startedAt, timeoutAt);
+        DurabilityRequest request = new DurabilityRequest(requestedBy, syncPoint.syncId.kind(), syncPoint.syncId, syncPoint.route.toRanges(), new DurabilityLevel(local, remote, null, null), startedAt, timeoutAt);
         logger.info("Requesting durability {}", request);
         register(request);
         shards.queue().submit(syncPoint, request);

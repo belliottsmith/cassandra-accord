@@ -67,11 +67,11 @@ public class GetDurableBefore implements Request, PreLoadContext
 
     public static class DurableBeforeReply implements Reply
     {
-        public final DurableBefore durableBeforeMap;
+        public final DurableBefore durableBefore;
 
-        public DurableBeforeReply(DurableBefore durableBeforeMap)
+        public DurableBeforeReply(DurableBefore durableBefore)
         {
-            this.durableBeforeMap = durableBeforeMap;
+            this.durableBefore = durableBefore;
         }
 
         @Override
@@ -83,7 +83,7 @@ public class GetDurableBefore implements Request, PreLoadContext
         @Override
         public String toString()
         {
-            return durableBeforeMap.toString();
+            return durableBefore.toString();
         }
     }
 }

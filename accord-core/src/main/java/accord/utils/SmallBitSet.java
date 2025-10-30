@@ -48,6 +48,12 @@ public class SmallBitSet implements SimpleBitSet
         return result;
     }
 
+    @Override
+    public void setRange(int from, int to)
+    {
+        bits |= ~(-1L << to) & (-1L << from);
+    }
+
     public boolean get(int i)
     {
         long bit = bit(i);

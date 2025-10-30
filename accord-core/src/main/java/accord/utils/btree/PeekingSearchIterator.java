@@ -15,23 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package accord.utils.btree;
 
-package accord.utils;
-
-public interface SimpleBitSet
+public interface PeekingSearchIterator<K, V> extends SearchIterator<K, V>
 {
-    boolean get(int i);
-    boolean set(int i);
-    void setRange(int from, int to);
-    boolean unset(int i);
-    void clear();
-    boolean isEmpty();
-    int nextSetBit(int fromIndex);
-    int getSetBitCount();
+    /**
+     * @return true if iterator has any elements left, false otherwise
+     */
+    boolean hasNext();
 
-    static SimpleBitSet allocate(int size)
-    {
-        if (size <= 64) return new SmallBitSet();
-        else return new LargeBitSet(size);
-    }
+    V next();
+
+    V peek();
 }

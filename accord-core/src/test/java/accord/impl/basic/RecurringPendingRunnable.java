@@ -23,7 +23,7 @@ import java.util.function.LongSupplier;
 
 import accord.api.Scheduler.Scheduled;
 
-class RecurringPendingRunnable implements PendingRunnable, Scheduled
+public class RecurringPendingRunnable implements PendingRunnable, Scheduled
 {
     final int source;
     final PendingQueue requeue;
@@ -33,7 +33,7 @@ class RecurringPendingRunnable implements PendingRunnable, Scheduled
     Runnable run;
     Runnable onCancellation;
 
-    RecurringPendingRunnable(int source, PendingQueue requeue, Runnable run, LongSupplier delay, TimeUnit units, boolean isRecurring)
+    public RecurringPendingRunnable(int source, PendingQueue requeue, Runnable run, LongSupplier delay, TimeUnit units, boolean isRecurring)
     {
         this.source = source;
         this.requeue = requeue;

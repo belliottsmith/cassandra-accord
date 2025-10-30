@@ -463,6 +463,12 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
             return safeToAdd;
         }
 
+
+        public void appendNoOverlap(K start, @Nullable V value)
+        {
+            append(start, value, (a, b) -> { throw new IllegalStateException("Inputs should not overlap: " + a + " vs " + b); });
+        }
+
         /**
          * null is a valid value to represent no knowledge, and is the *expected* final value, representing
          * the bound of our knowledge (any higher key will find no associated information)
@@ -535,6 +541,13 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
                 Invariants.require(starts.size() == values.size() + 1);
             }
             return buildInternal();
+        }
+
+        public void clear()
+        {
+            values.clear();
+            starts.clear();
+            safeToAdd = null;
         }
     }
 

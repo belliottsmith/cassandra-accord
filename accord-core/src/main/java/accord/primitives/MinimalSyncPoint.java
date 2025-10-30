@@ -26,18 +26,48 @@ package accord.primitives;
  * so while these are processed much like a transaction, they are invisible to real transactions which
  * may proceed before this is witnessed by the node processing it.
  */
-public class SyncPoint extends PartialSyncPoint
+public class MinimalSyncPoint
 {
     public static class SerializationSupport
     {
-        public static SyncPoint construct(TxnId syncId, Timestamp executeAt, FullRangeRoute fullRoute, Deps waitFor)
+        public static MinimalSyncPoint construct(TxnId syncId, Timestamp executeAt, RangeRoute route)
         {
-            return new SyncPoint(syncId, executeAt, fullRoute, waitFor);
+            return new MinimalSyncPoint(syncId, executeAt, route);
         }
     }
 
-    public SyncPoint(TxnId syncId, Timestamp executeAt, FullRangeRoute fullRoute, Deps waitFor)
+    public final TxnId syncId;
+    public final Timestamp executeAt;
+    public final RangeRoute route;
+
+    public MinimalSyncPoint(TxnId syncId, Timestamp executeAt, RangeRoute route)
     {
-        super(syncId, executeAt, fullRoute, fullRoute, waitFor);
+        this.syncId = syncId;
+        this.executeAt = executeAt;
+        this.route = route;
+    }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        MinimalSyncPoint syncPoint = (MinimalSyncPoint) o;
+        return syncId.equals(syncPoint.syncId) && route.equals(syncPoint.route);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public String toString()
+    {
+        return "SyncPoint{" +
+               "syncId=" + syncId +
+               ", scope=" + route +
+               '}';
     }
 }

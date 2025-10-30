@@ -38,12 +38,14 @@ import accord.messages.PreAccept.PreAcceptOk;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.PartialSyncPoint;
 import accord.primitives.SyncPoint;
+import accord.primitives.Range;
+import accord.primitives.Ranges;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekable;
-import accord.primitives.Unseekables;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
@@ -80,53 +82,53 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         this.adapter = adapter;
     }
 
-    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> exclusive(Node node, Unseekables<U> keysOrRanges)
+    public static AsyncChain<SyncPoint> exclusive(Node node, Ranges ranges)
     {
-        return coordinate(node, ExclusiveSyncPoint, keysOrRanges, Adapters.exclusiveSyncPoint());
+        return coordinate(node, ExclusiveSyncPoint, ranges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> exclusive(Node node, TxnId txnId, Unseekables<U> keysOrRanges)
+    public static AsyncChain<SyncPoint> exclusive(Node node, TxnId txnId, Ranges ranges)
     {
-        return coordinate(node, txnId, keysOrRanges, Adapters.exclusiveSyncPoint());
+        return coordinate(node, txnId, ranges, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> exclusive(Node node, TxnId txnId, FullRoute<U> route)
-    {
-        return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
-    }
-
-    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> executeAtQuorum(Node node, Unseekables<U> keysOrRanges)
-    {
-        return coordinate(node, ExclusiveSyncPoint, keysOrRanges, Adapters.exclusiveSyncPoint());
-    }
-
-    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> executeAtQuorum(Node node, TxnId txnId, FullRoute<U> route)
+    public static AsyncChain<SyncPoint> exclusive(Node node, TxnId txnId, FullRoute<Range> route)
     {
         return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
     }
 
-    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static AsyncChain<SyncPoint> executeAtQuorum(Node node, Ranges ranges)
+    {
+        return coordinate(node, ExclusiveSyncPoint, ranges, Adapters.exclusiveSyncPoint());
+    }
+
+    public static AsyncChain<SyncPoint> executeAtQuorum(Node node, TxnId txnId, FullRoute<Range> route)
+    {
+        return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
+    }
+
+    public static AsyncChain<SyncPoint> coordinate(Node node, Txn.Kind kind, Ranges ranges, SyncPointAdapter<SyncPoint> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
-        TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, keysOrRanges.domain(), cardinality(keysOrRanges));
-        return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, keysOrRanges, adapter));
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, ranges.domain(), cardinality(ranges));
+        return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, ranges, adapter));
     }
 
-    public static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, Txn.Kind kind, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
+    public static AsyncChain<SyncPoint> coordinate(Node node, Txn.Kind kind, FullRoute<Range> route, SyncPointAdapter<SyncPoint> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
         TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, route.domain(), cardinality(route));
         return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, route, adapter));
     }
 
-    private static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, TxnId txnId, Unseekables<U> keysOrRanges, SyncPointAdapter<SyncPoint<U>> adapter)
+    private static AsyncChain<SyncPoint> coordinate(Node node, TxnId txnId, Ranges ranges, SyncPointAdapter<SyncPoint> adapter)
     {
         Invariants.requireArgument(txnId.isSyncPoint());
-        FullRoute<U> route = (FullRoute<U>) node.computeRoute(txnId, keysOrRanges);
+        FullRoute<Range> route = (FullRoute<Range>) node.computeRoute(txnId, ranges);
         return coordinate(node, txnId, route, adapter);
     }
 
-    private static <U extends Unseekable> AsyncChain<SyncPoint<U>> coordinate(Node node, TxnId txnId, FullRoute<U> route, SyncPointAdapter<SyncPoint<U>> adapter)
+    private static AsyncChain<SyncPoint> coordinate(Node node, TxnId txnId, FullRoute<Range> route, SyncPointAdapter<SyncPoint> adapter)
     {
         try
         {
@@ -138,7 +140,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
             return new AsyncChains.Head<>()
             {
                 @Override
-                protected @Nullable Cancellable start(BiConsumer<? super SyncPoint<U>, Throwable> callback)
+                protected @Nullable Cancellable start(BiConsumer<? super SyncPoint, Throwable> callback)
                 {
                     new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter, callback)
                     .start();
@@ -189,31 +191,31 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         }
     }
 
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint)
+    public static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint)
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
-        Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route(), SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+        Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
         sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
     }
 
-    public static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, long minEpoch, long maxEpoch)
+    public static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint, long minEpoch, long maxEpoch)
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
-        Topologies topologies = node.topology().active().preciseEpochs(syncPoint.route(), minEpoch, maxEpoch, SHARE);
+        Topologies topologies = node.topology().active().preciseEpochs(syncPoint.route, minEpoch, maxEpoch, SHARE);
         sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
     }
 
-    private static void sendApply(Node node, Node.Id to, SyncPoint<?> syncPoint, Topologies participates, Ballot ballot)
+    private static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint, Topologies participates, Ballot ballot)
     {
         TxnId txnId = syncPoint.syncId;
         Timestamp executeAt = syncPoint.executeAt;
         Txn txn = node.agent().emptySystemTxn(txnId.kind(), txnId.domain());
         Deps deps = syncPoint.waitFor;
-        FullRoute<?> route = syncPoint.route;
+        Route<?> route = syncPoint.route;
         Result result = txn.result(txnId, executeAt, null);
-        Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, ballot, route, txn, executeAt, deps, null, result, route, ExecuteFlags.none());
+        Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, ballot, route, txn, executeAt, deps, null, result, syncPoint.fullRoute, ExecuteFlags.none());
         node.send(to, apply);
     }
 }

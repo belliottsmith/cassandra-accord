@@ -22,7 +22,7 @@ import accord.local.SafeCommandStore;
 import accord.primitives.AbstractRanges;
 import accord.primitives.Route;
 import accord.primitives.Status.Durability.HasOutcome;
-import accord.primitives.SyncPoint;
+import accord.primitives.MinimalSyncPoint;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
@@ -35,20 +35,20 @@ import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 
 public class SetShardDurable extends NoWaitRequest<Route<?>, SimpleReply>
 {
-    public final SyncPoint exclusiveSyncPoint;
+    public final MinimalSyncPoint syncPoint;
     public final HasOutcome durability;
 
-    public SetShardDurable(SyncPoint exclusiveSyncPoint, HasOutcome durability)
+    public SetShardDurable(MinimalSyncPoint syncPoint, HasOutcome durability)
     {
-        super(exclusiveSyncPoint.syncId, exclusiveSyncPoint.route);
-        this.exclusiveSyncPoint = exclusiveSyncPoint;
+        super(syncPoint.syncId, syncPoint.route);
+        this.syncPoint = syncPoint;
         this.durability = durability;
         Invariants.require(durability.compareTo(Quorum) >= 0);
     }
 
     private TxnId syncIdWithFlags()
     {
-        return ((TxnId) exclusiveSyncPoint.executeAt).addFlag(SHARD_BOUND);
+        return ((TxnId) syncPoint.executeAt).addFlag(SHARD_BOUND);
     }
 
     @Override
@@ -56,7 +56,7 @@ public class SetShardDurable extends NoWaitRequest<Route<?>, SimpleReply>
     {
         Invariants.require(durability.compareTo(Quorum) >= 0);
         TxnId syncIdWithFlags = syncIdWithFlags();
-        node.markDurable(exclusiveSyncPoint.route.toRanges(), syncIdWithFlags, durability.compareTo(Universal) >= 0 ? syncIdWithFlags : TxnId.NONE)
+        node.markDurable(syncPoint.route.toRanges(), syncIdWithFlags, durability.compareTo(Universal) >= 0 ? syncIdWithFlags : TxnId.NONE)
         .invoke((success, fail) -> {
             if (fail != null) node.reply(replyTo, replyContext, null, fail);
             else node.commandStores().mapReduceConsume(waitForEpoch(), waitForEpoch(), this);
@@ -67,7 +67,7 @@ public class SetShardDurable extends NoWaitRequest<Route<?>, SimpleReply>
     @Override
     public SimpleReply applyInternal(SafeCommandStore safeStore)
     {
-        safeStore.commandStore().markShardDurable(safeStore, syncIdWithFlags(), ((AbstractRanges) exclusiveSyncPoint.route).toRanges(), durability);
+        safeStore.commandStore().markShardDurable(safeStore, syncIdWithFlags(), ((AbstractRanges) syncPoint.route).toRanges(), durability);
         return Ok;
     }
 
@@ -91,7 +91,7 @@ public class SetShardDurable extends NoWaitRequest<Route<?>, SimpleReply>
     @Override
     public String toString()
     {
-        return "SetShardDurable{" + exclusiveSyncPoint + '}';
+        return "SetShardDurable{" + syncPoint + '}';
     }
 
     @Override
@@ -103,6 +103,6 @@ public class SetShardDurable extends NoWaitRequest<Route<?>, SimpleReply>
     @Override
     public long waitForEpoch()
     {
-        return exclusiveSyncPoint.syncId.epoch();
+        return syncPoint.syncId.epoch();
     }
 }

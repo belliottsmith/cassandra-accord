@@ -290,6 +290,13 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (!updated.txnId().isSyncPoint() || updated.txnId().domain() != Range) return;
         if (updated.route() == null) return;
 
+        List<SyncPointListener> listeners = commandStore().syncPointListeners;
+        if (listeners != null)
+        {
+            for (SyncPointListener listener : listeners)
+                listener.update(this, updated);
+        }
+
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
 
@@ -588,7 +595,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         return commandStore().unsafeGetBootstrapBeganAt();
     }
 
-    protected NavigableMap<Timestamp, Ranges> safeToReadAt()
+    public NavigableMap<Timestamp, Ranges> safeToReadAt()
     {
         return commandStore().unsafeGetSafeToRead();
     }
@@ -648,5 +655,15 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     public void notifyListeners(SafeCommand safeCommand, Command prev)
     {
         commandStore().listeners.notify(this, safeCommand, prev);
+    }
+
+    public void register(SyncPointListener syncPointListener)
+    {
+        commandStore().unsafeRegister(syncPointListener);
+    }
+
+    public void unregister(SyncPointListener syncPointListener)
+    {
+        commandStore().unsafeUnregister(syncPointListener);
     }
 }

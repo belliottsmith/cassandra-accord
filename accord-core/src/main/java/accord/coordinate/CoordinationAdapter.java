@@ -30,19 +30,21 @@ import accord.coordinate.tracking.PreAcceptTracker;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.durability.DurabilityResult;
+import accord.local.durability.DurabilityLevel;
 import accord.messages.Accept;
 import accord.messages.Apply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
+import accord.primitives.FullRangeRoute;
 import accord.primitives.FullRoute;
-import accord.primitives.Range;
+import accord.primitives.SyncPoint;
+import accord.primitives.RangeRoute;
 import accord.primitives.Routable;
 import accord.primitives.Route;
-import accord.primitives.SyncPoint;
+import accord.primitives.MinimalSyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.primitives.Unseekable;
 import accord.primitives.Writes;
 import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
@@ -56,8 +58,6 @@ import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.SLOW;
-import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
-import static accord.local.durability.DurabilityService.SyncRemote.NoRemote;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.messages.Apply.Kind.Minimal;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -115,7 +115,7 @@ public interface CoordinationAdapter<R>
             return TxnAdapter.RECOVERY;
         }
 
-        public static <U extends Unseekable> SyncPointAdapter<SyncPoint<U>> exclusiveSyncPoint()
+        public static SyncPointAdapter<SyncPoint> exclusiveSyncPoint()
         {
             return ExclusiveSyncPointAdapter.INSTANCE;
         }
@@ -406,21 +406,21 @@ public interface CoordinationAdapter<R>
                 }
                 if (txnId.is(Routable.Domain.Range))
                 {
-                    SyncPoint<Range> syncPoint = new SyncPoint<>(txnId, executeAt, deps, (FullRoute<Range>)route);
+                    MinimalSyncPoint syncPoint = new MinimalSyncPoint(txnId, executeAt, (RangeRoute) route);
                     node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
-                    node.durability().report(new DurabilityResult(syncPoint, NoLocal, NoRemote, null, null, null));
+                    node.durability().report(new DurabilityResult(syncPoint, DurabilityLevel.NONE, null));
                 }
             }
         }
 
-        static class ExclusiveSyncPointAdapter<U extends Unseekable> extends AbstractExclusiveSyncPointAdapter<SyncPoint<U>>
+        static class ExclusiveSyncPointAdapter extends AbstractExclusiveSyncPointAdapter<SyncPoint>
         {
             static final ExclusiveSyncPointAdapter INSTANCE = new ExclusiveSyncPointAdapter();
 
             @Override
-            void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super SyncPoint<U>, Throwable> callback)
+            void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super SyncPoint, Throwable> callback)
             {
-                SyncPoint<U> syncPoint = new SyncPoint<>(txnId, executeAt, deps, (FullRoute<U>)route);
+                SyncPoint syncPoint = new SyncPoint(txnId, executeAt, (FullRangeRoute)route, deps);
                 if (callback != null)
                 {
                     callback.accept(syncPoint, null);
@@ -428,7 +428,7 @@ public interface CoordinationAdapter<R>
                 if (txnId.is(Routable.Domain.Range))
                 {
                     node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
-                    node.durability().report(new DurabilityResult((SyncPoint<Range>) syncPoint, NoLocal, NoRemote, null, null, null));
+                    node.durability().report(new DurabilityResult(syncPoint, DurabilityLevel.NONE, null));
                 }
             }
         }

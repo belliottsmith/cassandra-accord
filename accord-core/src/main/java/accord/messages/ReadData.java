@@ -477,7 +477,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
 
     static Ranges unavailable(SafeCommandStore safeStore, Command command)
     {
-        return unavailable(command.txnId(), command.executeAtIfKnown(), command.route(), safeStore.ranges(), safeStore.commandStore().unsafeGetSafeToRead());
+        return unavailable(command.txnId(), command.executeAtIfKnown(), command.route(), safeStore.ranges(), safeStore.safeToReadAt());
     }
 
     Ranges unavailable(CommandStore unsafeStore)

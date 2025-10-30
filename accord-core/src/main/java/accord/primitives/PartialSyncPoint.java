@@ -26,18 +26,48 @@ package accord.primitives;
  * so while these are processed much like a transaction, they are invisible to real transactions which
  * may proceed before this is witnessed by the node processing it.
  */
-public class SyncPoint extends PartialSyncPoint
+public class PartialSyncPoint extends MinimalSyncPoint
 {
     public static class SerializationSupport
     {
-        public static SyncPoint construct(TxnId syncId, Timestamp executeAt, FullRangeRoute fullRoute, Deps waitFor)
+        public static PartialSyncPoint construct(TxnId syncId, Timestamp executeAt, RangeRoute route, FullRangeRoute fullRoute, Deps waitFor)
         {
-            return new SyncPoint(syncId, executeAt, fullRoute, waitFor);
+            return new PartialSyncPoint(syncId, executeAt, route, fullRoute, waitFor);
         }
     }
 
-    public SyncPoint(TxnId syncId, Timestamp executeAt, FullRangeRoute fullRoute, Deps waitFor)
+    public final FullRangeRoute fullRoute;
+    public final Deps waitFor;
+
+    public PartialSyncPoint(TxnId syncId, Timestamp executeAt, RangeRoute route, FullRangeRoute fullRoute, Deps waitFor)
     {
-        super(syncId, executeAt, fullRoute, fullRoute, waitFor);
+        super(syncId, executeAt, route);
+        this.fullRoute = fullRoute;
+        this.waitFor = waitFor;
+    }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (this == o) return true;
+        if (!super.equals(o)) return false;
+        PartialSyncPoint syncPoint = (PartialSyncPoint) o;
+        return waitFor.equals(syncPoint.waitFor);
+    }
+
+    public PartialSyncPoint without(AbstractRanges ranges)
+    {
+        RangeRoute route = this.route.without((Unseekables<?>) ranges);
+        return new PartialSyncPoint(syncId, executeAt, route, fullRoute, waitFor);
+    }
+
+    @Override
+    public String toString()
+    {
+        return getClass().getSimpleName() + "{" +
+               "syncId=" + syncId +
+               ", scope=" + route +
+               ", waitFor=" + waitFor +
+               '}';
     }
 }

@@ -214,7 +214,7 @@ public class GlobalDurability implements Callback<Object>
     {
         --inflight;
         if (reply instanceof DurableBeforeReply)
-            node.markDurable(((DurableBeforeReply)reply).durableBeforeMap);
+            node.markDurable(((DurableBeforeReply)reply).durableBefore);
     }
 
     @Override

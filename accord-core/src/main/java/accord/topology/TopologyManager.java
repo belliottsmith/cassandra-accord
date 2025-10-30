@@ -233,7 +233,7 @@ public class TopologyManager
             long epoch = topology.epoch;
             if (epoch <= active.currentEpoch)
             {
-                logger.info("Ignoring topology for epoch {} which is behind our latest epoch {}", epoch, active.currentEpoch);
+                logger.debug("Ignoring topology for epoch {} which is behind our latest epoch {}", epoch, active.currentEpoch);
                 return;
             }
 
@@ -400,7 +400,9 @@ public class TopologyManager
             if (pending.topology() != null || pending.epoch < active.currentEpoch)
                 return;
 
-            Invariants.require(pending.fetching == null || pending.fetching.isDone());
+            if (pending.fetching != null && !pending.fetching.isDone())
+                return;
+            
             pending.fetching = topologyService.fetchTopologyForEpoch(pending.epoch);
         }
 

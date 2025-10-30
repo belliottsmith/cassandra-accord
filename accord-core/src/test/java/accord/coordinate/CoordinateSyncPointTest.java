@@ -39,7 +39,7 @@ import accord.primitives.PartialDeps;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
-import accord.primitives.SyncPoint;
+import accord.primitives.MinimalSyncPoint;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
@@ -97,7 +97,7 @@ class CoordinateSyncPointTest
         awaitApplied(n1, removed);
     }
 
-    private static SyncPoint<Range> awaitApplied(Node node, Range removed)
+    private static MinimalSyncPoint awaitApplied(Node node, Range removed)
     {
         var await = CoordinateSyncPoint.exclusive(node, new TxnId(1, node.now(), 0, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
                                        .flatMap(syncPoint ->
