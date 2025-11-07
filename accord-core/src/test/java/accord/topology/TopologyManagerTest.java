@@ -27,6 +27,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
@@ -78,7 +79,7 @@ public class TopologyManagerTest
     private static final Node.Id ID = new Node.Id(1);
 
     @Test
-    void rangeMovement()
+    void rangeMovement() throws TopologyException
     {
         Topology t1 = topology(1,
                                shard(range(0, 100), idList(1, 2, 3), idSet(1, 2, 3)),
@@ -207,7 +208,7 @@ public class TopologyManagerTest
     }
 
     @Test
-    void forKeys()
+    void forKeys() throws TopologyException
     {
         Range range = range(100, 200);
         Topology topology1 = topology(1, shard(range, idList(1, 2, 3), idSet(1, 2)));
@@ -252,8 +253,8 @@ public class TopologyManagerTest
         Assertions.assertSame(topology5, service.unsafeGetActiveEpoch(5L).global());
         for (int i=1; i<=6; i++) service.onReadyToCoordinate(id(i), 6);
         Assertions.assertTrue(service.unsafeGetActiveEpoch(5).isQuorumReady());
-        try { service.unsafeGetActiveEpoch(4); Assertions.fail(); }
-        catch (TopologyRetiredException e) {}
+        try { service.active().get(4); Assertions.fail(); }
+        catch (TopologyException e) {}
 
         service.onReadyToCoordinate(id(1), 4);
     }
@@ -317,18 +318,18 @@ public class TopologyManagerTest
             History history = new History(createTopologyManager(new ShardDistributor.EvenSplit<>(1, ignore -> new PrefixedIntHashKey.Splitter())), topologies.iterator()) {
 
                 @Override
-                protected void postTopologyUpdate(int id, Topology t)
+                protected void postTopologyUpdate(int id, Topology t) throws TopologyException
                 {
                     test(t);
                 }
 
                 @Override
-                protected void postEpochisQuorumReady(int id, long epoch, Node.Id node)
+                protected void postEpochisQuorumReady(int id, long epoch, Node.Id node) throws TopologyException
                 {
                     test(tm.active().globalForEpoch(epoch));
                 }
 
-                private void test(Topology topology)
+                private void test(Topology topology) throws TopologyException
                 {
                     Ranges ranges = topology.ranges();
                     for (int i = 0; i < 10; i++)
@@ -357,10 +358,10 @@ public class TopologyManagerTest
     /**
      * The ABA problem is a problem with registers where you set the value A, then B, then A again; when you observe you see A... which A?
      *
-     * TODO (required): we don't want to support this. Ranges should be one use - if you want to create new ranges again, use a different prefix.
+     * TODO (testing): we don't want to support this. Ranges should be one use - if you want to create new ranges again, use a different prefix.
      */
     @Test
-    void aba()
+    void aba() throws Exception
     {
         TopologyManager service = createTopologyManager(new ShardDistributor.EvenSplit<>(1, ignore -> new PrefixedIntHashKey.Splitter()));
         SortedArrayList<Node.Id> dc1Nodes = idList(1, 2, 3);
@@ -379,10 +380,10 @@ public class TopologyManagerTest
         // prefix=0 was added in epoch=1, removed in epoch=2, and added back to epoch=3; the ABA problem
         RoutingKeys unseekables = RoutingKeys.of(PrefixedIntHashKey.forHash(0, 42));
 
-        for (Supplier<Topologies> fn : Arrays.<Supplier<Topologies>>asList(() -> service.active().preciseEpochs(unseekables, 1, 3, SHARE),
+        for (Callable<Topologies> fn : Arrays.<Callable<Topologies>>asList(() -> service.active().preciseEpochs(unseekables, 1, 3, SHARE),
                                                                            () -> service.active().withUnsyncedEpochs(unseekables, 1, 3)))
         {
-            assertThat(fn.get())
+            assertThat(fn.call())
                     .isNotEmpty()
                     .epochsBetween(1, 3)
                     .containsAll(unseekables)
@@ -417,13 +418,13 @@ public class TopologyManagerTest
             History history = new History(createTopologyManager(), next) {
 
                 @Override
-                protected void postTopologyUpdate(int id, Topology t)
+                protected void postTopologyUpdate(int id, Topology t) throws TopologyException
                 {
                     check(tm, rs);
                 }
 
                 @Override
-                protected void postEpochisQuorumReady(int id, long epoch, Node.Id node)
+                protected void postEpochisQuorumReady(int id, long epoch, Node.Id node) throws TopologyException
                 {
                     check(tm, rs);
                 }
@@ -432,7 +433,7 @@ public class TopologyManagerTest
         });
     }
 
-    private static void check(TopologyManager service, RandomSource rand)
+    private static void check(TopologyManager service, RandomSource rand) throws TopologyException
     {
         for (int i = 0; i < 2; i++)
         {
@@ -451,7 +452,7 @@ public class TopologyManagerTest
         }
     }
 
-    private static Unseekables<?> select(TopologyManager service, EpochRange range, RandomSource rs)
+    private static Unseekables<?> select(TopologyManager service, EpochRange range, RandomSource rs) throws TopologyException
     {
         long epoch = range.min == range.max ?
                      range.min :
@@ -513,7 +514,7 @@ public class TopologyManagerTest
 
         }
 
-        protected void postTopologyUpdate(int id, Topology t)
+        protected void postTopologyUpdate(int id, Topology t) throws TopologyException
         {
 
         }
@@ -523,18 +524,18 @@ public class TopologyManagerTest
 
         }
 
-        protected void postEpochisQuorumReady(int id, long epoch, Node.Id node)
+        protected void postEpochisQuorumReady(int id, long epoch, Node.Id node) throws TopologyException
         {
 
         }
 
-        public void run(RandomSource rs)
+        public void run(RandomSource rs) throws TopologyException
         {
             //noinspection StatementWithEmptyBody
             while (process(rs));
         }
 
-        private boolean process(RandomSource rs)
+        private boolean process(RandomSource rs) throws TopologyException
         {
             EnumMap<Action, Integer> possibleActions = new EnumMap<>(Action.class);
             if (!pendingisQuorumReady.isEmpty())

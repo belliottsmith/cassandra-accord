@@ -574,20 +574,6 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return execute;
         }
 
-        static Participants<?> withoutNotOwnedShardOnlyRedundant(Bounds bounds, @Nonnull Participants<?> ownedOrNotRedundant, TxnId txnId, @Nullable Timestamp executeAtIfKnown)
-        {
-            if (bounds == null)
-                return ownedOrNotRedundant;
-
-            // TODO (required): audit each of these methods and their call-sites
-            if (txnId.compareTo(bounds.maxBound(SHARD_APPLIED)) <= 0
-                && (bounds.endEpoch <= txnId.epoch()
-                    || (executeAtIfKnown != null && executeAtIfKnown.epoch() < bounds.startEpoch)))
-                return ownedOrNotRedundant.without(Ranges.of(bounds.range));
-
-            return ownedOrNotRedundant;
-        }
-
         static Participants<?> withoutShardApplied(Bounds bounds, @Nonnull Participants<?> notShardApplied, TxnId txnId)
         {
             if (bounds == null)
@@ -638,17 +624,6 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                 return notRetired;
 
             return notRetired.without(Ranges.of(bounds.range));
-        }
-
-        static Ranges withoutUnreadyOrLost(Bounds bounds, @Nonnull Ranges notUnready, TxnId txnId, Object ignore)
-        {
-            if (bounds == null)
-                return notUnready;
-
-            if (bounds.is(txnId, UNREADY))
-                return notUnready.without(Ranges.of(bounds.range));
-
-            return notUnready;
         }
 
         RedundantStatus get(TxnId txnId, @Nullable Timestamp applyAtIfKnown)

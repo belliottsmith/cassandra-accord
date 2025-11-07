@@ -79,13 +79,13 @@ public class MockStore implements DataStore
             @Override
             public Read slice(Ranges ranges)
             {
-                return MockStore.read(keys.slice(ranges));
+                return MockStore.read(keys.overlapping(ranges));
             }
 
             @Override
             public Read intersecting(Participants<?> participants)
             {
-                return MockStore.read(keys.intersecting(participants));
+                return MockStore.read(keys.overlapping(participants));
             }
 
             @Override
@@ -121,13 +121,13 @@ public class MockStore implements DataStore
             @Override
             public Update slice(Ranges ranges)
             {
-                return MockStore.update(keys.slice(ranges));
+                return MockStore.update(keys.overlapping(ranges));
             }
 
             @Override
             public Update intersecting(Participants<?> participants)
             {
-                return MockStore.update(keys.intersecting(participants));
+                return MockStore.update(keys.overlapping(participants));
             }
 
             @Override

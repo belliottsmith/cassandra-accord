@@ -103,7 +103,7 @@ public class Infer
         }
     }
 
-    // TODO (required): audit all use cases
+    // TODO (formalise): define invariants covering safe usage and audit all callers
     private static abstract class CleanupAndCallback<T> extends MapReduceConsumeCommandStores<Participants<?>, Void>
     {
         final Node node;

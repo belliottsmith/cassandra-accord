@@ -58,10 +58,6 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
     private final InvalidationTracker tracker;
     private final LatentStoreSelector reportTo;
 
-    private Invalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
-    {
-        this(node, executor, node.topology().active().forEpoch(invalidateWith, txnId.epoch(), SHARE), ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
-    }
     private Invalidate(Node node, SequentialAsyncExecutor executor, Topologies topologies, Ballot ballot, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
         super(node, executor, txnId, invalidateWith, topologies.nodes(), callback);
@@ -72,22 +68,31 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
         this.tracker = new InvalidationTracker(topologies, txnId);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, BiConsumer<? super Outcome, Throwable> callback)
+    public static void invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, BiConsumer<? super Outcome, Throwable> callback)
     {
-        return invalidate(node, txnId, invalidateWith, false, callback);
+        invalidate(node, txnId, invalidateWith, false, callback);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, BiConsumer<? super Outcome, Throwable> callback)
+    public static void invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, BiConsumer<? super Outcome, Throwable> callback)
     {
-        return invalidate(node, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, LatentStoreSelector.standard(), callback);
+        invalidate(node, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, LatentStoreSelector.standard(), callback);
     }
 
-    public static Invalidate invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
+    public static void invalidate(Node node, TxnId txnId, Participants<?> invalidateWith, boolean transitivelyInvokedByPriorInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        Invalidate invalidate = new Invalidate(node, node.someSequentialExecutor(), ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
+        Invalidate invalidate;
+        try
+        {
+            Topologies topologies = node.topology().active().forEpoch(invalidateWith, txnId.epoch(), SHARE);
+            invalidate = new Invalidate(node, node.someSequentialExecutor(), topologies, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+            return;
+        }
         invalidate.start();
-        return invalidate;
     }
 
     @Override
@@ -231,7 +236,7 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
         // Probably simplest to do so, but perhaps better for user if we don't.
         Ranges ranges = Ranges.of(tracker.promisedShard().range);
         // we look up by TxnId at the target node, so it's fine to pick a RoutingKey even if it's a range transaction
-        RoutingKey someKey = scope.slice(ranges).get(0).someIntersectingRoutingKey(ranges);
+        RoutingKey someKey = scope.overlapping(ranges).get(0).someIntersectingRoutingKey(ranges);
         BiConsumer<? super Outcome, Throwable> callback = finishAndTakeCallback();
         proposeInvalidate(node, executor, ballot, txnId, someKey, (success, fail) -> {
             /*
@@ -282,7 +287,7 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
             {
                 callback.accept(INVALIDATED, null);
                 if (failure != null) // TODO (required): consider exception handling more carefully: should we catch these prior to passing to callbacks?
-                    node.agent().onUncaughtException(failure);
+                    node.agent().onException(failure);
             }
 
             @Override

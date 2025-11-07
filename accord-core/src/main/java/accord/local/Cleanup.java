@@ -267,7 +267,7 @@ public enum Cleanup
             return invalidate(txnId);
 
         // TODO (desired): safe to use QUORUM_APPLIED, LOCALLY_REDUNDANT?
-        // TODO (required): can we guarantee we will always eventually obtain a covering route if others are garbage collecting?
+        // TODO (formalise): can we guarantee we will always eventually obtain a covering route if others are garbage collecting?
         if (isCoveringRoute && ownStatus.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
             return vestigial(txnId);
 

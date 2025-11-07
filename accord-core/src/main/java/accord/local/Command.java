@@ -71,7 +71,6 @@ import static accord.primitives.SaveStatus.AcceptedInvalidate;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedUnapplied;
-import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Status.Durability.UniversalOrInvalidated;
@@ -260,9 +259,7 @@ public abstract class Command implements ICommand
      *
      * If hasBeen(Committed) this must contain the keys for both txnId.epoch and executeAt.epoch
      *
-     * TODO (required): audit uses; do not assume non-null means it is a complete route for the shard;
-     *    preferably introduce two variations so callers can declare whether they need the full shard's route
-     *    or any route will do
+     * TODO (desired): caller should declare KnownRoute expectation (MaybeRoute, CoveringRoute, FullRoute) so it can be validated
      */
     @Nullable
     public final Route<?> route() { return participants().route(); }
@@ -1653,13 +1650,10 @@ public abstract class Command implements ICommand
                     break;
                 case ExecuteAtKnown:
                 case ApplyAtKnown:
-                    // TODO (expected): enable this invariant; requires rethinking how we update StoreParticipants on PreCommitted
-                    //     which must be done carefully as we cannot mess with touches()/Deps as the relationship there must be maintained
-                    //     for state machine correctness
                 case ExecuteAtProposed:
                     Invariants.require(executeAt != null);
                     int c =  executeAt.compareTo(validate.txnId());
-                    Invariants.require(c > 0 || (c == 0 && executeAt.getClass() != Timestamp.class));
+                    Invariants.require(c > 0 || (c == 0 && (executeAt.hasDistinctHlcAndUniqueHlc() || executeAt.hasNonIdentityFlags())));
                     break;
                 case NoExecuteAt:
                     Invariants.require(executeAt.equals(Timestamp.NONE));
@@ -1724,32 +1718,5 @@ public abstract class Command implements ICommand
                 break;
         }
         return validate;
-    }
-
-    private static boolean isSameClass(Command command, Class<? extends Command> klass)
-    {
-        return command.getClass() == klass;
-    }
-
-    private static void checkNewBallot(Ballot current, Ballot next, String name)
-    {
-        if (next.compareTo(current) < 0)
-            throw new IllegalArgumentException(format("Cannot update %s ballot from %s to %s. New ballot is less than current", name, current, next));
-    }
-
-    private static void checkPromised(Command command, Ballot ballot)
-    {
-        checkNewBallot(command.promised(), ballot, "promised");
-    }
-
-    private static void checkAccepted(Command command, Ballot ballot)
-    {
-        checkNewBallot(command.acceptedOrCommitted(), ballot, "accepted");
-    }
-
-    private static void checkSameClass(Command command, Class<? extends Command> klass, String errorMsg)
-    {
-        if (!isSameClass(command, klass))
-            throw illegalArgument(errorMsg + format(" expected %s got %s", klass.getSimpleName(), command.getClass().getSimpleName()));
     }
 }

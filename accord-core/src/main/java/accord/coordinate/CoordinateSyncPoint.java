@@ -47,6 +47,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncChain;
@@ -92,21 +93,6 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         return coordinate(node, txnId, ranges, Adapters.exclusiveSyncPoint());
     }
 
-    public static AsyncChain<SyncPoint> exclusive(Node node, TxnId txnId, FullRoute<Range> route)
-    {
-        return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
-    }
-
-    public static AsyncChain<SyncPoint> executeAtQuorum(Node node, Ranges ranges)
-    {
-        return coordinate(node, ExclusiveSyncPoint, ranges, Adapters.exclusiveSyncPoint());
-    }
-
-    public static AsyncChain<SyncPoint> executeAtQuorum(Node node, TxnId txnId, FullRoute<Range> route)
-    {
-        return coordinate(node, txnId, route, Adapters.exclusiveSyncPoint());
-    }
-
     public static AsyncChain<SyncPoint> coordinate(Node node, Txn.Kind kind, Ranges ranges, SyncPointAdapter<SyncPoint> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
@@ -114,36 +100,31 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, ranges, adapter));
     }
 
-    public static AsyncChain<SyncPoint> coordinate(Node node, Txn.Kind kind, FullRoute<Range> route, SyncPointAdapter<SyncPoint> adapter)
-    {
-        Invariants.requireArgument(kind.isSyncPoint());
-        TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, route.domain(), cardinality(route));
-        return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, route, adapter));
-    }
-
     private static AsyncChain<SyncPoint> coordinate(Node node, TxnId txnId, Ranges ranges, SyncPointAdapter<SyncPoint> adapter)
     {
         Invariants.requireArgument(txnId.isSyncPoint());
-        FullRoute<Range> route = (FullRoute<Range>) node.computeRoute(txnId, ranges);
-        return coordinate(node, txnId, route, adapter);
-    }
-
-    private static AsyncChain<SyncPoint> coordinate(Node node, TxnId txnId, FullRoute<Range> route, SyncPointAdapter<SyncPoint> adapter)
-    {
         try
         {
-            Invariants.requireArgument(txnId.isSyncPoint());
-            TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().active().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
-            if (mismatch != null)
-                throw mismatch;
-
             return new AsyncChains.Head<>()
             {
                 @Override
                 protected @Nullable Cancellable start(BiConsumer<? super SyncPoint, Throwable> callback)
                 {
-                    new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, adapter.forDecision(node, route, SHARE, txnId, txnId), node.agent().emptySystemTxn(txnId.kind(), txnId.domain()), route, adapter, callback)
-                    .start();
+                    CoordinateSyncPoint<SyncPoint> coordinate;
+                    try
+                    {
+                        FullRoute<Range> route = (FullRoute<Range>) node.computeRoute(txnId, ranges);
+                        Txn txn = node.agent().emptySystemTxn(txnId.kind(), txnId.domain());
+                        Topologies topologies = adapter.forDecision(node, route, SHARE, txnId, txnId);
+                        coordinate = new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, topologies, txn, route, adapter, callback);
+                    }
+                    catch (Throwable t)
+                    {
+                        callback.accept(null, t);
+                        return null;
+                    }
+
+                    coordinate.start();
                     return null;
                 }
             };
@@ -195,7 +176,16 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
-        Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+        Topologies topologies;
+        try
+        {
+            topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+        }
+        catch (TopologyException e)
+        {
+            node.agent().onException(e);
+            return;
+        }
         sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
     }
 
@@ -203,7 +193,16 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
-        Topologies topologies = node.topology().active().preciseEpochs(syncPoint.route, minEpoch, maxEpoch, SHARE);
+        Topologies topologies;
+        try
+        {
+            topologies = node.topology().active().preciseEpochs(syncPoint.route, minEpoch, maxEpoch, SHARE);
+        }
+        catch (Throwable t)
+        {
+            node.agent().onException(t);
+            return;
+        }
         sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
     }
 

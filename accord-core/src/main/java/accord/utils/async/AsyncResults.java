@@ -330,7 +330,7 @@ public class AsyncResults
         }
     }
 
-    static class ImmediateSuccess<V> extends AbstractImmediate<V>
+    public static class ImmediateSuccess<V> extends AbstractImmediate<V>
     {
         private final V success;
 
@@ -359,11 +359,11 @@ public class AsyncResults
         }
     }
 
-    static class ImmediateFailure<V> extends AbstractImmediate<V>
+    public static class ImmediateFailure<V> extends AbstractImmediate<V>
     {
         private final Throwable failure;
 
-        ImmediateFailure(Throwable failure)
+        protected ImmediateFailure(Throwable failure)
         {
             this.failure = failure;
         }

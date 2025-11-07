@@ -138,6 +138,6 @@ public class AwaitTracker extends AbstractTracker<AwaitTracker.AwaitShardTracker
         if (rangeCount == 0)
             return select.slice(0, 0);
         Ranges slice = Ranges.ofSortedAndDeoverlapped(cachedRanges().completeAndDiscard(rangeBuffer, rangeCount));
-        return select.slice(slice);
+        return select.overlapping(slice);
     }
 }

@@ -377,7 +377,7 @@ public class ShardDurability
                             .flatMap(
                                 syncId -> node.withEpochExact(syncId.epoch(), null,
                                       () -> syncPointControl.submit(
-                                            () -> CoordinateSyncPoint.exclusive(node, syncId, (FullRoute<Range>) node.computeRoute(syncId, ranges))
+                                            () -> CoordinateSyncPoint.exclusive(node, syncId, ranges)
                                                                      .invoke(logSyncPoint(syncId, ranges))
                             )))
                             .begin((success, fail) -> {

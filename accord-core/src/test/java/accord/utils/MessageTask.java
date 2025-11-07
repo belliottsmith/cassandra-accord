@@ -83,7 +83,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
     private final AsyncExecutor executor;
     private final RetryingCallback callback;
 
-    private class TaskRequest implements Request
+    private static class TaskRequest implements Request
     {
         private final NodeProcess process;
         private final String desc;
@@ -194,7 +194,8 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
     @Override
     public void run()
     {
-        originator.send(recipients, request, executor, callback);
+        for (Node.Id to : recipients)
+            originator.send(to, request, executor, callback);
     }
 
     @Override

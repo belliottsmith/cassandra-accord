@@ -200,6 +200,11 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return flags(lsb);
     }
 
+    public final boolean hasNonIdentityFlags()
+    {
+        return (flagsUnmasked() & IDENTITY_FLAGS) != 0;
+    }
+
     // if caller masks no need to mask before returning
     public final int flagsUnmasked()
     {

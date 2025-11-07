@@ -178,7 +178,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         this.sendDeps = sendDeps;
         this.flags = flags;
         this.stable = new StableTracker(topologies.forEpochs(txnId.epoch(), executeAt.epoch()));
-        this.readScope = txn == null ? route : route.intersecting(txn.keys());
+        this.readScope = txn == null ? route : route.overlapping(txn.keys());
         Invariants.require(!txnId.awaitsOnlyDeps());
         Invariants.require(!txnId.awaitsPreviouslyOwned());
     }

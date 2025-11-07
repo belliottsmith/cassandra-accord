@@ -16,40 +16,28 @@
  * limitations under the License.
  */
 
-package accord.coordinate;
+package accord.topology;
 
-import javax.annotation.Nullable;
-
-import accord.api.Agent;
-import accord.api.RoutingKey;
-import accord.primitives.TxnId;
-import accord.utils.Invariants;
-
-/**
- * Thrown when a transaction has been invalidated
- */
-public class Invalidated extends CoordinationFailed
+public final class TopologyNotReadyException extends TopologyException
 {
-    public static Invalidated invalidated(Agent agent, TxnId txnId, @Nullable RoutingKey homeKey)
+    public TopologyNotReadyException(long epoch, long currentEpoch)
     {
-        agent.coordinatorEvents().onInvalidated(txnId);
-        return new Invalidated(txnId, homeKey);
+        super(message(epoch, currentEpoch));
     }
 
-    private Invalidated(TxnId txnId, @Nullable RoutingKey homeKey)
+    public TopologyNotReadyException(String message, TopologyNotReadyException t)
     {
-        super(txnId, homeKey);
+        super(message, t);
     }
 
-    private Invalidated(TxnId txnId, @Nullable RoutingKey homeKey, Invalidated cause)
+    public static String message(long epoch, long currentEpoch)
     {
-        super(txnId, homeKey, cause);
+        return String.format("Topology %d is not ready. Current topology %d", epoch, currentEpoch);
     }
 
     @Override
-    public Invalidated rethrowable()
+    public TopologyException rethrowable()
     {
-        Invariants.require(this.getClass() == Invalidated.class);
-        return new Invalidated(txnId(), homeKey(), this);
+        return new TopologyNotReadyException(getMessage(), this);
     }
 }

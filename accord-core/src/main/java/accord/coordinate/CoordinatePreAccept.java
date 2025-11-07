@@ -39,12 +39,11 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.topology.TopologyMismatch;
 import accord.utils.SortedListMap;
 
-import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
 import static accord.coordinate.tracking.RequestStatus.Success;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -58,19 +57,14 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     final Txn txn;
     boolean fastPathEnabled = true;
 
-    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<? super T, Throwable> callback)
-    {
-        this(node, executor, txnId, txn, route, node.topology().active().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
-    }
-
-    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiConsumer<? super T, Throwable> callback)
+    CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super T, Throwable> callback)
     {
         this(node, executor, txnId, txn, route, topologies, FastPathTracker::new, callback);
     }
 
     CoordinatePreAccept(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, Topologies topologies, BiFunction<Topologies, TxnId, PreAcceptTracker<?>> trackerFactory, BiConsumer<? super T, Throwable> callback)
     {
-        super(node, executor, route, txnId, topologies, callback);
+        super(node, executor, topologies, route, txnId, callback);
         this.tracker = trackerFactory.apply(topologies, txnId);
         this.txn = txn;
     }

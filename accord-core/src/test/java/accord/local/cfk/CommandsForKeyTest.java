@@ -1058,13 +1058,13 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void onUncaughtException(Throwable t)
+        public void onException(Throwable t)
         {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public void onCaughtException(Throwable t, String context)
+        public void onException(Throwable t, String context)
         {
             throw new UnsupportedOperationException();
         }

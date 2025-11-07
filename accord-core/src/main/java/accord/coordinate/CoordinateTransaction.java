@@ -23,6 +23,7 @@ import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
@@ -70,6 +71,7 @@ import static accord.messages.Accept.Kind.SLOW;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 /**
@@ -80,37 +82,32 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
  */
 public class CoordinateTransaction extends CoordinatePreAccept<Result>
 {
-    private CoordinateTransaction(Node node, SequentialAsyncExecutor executor, TxnId txnId, Txn txn, FullRoute<?> route, BiConsumer<? super Result, Throwable> callback)
+    private CoordinateTransaction(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, executor, txnId, txn, route, callback);
+        super(node, executor, topologies, route, txnId, txn, callback);
     }
 
-    public static AsyncChain<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
+    public static AsyncChain<Result> coordinate(Node node, TxnId txnId, Txn txn)
     {
         return new AsyncChains.Head<>()
         {
             @Override
             public @Nullable Cancellable start(BiConsumer<? super Result, Throwable> callback)
             {
-                coordinate(node, route, txnId, txn, callback);
+                coordinate(node, txnId, txn, callback);
                 return null;
             }
         };
     }
 
-    public static void coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
+    public static void coordinate(Node node, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
     {
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().active().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), txn.keys());
-        if (mismatch != null)
-        {
-            callback.accept(null, mismatch);
-            return;
-        }
-
         CoordinateTransaction coordinate;
         try
         {
-            coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), txnId, txn, route, callback);
+            FullRoute<?> route = node.computeRoute(txnId, txn.keys());
+            Topologies topologies = node.topology().active().select(route, txnId, txnId, SHARE, ProtocolModifiers.QuorumEpochIntersections.preaccept.include);
+            coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), topologies, route, txnId, txn, callback);
         }
         catch (Throwable t)
         {

@@ -20,7 +20,6 @@ package accord.utils;
 
 import java.util.function.BiConsumer;
 
-// TODO (required): introduce e.g. MapReduceConsumeSafeStore, to encapsulate
 public interface MapReduceConsume<I, O> extends MapReduce<I, O>, BiConsumer<O, Throwable>
 {
     @Override

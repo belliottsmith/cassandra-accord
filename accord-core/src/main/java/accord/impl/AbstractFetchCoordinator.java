@@ -29,6 +29,7 @@ import accord.local.SequentialAsyncExecutor;
 import accord.messages.ReadData;
 import accord.primitives.SyncPoint;
 import accord.primitives.Participants;
+import accord.topology.TopologyException;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 
@@ -115,7 +116,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
     final FetchResult result = new FetchResult(this);
     protected final List<AsyncResult<Void>> persisting = new ArrayList<>();
 
-    protected AbstractFetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore)
+    protected AbstractFetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore) throws TopologyException
     {
         super(node, executor, ranges, syncPoint, fetchRanges);
         this.fetchRanges = fetchRanges;

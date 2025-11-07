@@ -112,12 +112,12 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     }
 
     @Override
-    public final Keys intersecting(Seekables<?, ?> intersecting)
+    public final Keys overlapping(Seekables<?, ?> intersecting)
     {
         switch (intersecting.domain())
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
-            case Key: return intersecting((Keys) intersecting);
+            case Key: return overlapping((Keys) intersecting);
             case Range: return wrap(intersecting((AbstractRanges) intersecting, cachedKeys()));
         }
     }
@@ -125,16 +125,16 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     @Override
     public final Keys intersecting(Seekables<?, ?> intersecting, Slice slice)
     {
-        return intersecting(intersecting);
+        return overlapping(intersecting);
     }
 
     @Override
-    public final Keys intersecting(Unseekables<?> intersecting)
+    public final Keys overlapping(Unseekables<?> intersecting)
     {
         switch (intersecting.domain())
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
-            case Key: return intersecting((AbstractUnseekableKeys) intersecting);
+            case Key: return overlapping((AbstractUnseekableKeys) intersecting);
             case Range: return wrap(intersecting((AbstractRanges) intersecting, cachedKeys()));
         }
     }
@@ -142,15 +142,15 @@ public class Keys extends AbstractKeys<Key> implements Seekables<Key, Keys>
     @Override
     public final Keys intersecting(Unseekables<?> intersecting, Slice slice)
     {
-        return intersecting(intersecting);
+        return overlapping(intersecting);
     }
 
-    public final Keys intersecting(Keys that)
+    public final Keys overlapping(Keys that)
     {
         return wrap(SortedArrays.linearIntersection(this.keys, that.keys, cachedKeys()), that);
     }
 
-    public final Keys intersecting(AbstractUnseekableKeys that)
+    public final Keys overlapping(AbstractUnseekableKeys that)
     {
         return wrap(SortedArrays.intersectWithMultipleMatches(this.keys, this.keys.length, that.keys, that.keys.length, Key::compareAsRoutingKey, cachedKeys()), this);
     }

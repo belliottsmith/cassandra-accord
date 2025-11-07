@@ -225,7 +225,6 @@ public class KeyBarriers
     public static AsyncChain<Boolean> awaitRemote(Node node, SequentialAsyncExecutor executor, TxnId txnId, RoutingKey key)
     {
         RoutingKeys keys = RoutingKeys.of(key);
-        Topologies topologies = node.topology().active().forEpoch(keys, txnId.epoch(), SHARE);
-        return SynchronousAwait.awaitQuorum(node, executor, topologies, txnId, keys, IsApplied, true);
+        return SynchronousAwait.awaitQuorum(node, executor, txnId, keys, IsApplied, true);
     }
 }

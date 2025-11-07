@@ -44,7 +44,9 @@ import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
+import accord.topology.ActiveEpoch;
 import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
@@ -203,7 +205,7 @@ abstract class WaitingState extends HomeState
 
     private static int awaitRoundSize(Route<?> slicedRoute)
     {
-        // TODO (required): for testing, introduce some deterministic mechanism for picking some value smaller than we can support,
+        // TODO (testing): introduce some deterministic mechanism for picking some value smaller than we can support,
         //  so we can better exercise this without breaking the infrequent much larger routes for sync points
         return roundSize(slicedRoute.size(), AWAIT_BITS);
     }
@@ -274,13 +276,6 @@ abstract class WaitingState extends HomeState
     {
         long shiftedMask = RETRY_COUNTER_MASK << RETRY_COUNTER_SHIFT;
         encodedState &= ~shiftedMask;
-    }
-
-    Topologies contact(DefaultProgressLog owner, Unseekables<?> forKeys, long epoch)
-    {
-        Node node = owner.node();
-        Topologies topologies = node.topology().active().forEpoch(forKeys, epoch, SHARE);
-        return node.agent().selectPreferred(node.id(), topologies);
     }
 
     boolean queryShardsNotHome()
@@ -739,7 +734,7 @@ abstract class WaitingState extends HomeState
         {
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Fai");
-            safeStore.agent().onCaughtException(fail, "Failed fetching data for " + state);
+            safeStore.agent().onException(fail, "Failed fetching data for " + state);
             state.retry(safeStore, safeCommand, owner, querying, tracing);
         }
     }
@@ -846,7 +841,19 @@ abstract class WaitingState extends HomeState
 
             int roundSize = awaitRoundSize(slicedRoute);
             int roundIndex = awaitRoundIndex(roundSize);
-            int updateBitSet = roundCallbackBitSet(owner, txnId, from, slicedRoute, callbackId, roundIndex, roundSize);
+            int updateBitSet;
+            try
+            {
+                ActiveEpoch epoch = owner.node().topology().active().get(txnId.epoch());
+                updateBitSet = roundCallbackBitSet(epoch, from, slicedRoute, callbackId, roundIndex, roundSize);
+            }
+            catch (TopologyException e)
+            {
+                owner.node.agent().onException(e);
+                setWaitingDone(owner);
+                return;
+            }
+
             if (updateBitSet == 0)
             {
                 if (tracing != null)
@@ -929,7 +936,19 @@ abstract class WaitingState extends HomeState
         // we MUST allocate the invoker before invoking withEpoch as this may be asynchronous and we must first register our callback for cancellation
         CallbackInvoker<BlockedUntil, AsynchronousAwait.SynchronousResult> invoker = invokeWaitingCallback(owner, txnId, blockedUntil, callback);
         owner.start(invoker, owner.node().withEpochAtLeast(epoch, (AsyncExecutor)null, invoker, () -> {
-            AsynchronousAwait.awaitAny(owner.node(), contact(owner, route, epoch), txnId, route, awaitUntil, callbackId, invoker);
+            Node node = owner.node();
+            Topologies topologies;
+            try
+            {
+                topologies = node.topology().active().forEpoch(route, epoch, SHARE);
+                topologies = node.agent().selectPreferred(node.id(), topologies);
+            }
+            catch (Throwable t)
+            {
+                invoker.accept(null, t);
+                return;
+            }
+            AsynchronousAwait.awaitAny(owner.node(), topologies, txnId, route, awaitUntil, callbackId, invoker);
         }));
     }
 

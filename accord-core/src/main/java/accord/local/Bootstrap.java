@@ -270,7 +270,7 @@ class Bootstrap
             Ranges newFailures;
             synchronized (this)
             {
-                newFailures = ranges.slice(valid);
+                newFailures = ranges.slice(valid, Minimal);
                 if (newFailures.isEmpty())
                     return;
 
@@ -401,7 +401,6 @@ class Bootstrap
     final Node node;
     final CommandStore commandStore;
     final long epoch;
-    // TODO (required): make sure this is triggered in event of partial expiration of work to do
     final AsyncResult.Settable<Void> data;
     final AsyncResult.Settable<Void> reads;
     final Set<Attempt> inProgress = new DeterministicIdentitySet<>();
@@ -435,7 +434,7 @@ class Bootstrap
 
     private synchronized TxnId restart(SafeCommandStore safeStore, Ranges ranges, int count)
     {
-        ranges = ranges.slice(allValid);
+        ranges = ranges.overlapping(allValid);
         if (ranges.isEmpty())
             return null;
 

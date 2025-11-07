@@ -716,9 +716,6 @@ public class Commands
         //  that was pre-bootstrap for some range (so redundant and we may have gone ahead of), but had to be executed locally
         //  for another range
         CommandStore unsafeStore = safeStore.commandStore();
-        // TODO (required, API): do we care about tracking the write persistence latency, when this is just a memtable write?
-        //  the only reason it will be slow is because Memtable flushes are backed-up (which will be reported elsewhere)
-        // TODO (required): this is anyway non-monotonic and milliseconds granularity
         TxnId txnId = command.txnId();
         //noinspection DataFlowIssue
         safeStore = safeStore; // disable reuse

@@ -133,8 +133,8 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
     {
         super(txnId, scope, sourceEpoch);
         this.bumpBallot = bumpBallot;
-        if (isRoute(scope)) this.scope = computeScope(to, topologies, castToRoute(scope), 0, Route::slice, Route::with);
-        else this.scope = computeScope(to, topologies, (Participants) scope, 0, Participants::slice, Participants::with);
+        if (isRoute(scope)) this.scope = computeScope(to, topologies, castToRoute(scope), 0, Route::overlapping, Route::with);
+        else this.scope = computeScope(to, topologies, (Participants) scope, 0, Participants::overlapping, Participants::with);
         this.includeInfo = includeInfo;
     }
 
@@ -187,7 +187,7 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
                 validFor = validFor.intersecting(command.participants().owns(), Minimal);
 
             KnownMap result = KnownMap.create(validFor, saveStatus.known);
-            // TODO (required): consider this case more carefully - should we reply null for minOwned? Should we explicitly handle truncated states?
+            // TODO (formalise): consider and test this case more carefully - should we reply null for minOwned? Should we explicitly handle truncated states?
             if (validFor != query.owns())
                 result = KnownMap.merge(result, KnownMap.create(query.owns().without(validFor), saveStatus.known.validForAll()));
             return result;

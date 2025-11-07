@@ -313,7 +313,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
             return false;
 
         try { run.run(); }
-        catch (Throwable t) { agent.onUncaughtException(t); }
+        catch (Throwable t) { agent.onException(t); }
         return true;
     }
 
@@ -576,9 +576,15 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public final AsyncResult<Void> cancelBootstraps()
     {
         return submit((Empty)() -> "Cancel Bootstraps", safeStore -> {
-            bootstraps.forEach(b -> b.invalidate(rangesForEpoch.all()));
+            cancelBootstraps(safeStore, safeStore.ranges().all());
             return null;
         });
+    }
+
+    public final void cancelBootstraps(SafeCommandStore safeStore, Ranges ranges)
+    {
+        Invariants.require(safeStore.commandStore() == this && inStore());
+        bootstraps.forEach(b -> b.invalidate(ranges));
     }
 
     public final AsyncResult<EpochReady> resumeBootstrap(Node node)
@@ -717,7 +723,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
             node.uniqueNow(success.hlc()); // ensure we pick a higher timestamp than the maximum conflict we found globally
             // Mark unsafe to read first
 
-            Ranges remaining = ranges.slice(rangesForEpoch.currentRanges());
+            Ranges remaining = ranges.slice(rangesForEpoch.currentRanges(), Minimal);
             if (remaining.isEmpty())
             {
                 logger.info("Terminating unsafe {} bootstrap process for {} as no active ranges", fetch, this);

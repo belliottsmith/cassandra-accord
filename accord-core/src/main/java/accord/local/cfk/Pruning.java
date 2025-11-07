@@ -498,7 +498,7 @@ public class Pruning
      * this is true _so long_ as we participate in the epochs of the future transactions.
      * So, to facilitate this we retain the highest committed transaction for each epoch, that would otherwise be pruned.
      *
-     * TODO (required): formalise better. We filter dependencies by TxnId and execute by executeAt, so our prune points need to be based on both
+     * TODO (formalise): We filter dependencies by TxnId and execute by executeAt, so our prune points need to be based on both
      *  so we don't filter a dependency by TxnId that we need to see by executeAt (or vice-versa).
      *  We might just want to strengthen the replica dependency processing anyway.
      */

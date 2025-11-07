@@ -36,6 +36,7 @@ import accord.primitives.FullRoute;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.topology.TopologyMismatch;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncChain;
@@ -64,31 +65,25 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
  */
 public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result, GetEphemeralReadDepsOk, GetEphemeralReadDepsOk>
 {
-    public static AsyncChain<Result> coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn)
+    public static AsyncChain<Result> coordinate(Node node, TxnId txnId, Txn txn)
     {
         return new AsyncChains.Head<>()
         {
             @Override
             public @Nullable Cancellable start(BiConsumer<? super Result, Throwable> callback)
             {
-                coordinate(node, route, txnId, txn, callback);
+                coordinate(node, txnId, txn, callback);
                 return null;
             }
         };
     }
 
-    public static void coordinate(Node node, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
+    public static void coordinate(Node node, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
     {
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().active().globalForEpoch(txnId.epoch()), txnId, route.homeKey(), route);
-        if (mismatch != null)
-        {
-            callback.accept(null, mismatch);
-            return;
-        }
-
         CoordinateEphemeralRead coordinate;
         try
         {
+            FullRoute<?> route = node.computeRoute(txnId, txn.keys());
             Topologies topologies = node.topology().active().withUnsyncedEpochs(route, txnId, txnId);
             coordinate = new CoordinateEphemeralRead(node, node.someSequentialExecutor(), topologies, route, txnId, txn, callback);
         }
@@ -108,7 +103,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
 
     CoordinateEphemeralRead(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, TxnId txnId, Txn txn, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, executor, route, txnId, callback);
+        super(node, executor, topologies, route, txnId, callback);
         this.txn = txn;
         this.tracker = new QuorumTracker(topologies);
         this.executeAtEpoch = txnId.epoch();
@@ -160,7 +155,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
 
     private void retry()
     {
-        awaitEpochExactToFinish(retryInEpoch, () -> coordinate(node, scope, txnId.withEpoch(retryInEpoch), txn, finishAndTakeCallback()));
+        awaitEpochExactToFinish(retryInEpoch, () -> coordinate(node, txnId.withEpoch(retryInEpoch), txn, finishAndTakeCallback()));
     }
 
     @Override
@@ -175,7 +170,12 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         node.agent().coordinatorEvents().onPreAccepted(txnId);
         SortedListMap<Node.Id, GetEphemeralReadDepsOk> oks = finishOks();
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
-        topologies = node.topology().active().reselect(topologies, QuorumEpochIntersections.preaccept.include, scope, executeAtEpoch, executeAtEpoch, SHARE, Owned);
+        try { topologies = node.topology().active().reselect(topologies, QuorumEpochIntersections.preaccept.include, scope, executeAtEpoch, executeAtEpoch, SHARE, Owned); }
+        catch (Throwable t)
+        {
+            finishWithFailureOverride(t);
+            return;
+        }
         CoordinationFlags flags = oks.foldlNonNull((d, k, v, out) -> {
             ExecuteFlags.collect(out, k, v.flags, d, v.deps);
             return out;

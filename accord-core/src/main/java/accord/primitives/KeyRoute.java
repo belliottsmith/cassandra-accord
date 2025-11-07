@@ -132,19 +132,19 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
     }
 
     @Override
-    public KeyRoute slice(Ranges select)
+    public final KeyRoute overlapping(Ranges select)
     {
         return select(slice(select, RoutingKey[]::new));
     }
 
     @Override
-    public KeyRoute slice(Ranges ranges, Slice slice)
+    public final KeyRoute slice(Ranges ranges, Slice slice)
     {
-        return slice(ranges);
+        return overlapping(ranges);
     }
 
     @Override
-    public KeyRoute intersecting(Unseekables<?> intersecting)
+    public final KeyRoute overlapping(Unseekables<?> intersecting)
     {
         switch (intersecting.domain())
         {
@@ -155,9 +155,9 @@ public abstract class KeyRoute extends AbstractUnseekableKeys implements Route<R
     }
 
     @Override
-    public KeyRoute intersecting(Unseekables<?> intersecting, Slice slice)
+    public final KeyRoute intersecting(Unseekables<?> intersecting, Slice slice)
     {
-        return intersecting(intersecting);
+        return overlapping(intersecting);
     }
 
     private KeyRoute select(RoutingKey[] newKeys)

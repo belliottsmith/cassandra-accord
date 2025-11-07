@@ -350,7 +350,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         {
             if (Invariants.testParanoia(LINEAR, LINEAR, HIGH))
             {
-                return AsyncChains.detectLeak(agent::onUncaughtException, () -> {
+                return AsyncChains.detectLeak(agent::onException, () -> {
                     boolean wasEmpty = pending.isEmpty();
                     pending.add(task);
                     if (wasEmpty)

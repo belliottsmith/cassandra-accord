@@ -42,6 +42,7 @@ import accord.primitives.Routable;
 import accord.primitives.MinimalSyncPoint;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.Topologies;
 import accord.topology.Topology;
 import accord.topology.TopologyUtils;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -51,6 +52,9 @@ import org.junit.jupiter.api.Test;
 import accord.utils.async.AsyncResult;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
+
+import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 class CoordinateSyncPointTest
 {
@@ -105,7 +109,8 @@ class CoordinateSyncPointTest
                                                {
                                                    CommandStore store = node.commandStores().forId(0);
                                                    return store.chain(() -> {
-                                                       ExecuteSyncPoint execute = new ExecuteSyncPoint(node, syncPoint, store, 1, new ExecuteSyncPoint.DurabilityResults());
+                                                       Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+                                                       ExecuteSyncPoint execute = new ExecuteSyncPoint(node, store, topologies, syncPoint, 1, new ExecuteSyncPoint.DurabilityResults());
                                                        execute.start();
                                                        return execute.onDone();
                                                    });

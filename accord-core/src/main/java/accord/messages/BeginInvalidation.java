@@ -43,7 +43,7 @@ public class BeginInvalidation extends ParticipantsRequest<Participants<?>, Begi
 
     public BeginInvalidation(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, Ballot ballot)
     {
-        super(txnId, participants.slice(topologies.computeRangesForNode(to)), txnId.epoch());
+        super(txnId, participants.overlapping(topologies.computeRangesForNode(to)), txnId.epoch());
         this.ballot = ballot;
     }
 

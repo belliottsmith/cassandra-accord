@@ -218,7 +218,7 @@ import static accord.utils.SortedArrays.Search.FAST;
  * this replica's collection to decipher any fast path decision. Any other replica must either do the same, or else
  * will correctly record this transaction as present in any relevant deps of later transactions.
  *
- * TODO (required): tighten semantics around transactions that are not owned by this CFK, which occur in two to three cases:
+ * TODO (formalise): tighten semantics around transactions that are not owned by this CFK, which occur in two to three cases:
  *      1) when a dependency calculation must report dependencies imported from a prior epoch.
  *         in this case we do not need to manage dependencies for the transaction, only report the transaction itself.
  *      2) when a transaction proposed in a future epoch visits an earlier epoch, it is registered here for recovery
@@ -518,7 +518,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         // this might happen if we are contacted in a future epoch than the one it commits in, or if we are contacted for a vote
         // from a future epoch that has yet to fully take ownership.
         // This is required at least for computing rejected fast path decisions in retired epochs.
-        // TODO (required): formalise and test this more completely, especially wrt interplay with status (e.g. if the deps are from accepted but then treated as committed).
+        // TODO (testing): formalise and test this more completely, especially wrt interplay with status (e.g. if the deps are from accepted but then treated as committed).
         //
         public boolean hasDeps()
         {
@@ -1066,7 +1066,6 @@ public class CommandsForKey extends CommandsForKeyUpdate
     final int maxAppliedUnreadyWriteById;
 
     // managed commands that are committed, stable or applied; sorted by executeAt
-    // TODO (required): validate that it is always a prefix that is Applied (i.e. never a gap)
     // TODO (desired): filter transactions whose execution we don't manage
     final TxnInfo[] committedByExecuteAt;
     final int maxAppliedWriteByExecuteAt; // applied OR unready
@@ -2311,6 +2310,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
                 if (maxAppliedWriteByExecuteAt >= 0)
                 {
+                    for (int i = 0 ; i < maxAppliedWriteByExecuteAt ; ++i)
+                        Invariants.require(committedByExecuteAt[i].compareTo(APPLIED) >= 0 || committedByExecuteAt[i].isSyncPoint() || !reportLinearizabilityViolations());
                     for (int i = maxAppliedWriteByExecuteAt + 1; i < committedByExecuteAt.length ; ++i)
                         Invariants.require(committedByExecuteAt[i].kind() != Kind.Write || committedByExecuteAt[i].status().compareTo(APPLIED) < 0);
                 }
@@ -2452,6 +2453,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return gcBefore.hlc() <= maxUniqueHlc || !gcBefore.is(HLC_BOUND);
     }
 
+    // TODO (required): this should be configurable per-node for tests
     public static boolean reportLinearizabilityViolations()
     {
         return reportLinearizabilityViolations;

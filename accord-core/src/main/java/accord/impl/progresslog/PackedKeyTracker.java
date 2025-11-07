@@ -21,8 +21,8 @@ package accord.impl.progresslog;
 import accord.local.Node;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
-import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
+import accord.topology.ActiveEpoch;
 import accord.utils.Invariants;
 
 /**
@@ -65,7 +65,7 @@ public class PackedKeyTracker
      * Generate a bitSet of those keys we would have requested from the responding replica for the callbackId.
      * These bits can be unset from the state's bitSet, as their criteria have been fulfilled on the remote replica.
      */
-    static int roundCallbackBitSet(DefaultProgressLog instance, TxnId txnId, Node.Id from, Route<?> route, int callbackId, int roundIndex, int roundSize)
+    static int roundCallbackBitSet(ActiveEpoch epoch, Node.Id from, Route<?> route, int callbackId, int roundIndex, int roundSize)
     {
         if (callbackId != roundIndex)
             return 0; // stale callback for earlier round OR different command store
@@ -73,9 +73,9 @@ public class PackedKeyTracker
         int start = roundSize * roundIndex;
         int end = Math.min((roundSize + 1) * roundIndex, route.size());
 
-        Ranges sliceRanges = instance.node().topology().active().globalForEpoch(txnId.epoch()).rangesForNode(from);
+        Ranges sliceRanges = epoch.global().rangesForNode(from);
         Route<?> ready = route.slice(start, end)
-                              .slice(sliceRanges);
+                              .overlapping(sliceRanges);
 
         return computeBitSet(route, ready, roundIndex, roundSize);
     }

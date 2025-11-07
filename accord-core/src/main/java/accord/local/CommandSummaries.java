@@ -505,7 +505,7 @@ public interface CommandSummaries
                     continue;
 
                 Unseekables<?> participants = value.participants;
-                Unseekables<?> intersecting = participants.intersecting(keysOrRanges);
+                Unseekables<?> intersecting = participants.overlapping(keysOrRanges);
                 if (!intersecting.isEmpty())
                 {
                     Timestamp executeAt = value.plainExecuteAt();

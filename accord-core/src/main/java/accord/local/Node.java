@@ -18,10 +18,6 @@
 
 package accord.local;
 
-import java.util.Collection;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.NavigableSet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
@@ -39,6 +35,9 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.TopologyService;
+import accord.topology.Topologies;
+import accord.topology.TopologyMismatch;
+import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
 import accord.topology.EpochReady;
 import accord.api.DataStore;
@@ -81,17 +80,15 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.TxnId.Cardinality;
-import accord.topology.Shard;
-import accord.topology.Topology;
+import accord.topology.TopologyException;
 import accord.topology.TopologyManager;
+import accord.topology.TopologyMismatch.TopologyMatch;
 import accord.topology.TopologyRetiredException;
-import accord.utils.DeterministicSet;
 import accord.utils.Invariants;
 import accord.utils.PersistentField;
 import accord.utils.PersistentField.Persister;
 import accord.utils.RandomSource;
-import accord.utils.SortedList;
-import accord.utils.SortedListMap;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
@@ -335,8 +332,6 @@ public class Node implements NodeCommandStoreService
     }
 
     // TODO (required): audit use of withEpochAtLeast vs withEpochExact
-    // TODO (required): audit error handling, as the refactor to provide epoch timeouts appears to have broken a number of coordination
-    // TODO (expected): move into TopologyManager
     // TODO (expected): provide a deadline
     public void withEpochAtLeast(EpochSupplier epochSupplier, @Nullable AsyncExecutor executor, BiConsumer<Void, Throwable> callback)
     {
@@ -496,61 +491,49 @@ public class Node implements NodeCommandStoreService
         return time.elapsed(timeUnit);
     }
 
-    // send to every node besides ourselves
-    public void send(Topology topology, Request send)
+    public void send(Topologies topologies, Request send)
     {
-        topology.nodes().forEach(id -> send(id, send));
+        SortedArrayList<Node.Id> nodes = topologies.nodes();
+        for (int i = 0 ; i < nodes.size() ; ++i)
+        {
+            Node.Id to = nodes.get(i);
+            if (!topologies.isFaulty(nodes.get(i)))
+                send(to, send);
+        }
     }
 
-    public void send(Shard shard, Request send)
+    public void send(Topologies topologies, Function<Id, Request> requestFactory)
     {
-        shard.nodes.forEach(node -> messageSink.send(node, send));
+        SortedArrayList<Node.Id> nodes = topologies.nodes();
+        for (int i = 0 ; i < nodes.size() ; ++i)
+        {
+            Node.Id to = nodes.get(i);
+            if (!topologies.isFaulty(nodes.get(i)))
+                send(to, requestFactory.apply(to));
+        }
     }
 
-    private void send(Shard shard, Request send, @Nonnull AsyncExecutor executor, Callback callback)
+    public <T> void send(Topologies topologies, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
-        shard.nodes.forEach(node -> messageSink.send(node, send, executor, callback));
-    }
-
-    public void send(Collection<Id> to, Request send)
-    {
-        checkIterationSafe(to);
-        to.forEach(dst -> send(dst, send));
-    }
-
-    public void send(Collection<Id> to, Function<Id, Request> requestFactory)
-    {
-        checkIterationSafe(to);
-        to.forEach(dst -> send(dst, requestFactory.apply(dst)));
-    }
-
-    public <T> void send(Collection<Id> to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
-    {
-        checkIterationSafe(to);
-        to.forEach(dst -> messageSink.send(dst, send, executor, callback));
+        SortedArrayList<Node.Id> nodes = topologies.nodes();
+        for (int i = 0 ; i < nodes.size() ; ++i)
+        {
+            Node.Id to = nodes.get(i);
+            if (!topologies.isFaulty(nodes.get(i)))
+                messageSink.send(to, send, executor, callback);
+        }
     }
 
     // TODO (required): callback must be invoked if for any reason send fails
-    public <T> void send(Collection<Id> to, Function<Id, Request> requestFactory, @Nonnull AsyncExecutor executor, Callback<T> callback)
+    public <T> void send(Topologies topologies, Function<Id, Request> requestFactory, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
-        checkIterationSafe(to);
-        to.forEach(dst -> messageSink.send(dst, requestFactory.apply(dst), executor, callback));
-    }
-
-    private static void checkIterationSafe(Collection<?> collection)
-    {
-        if (!Invariants.isParanoid())
-            return;
-        if (collection instanceof List) return;
-        if (collection instanceof NavigableSet
-            || collection instanceof LinkedHashSet
-            || collection instanceof SortedList
-            || collection instanceof SortedListMap
-            || collection instanceof SortedListMap.SetView
-            || collection instanceof SortedListMap.CollectionView
-            || "java.util.LinkedHashMap.LinkedKeySet".equals(collection.getClass().getCanonicalName())
-            || collection instanceof DeterministicSet) return;
-        throw new IllegalArgumentException("Attempted to use a collection that is unsafe for iteration: " + collection.getClass());
+        SortedArrayList<Node.Id> nodes = topologies.nodes();
+        for (int i = 0 ; i < nodes.size() ; ++i)
+        {
+            Node.Id to = nodes.get(i);
+            if (!topologies.isFaulty(nodes.get(i)))
+                messageSink.send(to, requestFactory.apply(to), executor, callback);
+        }
     }
 
     // send to a specific node
@@ -569,16 +552,16 @@ public class Node implements NodeCommandStoreService
     {
         if (failure != null)
         {
-            agent.onUncaughtException(failure);
+            agent.onException(failure);
             if (send != null)
-                agent().onUncaughtException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, send)));
+                agent().onException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, send)));
             messageSink.replyWithUnknownFailure(replyingToNode, replyContext, failure);
             return;
         }
         else if (send == null)
         {
             NullPointerException e = new NullPointerException();
-            agent.onUncaughtException(e);
+            agent.onException(e);
             throw e;
         }
         messageSink.reply(replyingToNode, replyContext, send);
@@ -606,7 +589,7 @@ public class Node implements NodeCommandStoreService
 
     /**
      * TODO (required): Make sure we cannot re-issue the same txnid on startup
-     * TODO (required): Don't use a new epoch for the TxnId at least until we know its definition
+     * TODO (required): Don't use new epoch for TxnId until a quorum is ready to coordinate it
      */
     public TxnId nextTxnIdWithFlags(Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
     {
@@ -708,29 +691,34 @@ public class Node implements NodeCommandStoreService
 
     private AsyncChain<Result> initiateCoordination(TxnId txnId, Txn txn)
     {
-        FullRoute<?> route = computeRoute(txnId, txn.keys());
         if (txnId.kind() == Txn.Kind.EphemeralRead)
-            return CoordinateEphemeralRead.coordinate(this, route, txnId, txn);
+            return CoordinateEphemeralRead.coordinate(this, txnId, txn);
         else
-            return CoordinateTransaction.coordinate(this, route, txnId, txn);
+            return CoordinateTransaction.coordinate(this, txnId, txn);
     }
 
-    public FullRoute<?> computeRoute(TxnId txnId, Routables<?> keysOrRanges)
+    public FullRoute<?> computeRoute(TxnId txnId, Routables<?> keysOrRanges) throws TopologyException
     {
-        return computeRoute(txnId.epoch(), keysOrRanges);
+        return computeRoute(txnId.epoch(), keysOrRanges, topology.active(), txnId.isSyncPoint() ? TopologyMatch.ANY : TopologyMatch.LATEST);
     }
 
-    public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges)
+    public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges, ActiveEpochs active, TopologyMatch match) throws TopologyException
     {
         Invariants.requireArgument(!keysOrRanges.isEmpty(), "Attempted to compute a route from empty keys or ranges");
-        RoutingKey homeKey = selectHomeKey(epoch, keysOrRanges);
-        return keysOrRanges.toRoute(homeKey);
+
+        RoutingKey homeKey = selectHomeKey(active.get(epoch), keysOrRanges);
+        FullRoute<?> route = keysOrRanges.toRoute(homeKey);
+
+        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(epoch, keysOrRanges, active, match);
+        if (mismatch != null)
+            throw mismatch;
+
+        return route;
     }
 
-    private RoutingKey selectHomeKey(long epoch, Routables<?> keysOrRanges)
+    private RoutingKey selectHomeKey(ActiveEpoch e, Routables<?> keysOrRanges)
     {
-        ActiveEpochs epochs = topology().active();
-        Ranges owned = epochs.localForEpoch(epoch).ranges();
+        Ranges owned = e.local().ranges();
         int i = (int)keysOrRanges.findNextIntersection(0, owned, 0);
         if (i >= 0)
             return keysOrRanges.get(i).someIntersectingRoutingKey(owned);

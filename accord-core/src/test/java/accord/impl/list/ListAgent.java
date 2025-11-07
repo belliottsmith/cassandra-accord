@@ -169,7 +169,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
 
     private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyRetiredException.class, Snapshotter.SnapshotAborted.class, TimeoutException.class, LogUnavailableException.class));
     @Override
-    public void onUncaughtException(Throwable t)
+    public void onException(Throwable t)
     {
         if (expectedExceptions.contains(t.getClass()))
             return;
@@ -180,9 +180,9 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     }
 
     @Override
-    public void onCaughtException(Throwable t, String context)
+    public void onException(Throwable t, String context)
     {
-        onUncaughtException(t);
+        this.onException(t);
     }
 
     @Override
@@ -224,7 +224,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     @Override
     public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt)
     {
-        // TODO (required): meta randomise
+        // TODO (expected): meta randomise
         return units.convert(rnd.nextLong(100, 1000) * attempt, MILLISECONDS);
     }
 

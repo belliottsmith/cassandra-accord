@@ -85,13 +85,13 @@ public class TestAgent implements Agent, OwnershipEventListener
         }
 
         @Override
-        public void onUncaughtException(Throwable t)
+        public void onException(Throwable t)
         {
             throw new AssertionError("Unexpected exception", t);
         }
 
         @Override
-        public void onCaughtException(Throwable t, String context)
+        public void onException(Throwable t, String context)
         {
             throw new AssertionError("Unexpected exception", t);
         }
@@ -127,13 +127,13 @@ public class TestAgent implements Agent, OwnershipEventListener
     }
 
     @Override
-    public void onUncaughtException(Throwable t)
+    public void onException(Throwable t)
     {
         logger.error("Uncaught exception", t);
     }
 
     @Override
-    public void onCaughtException(Throwable t, String context)
+    public void onException(Throwable t, String context)
     {
     }
 

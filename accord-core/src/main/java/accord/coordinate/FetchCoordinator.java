@@ -29,6 +29,7 @@ import accord.primitives.SyncPoint;
 import accord.primitives.Ranges;
 import accord.primitives.Route;
 import accord.topology.Topology;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.SortedList;
 import accord.utils.SortedListMap;
@@ -144,7 +145,7 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<Route<
     private Ranges needed;
     private int inflight;
 
-    protected FetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, FetchRanges fetchRanges)
+    protected FetchCoordinator(Node node, SequentialAsyncExecutor executor, Ranges ranges, SyncPoint syncPoint, FetchRanges fetchRanges) throws TopologyException
     {
         super(node, executor, syncPoint.syncId, syncPoint.route);
         this.ranges = remaining = ranges;

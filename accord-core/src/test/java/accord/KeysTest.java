@@ -115,13 +115,13 @@ public class KeysTest
     {
         assertEquals(keys(150, 250),
                      keys(100, 150, 200, 250, 300)
-                             .slice(ranges(r(125, 175), r(225, 275))));
+                             .overlapping(ranges(r(125, 175), r(225, 275))));
         assertEquals(keys(101, 199, 200),
                      keys(99, 100, 101, 199, 200, 201)
-                             .slice(ranges(r(100, 200))));
+                             .overlapping(ranges(r(100, 200))));
         assertEquals(keys(101, 199, 200, 201, 299, 300),
                      keys(99, 100, 101, 199, 200, 201, 299, 300, 301)
-                             .slice(ranges(r(100, 200), r(200, 300))));
+                             .overlapping(ranges(r(100, 200), r(200, 300))));
     }
 
     @Test
@@ -191,7 +191,7 @@ public class KeysTest
             Range before = IntKey.range(Integer.MIN_VALUE, first - 1);
             Range after = IntKey.range(last, Integer.MAX_VALUE);
 
-            Assertions.assertEquals(Keys.EMPTY, keys.slice(ranges(before, after)));
+            Assertions.assertEquals(Keys.EMPTY, keys.overlapping(ranges(before, after)));
 
             // remove from the middle
             for (int i = 1; i < keys.size() - 1; i++)
@@ -208,7 +208,7 @@ public class KeysTest
                         range(previous.key - 1, exclude.key - 1),
                         range(exclude.key, last),
                         after);
-                Assertions.assertEquals(Keys.of(expected), keys.slice(allButI), "Expected to exclude " + exclude + " at index " + i);
+                Assertions.assertEquals(Keys.of(expected), keys.overlapping(allButI), "Expected to exclude " + exclude + " at index " + i);
             }
 
             // remove the first
@@ -221,7 +221,7 @@ public class KeysTest
                         // exclusive, inclusive
                         range(first, last),
                         after);
-                Assertions.assertEquals(Keys.of(expected), keys.slice(allButI), "Expected to exclude " + first + " at index " + 0);
+                Assertions.assertEquals(Keys.of(expected), keys.overlapping(allButI), "Expected to exclude " + first + " at index " + 0);
             }
             // remove the last
             {
@@ -234,7 +234,7 @@ public class KeysTest
                         range(first - 1, last - 1),
                         range(last, Integer.MAX_VALUE),
                         after);
-                Assertions.assertEquals(Keys.of(expected), keys.slice(allButI), "Expected to exclude " + first + " at index " + 0);
+                Assertions.assertEquals(Keys.of(expected), keys.overlapping(allButI), "Expected to exclude " + first + " at index " + 0);
             }
         });
     }

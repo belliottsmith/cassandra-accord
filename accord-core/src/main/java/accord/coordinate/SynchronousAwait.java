@@ -36,6 +36,8 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
+import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+
 /**
  * Synchronously await some set of replicas reaching a given wait condition.
  * This may or may not be a condition we expect to reach promptly, but we will wait only until the timeout passes
@@ -62,14 +64,24 @@ public class SynchronousAwait extends AbstractCoordination<Participants<?>, Bool
         contact(to -> new Await(to, tracker.topologies(), txnId, scope, until, notifyProgressLog));
     }
 
-    public static AsyncChain<Boolean> awaitQuorum(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Participants<?> participants, Await.Until until, boolean notifyProgressLog)
+    public static AsyncChain<Boolean> awaitQuorum(Node node, SequentialAsyncExecutor executor, TxnId txnId, Participants<?> participants, Await.Until until, boolean notifyProgressLog)
     {
         // TODO (expected): copy this pattern elsewhere; should also make it easier to share exception handling logic etc
         return new AsyncChains.Head<>()
         {
             protected @Nullable @Override Cancellable start(BiConsumer<? super Boolean, Throwable> callback)
             {
-                SynchronousAwait await = new SynchronousAwait(node, executor, txnId, participants, new QuorumTracker(topologies), until, notifyProgressLog, callback);
+                SynchronousAwait await;
+                try
+                {
+                    Topologies topologies = node.topology().active().forEpoch(participants, txnId.epoch(), SHARE);
+                    await = new SynchronousAwait(node, executor, txnId, participants, new QuorumTracker(topologies), until, notifyProgressLog, callback);
+                }
+                catch (Throwable t)
+                {
+                    callback.accept(null, t);
+                    return null;
+                }
                 await.start();
                 return null;
             }

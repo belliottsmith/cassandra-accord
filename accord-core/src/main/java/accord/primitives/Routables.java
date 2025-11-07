@@ -42,7 +42,7 @@ public interface Routables<K extends Routable> extends Iterable<K>
      */
     enum Slice
     {
-        /** (Default) Overlapping ranges are returned unmodified */
+        /** Overlapping ranges are returned unmodified */
         Overlapping,
         /** Overlapping ranges are split/shrunk to the intersection of the overlaps */
         Minimal,
@@ -101,11 +101,11 @@ public interface Routables<K extends Routable> extends Iterable<K>
     default boolean containsAll(Ranges ranges) { return containsAll((AbstractRanges) ranges); }
 
     Routables<K> slice(int from, int to);
-    Routables<K> slice(Ranges ranges);
+    Routables<K> overlapping(Ranges ranges);
     Routables<K> slice(Ranges ranges, Slice slice);
-    Routables<K> intersecting(Seekables<?, ?> intersecting);
+    Routables<K> overlapping(Seekables<?, ?> intersecting);
     Routables<K> intersecting(Seekables<?, ?> intersecting, Slice slice);
-    Routables<K> intersecting(Unseekables<?> intersecting);
+    Routables<K> overlapping(Unseekables<?> intersecting);
     Routables<K> intersecting(Unseekables<?> intersecting, Slice slice);
     Routables<K> without(Ranges ranges);
 

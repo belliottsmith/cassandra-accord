@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.VisibleForImplementation;
@@ -33,13 +34,16 @@ import accord.primitives.FullRoute;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
+import accord.topology.TopologyMismatch;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
+import static accord.topology.TopologyMismatch.TopologyMatch.ANY;
 
 /**
  * Calculate the maximum TxnId that could have been agreed before this operation started
@@ -51,14 +55,9 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     Timestamp maxConflict;
     long executionEpoch;
 
-    private CoordinateMaxConflict(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, long executionEpoch, BiConsumer<? super Timestamp, Throwable> callback)
+    private CoordinateMaxConflict(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, long executionEpoch, BiConsumer<? super Timestamp, Throwable> callback)
     {
-        this(node, executor, route, executionEpoch, node.topology().active().withUnsyncedEpochs(route, executionEpoch, executionEpoch), callback);
-    }
-
-    private CoordinateMaxConflict(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, long executionEpoch, Topologies topologies, BiConsumer<? super Timestamp, Throwable> callback)
-    {
-        super(node, executor, route, TxnId.NONE, topologies, callback);
+        super(node, executor, topologies, route, TxnId.NONE, callback);
         this.maxConflict = Timestamp.NONE;
         this.executionEpoch = executionEpoch;
         this.tracker = new QuorumTracker(topologies);
@@ -79,19 +78,14 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
 
     public static void maxConflict(Node node, Routables<?> keysOrRanges, BiConsumer<? super Timestamp, Throwable> callback)
     {
-        long epoch = node.epoch();
-        FullRoute<?> route = node.computeRoute(epoch, keysOrRanges);
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatchOrPendingRemoval(node.topology().active().globalForEpoch(epoch), null, route.homeKey(), keysOrRanges);
-        if (mismatch != null)
-        {
-            callback.accept(null, mismatch);
-            return;
-        }
-
         CoordinateMaxConflict coordinate;
         try
         {
-            coordinate = new CoordinateMaxConflict(node, node.someSequentialExecutor(), route, epoch, callback);
+            ActiveEpochs active = node.topology().active();
+            long epoch = active.epoch();
+            FullRoute<?> route = node.computeRoute(epoch, keysOrRanges, active, ANY);
+            Topologies topologies = active.withUnsyncedEpochs(route, epoch, epoch);
+            coordinate = new CoordinateMaxConflict(node, node.someSequentialExecutor(), topologies, route, epoch, callback);
         }
         catch (Throwable t)
         {
@@ -144,6 +138,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
         finishAndInvokeCallback(maxConflict, null);
     }
 
+    @Nonnull
     @Override
     public AbstractTracker<?> tracker()
     {

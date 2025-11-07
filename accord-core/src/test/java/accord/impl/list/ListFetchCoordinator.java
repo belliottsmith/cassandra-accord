@@ -38,13 +38,14 @@ import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.TopologyException;
 import accord.utils.async.AsyncChain;
 
 public class ListFetchCoordinator extends AbstractFetchCoordinator
 {
     private final ListStore listStore;
 
-    public ListFetchCoordinator(Node node, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore, ListStore listStore)
+    public ListFetchCoordinator(Node node, Ranges ranges, SyncPoint syncPoint, DataStore.FetchRanges fetchRanges, CommandStore commandStore, ListStore listStore) throws TopologyException
     {
         super(node, node.someSequentialExecutor(), ranges, syncPoint, fetchRanges, commandStore);
         this.listStore = listStore;

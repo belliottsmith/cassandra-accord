@@ -146,7 +146,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private boolean processing;
     private int modeFlags;
 
-    private volatile boolean stopped;
+    private volatile boolean stopped = true;
     private Config config = new Config();
 
     private long prevCallbackId;
@@ -393,10 +393,17 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     @Override
     public void start()
     {
-        commandStore.executeMaybeImmediately(() -> {
+        commandStore.executeMaybeImmediately(this::unsafeStart);
+    }
+
+    @Override
+    public void unsafeStart()
+    {
+        if (stopped)
+        {
             stopped = false;
             accept(null);
-        });
+        }
     }
 
     @Override
@@ -545,7 +552,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
         catch (Throwable t)
         {
-            node.agent().onUncaughtException(t);
+            node.agent().onException(t);
         }
         finally
         {
@@ -709,14 +716,14 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                 maybeShrinkRunBuffer();
                 commandStore.execute(run, safeStore0 -> {
                     try { run.accept(safeStore0); }
-                    catch (Throwable t) { node.agent().onUncaughtException(t); }
+                    catch (Throwable t) { node.agent().onException(t); }
                     accept(safeStore0);
                 });
                 return;
             }
 
             try { run.accept(safeStore); }
-            catch (Throwable t) { node.agent().onUncaughtException(t); }
+            catch (Throwable t) { node.agent().onException(t); }
         }
 
         if (runBuffer.length > ArrayBuffers.MIN_BUFFER_SIZE)

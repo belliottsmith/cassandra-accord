@@ -18,15 +18,26 @@
 
 package accord.topology;
 
-public class TopologyRetiredException extends RuntimeException
+public class TopologyRetiredException extends TopologyException
 {
     public TopologyRetiredException(long epoch, long minEpoch)
     {
-        super(String.format("Topology %s retired. Min topology %d", epoch, minEpoch));
+        super(message(epoch, minEpoch));
     }
 
     public TopologyRetiredException(String message, TopologyRetiredException t)
     {
         super(message, t);
+    }
+
+    public static String message(long epoch, long minEpoch)
+    {
+        return String.format("Topology %d retired. Min topology %d", epoch, minEpoch);
+    }
+
+    @Override
+    public TopologyException rethrowable()
+    {
+        return new TopologyRetiredException(getMessage(), this);
     }
 }

@@ -57,7 +57,7 @@ public class Timeout extends CoordinationFailed
     }
 
     @Override
-    public Timeout wrap()
+    public Timeout rethrowable()
     {
         Invariants.require(this.getClass() == Timeout.class);
         return new Timeout(txnId(), homeKey(), this);

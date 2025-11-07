@@ -18,9 +18,9 @@
 
 package accord.local;
 
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 
-public class LogUnavailableException extends RuntimeException implements WrappableException<LogUnavailableException>
+public class LogUnavailableException extends RuntimeException implements Rethrowable<LogUnavailableException>
 {
     public LogUnavailableException()
     {
@@ -32,7 +32,7 @@ public class LogUnavailableException extends RuntimeException implements Wrappab
     }
 
     @Override
-    public LogUnavailableException wrap()
+    public LogUnavailableException rethrowable()
     {
         return new LogUnavailableException(this);
     }

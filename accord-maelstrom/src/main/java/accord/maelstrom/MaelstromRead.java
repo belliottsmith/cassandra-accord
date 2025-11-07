@@ -62,13 +62,13 @@ public class MaelstromRead implements Read
     @Override
     public Read slice(Ranges ranges)
     {
-        return new MaelstromRead(readKeys.slice(ranges), keys.slice(ranges));
+        return new MaelstromRead(readKeys.overlapping(ranges), keys.overlapping(ranges));
     }
 
     @Override
     public Read intersecting(Participants<?> participants)
     {
-        return new MaelstromRead(readKeys.intersecting(participants), keys.intersecting(participants));
+        return new MaelstromRead(readKeys.overlapping(participants), keys.overlapping(participants));
     }
 
     @Override

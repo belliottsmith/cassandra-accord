@@ -163,7 +163,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
 
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
-        super(RouteRequest.computeScope(to, topologies, scope, latestRelevantEpochIndex(to, topologies, scope), Participants::slice, Participants::with));
+        super(RouteRequest.computeScope(to, topologies, scope, latestRelevantEpochIndex(to, topologies, scope), Participants::overlapping, Participants::with));
         this.txnId = txnId;
         this.flags = flags;
         this.partialTxn = txn == null ? null : txn.intersecting(scope, true);
@@ -735,7 +735,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         if (throwable != null)
         {
             reply(null, throwable);
-            node.agent().onUncaughtException(throwable);
+            node.agent().onException(throwable);
         }
         else
         {

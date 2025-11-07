@@ -143,7 +143,7 @@ public class NodeSink implements MessageSink
                             catch (Throwable t)
                             {
                                 callback.onCallbackFailure(to, t);
-                                lookup.apply(self).agent().onUncaughtException(t);
+                                lookup.apply(self).agent().onException(t);
                             }
                         }
                     }), failesAt - timeouts.now(), timeouts.units());

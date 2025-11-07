@@ -412,7 +412,7 @@ public class TopologyManager
             {
                 // TODO (expected): special casing of TopologyRetiredException?
                 logger.warn("Failed to fetch epoch {}. Retrying.", pending.epoch, fail);
-                node.agent().onCaughtException(fail, "Fetch epoch " + pending.epoch);
+                node.agent().onException(fail, "Fetch epoch " + pending.epoch);
                 long retryInMicros = node.agent().retryTopologyDelay(node, 1 + ++pending.fetchAttempts, TimeUnit.MICROSECONDS);
                 node.scheduler().once(() -> fetch(pending), retryInMicros, TimeUnit.MICROSECONDS);
             }
@@ -426,7 +426,7 @@ public class TopologyManager
         synchronized (this)
         {
             if (active.hasEpoch(epoch))
-                return get.apply(active.get(epoch).epochReady());
+                return get.apply(active.getKnown(epoch).epochReady());
 
             return pending.getOrCreate(epoch).whenActive().flatMap(r -> get.apply(active.epochReady(epoch)));
         }
@@ -435,7 +435,7 @@ public class TopologyManager
     @VisibleForTesting
     ActiveEpoch unsafeGetActiveEpoch(long epoch)
     {
-        return active.get(epoch);
+        return active.getKnown(epoch);
     }
 
     @VisibleForTesting

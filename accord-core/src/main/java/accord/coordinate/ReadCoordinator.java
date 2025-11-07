@@ -44,7 +44,7 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedList;
 import accord.utils.UnhandledEnum;
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 import org.agrona.collections.IntHashSet;
 
 import static accord.primitives.WithQuorum.HasQuorum;
@@ -401,7 +401,7 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
     // TODO (desired): try to rework ReadCoordinator to match some of the improved properties of AbstractCoordination
     Action retryWithEpochExact(long epoch, Runnable runnable)
     {
-        node.withEpochExact(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), WrappableException::wrap, runnable);
+        node.withEpochExact(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), Rethrowable::rethrowable, runnable);
         return Action.Aborted;
     }
 

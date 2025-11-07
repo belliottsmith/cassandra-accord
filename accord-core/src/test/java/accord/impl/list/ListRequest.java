@@ -50,6 +50,7 @@ import accord.messages.Request;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.TopologyException;
 import accord.topology.TopologyRetiredException;
 
 import javax.annotation.Nullable;
@@ -88,7 +89,7 @@ public class ListRequest implements Request
     static class CheckOnResult extends CheckShards<Outcome, Participants<?>>
     {
         int count = 0;
-        protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback)
+        protected CheckOnResult(Node node, TxnId txnId, RoutingKey homeKey, BiConsumer<Outcome, Throwable> callback) throws TopologyException
         {
             super(node, node.someSequentialExecutor(), txnId, txnId.is(Key) ? RoutingKeys.of(homeKey) : Ranges.of(homeKey.asRange()), IncludeInfo.All, null, NotKnownToBeInvalid, callback);
         }
@@ -208,7 +209,7 @@ public class ListRequest implements Request
             else
             {
                 listener.onClientAction(MessageListener.ClientAction.UNKNOWN, node.id(), id, null);
-                node.agent().onUncaughtException(new NullPointerException("Success and Failure were both null"));
+                node.agent().onException(new NullPointerException("Success and Failure were both null"));
             }
         }
 
@@ -223,12 +224,21 @@ public class ListRequest implements Request
             if (txnId.epoch() < node.topology().minEpoch())
             {
                 node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null);
-                node.agent().onUncaughtException(new TopologyRetiredException(txnId.epoch(), node.topology().minEpoch()));
+                node.agent().onException(new TopologyRetiredException(txnId.epoch(), node.topology().minEpoch()));
                 return;
             }
 
             if (homeKey == null)
-                homeKey = node.computeRoute(txnId, txn.keys()).homeKey();
+            {
+                try
+                {
+                    homeKey = node.computeRoute(txnId, txn.keys()).homeKey();
+                }
+                catch (Throwable t2)
+                {
+                    throw new RuntimeException(t2);
+                }
+            }
             RoutingKey finalHomeKey = homeKey;
             node.someExecutor().execute(() -> CheckOnResult.checkOnResult(node, txnId, finalHomeKey, (s, f) -> {
                 if (f != null)
@@ -247,7 +257,7 @@ public class ListRequest implements Request
                     else
                     {
                         node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null);
-                        node.agent().onUncaughtException(f);
+                        node.agent().onException(f);
                     }
                     return;
                 }
@@ -277,7 +287,7 @@ public class ListRequest implements Request
                         }
                         break;
                     default:
-                        node.agent().onUncaughtException(new AssertionError("Unknown outcome: " + s));
+                        node.agent().onException(new AssertionError("Unknown outcome: " + s));
                 }
             }));
         }

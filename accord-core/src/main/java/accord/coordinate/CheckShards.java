@@ -30,6 +30,7 @@ import accord.messages.CheckStatus.CheckStatusReply;
 import accord.messages.CheckStatus.IncludeInfo;
 import accord.primitives.*;
 import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -56,12 +57,12 @@ public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoor
     protected boolean truncated;
 
     // srcEpoch is either txnId.epoch() or executeAt.epoch()
-    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback) throws TopologyException
     {
         this(node, executor, txnId, query, txnId.epoch(), includeInfo, bumpBallot, previouslyKnownToBeInvalidIf, callback);
     }
 
-    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback)
+    protected CheckShards(Node node, SequentialAsyncExecutor executor, TxnId txnId, U query, long srcEpoch, IncludeInfo includeInfo, @Nullable Ballot bumpBallot, Infer.InvalidIf previouslyKnownToBeInvalidIf, BiConsumer<? super R, Throwable> callback) throws TopologyException
     {
         super(node, executor, topologyFor(node, txnId, query, srcEpoch), txnId, query, callback);
         this.sourceEpoch = srcEpoch;
@@ -72,7 +73,7 @@ public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoor
         Invariants.require(txnId.isVisible());
     }
 
-    private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch)
+    private static Topologies topologyFor(Node node, TxnId txnId, Unseekables<?> contact, long epoch) throws TopologyException
     {
         // TODO (desired): only fetch data from source epoch
         return node.topology().active().preciseEpochs(contact, txnId.epoch(), epoch, SHARE);
@@ -81,7 +82,7 @@ public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoor
     @Override
     protected void contact(Id id)
     {
-        Participants<?> unseekables = query.slice(topologies().computeRangesForNode(id));
+        Participants<?> unseekables = query.overlapping(topologies().computeRangesForNode(id));
         node.send(id, new CheckStatus(txnId, unseekables, sourceEpoch, includeInfo, bumpBallot), executor, this);
     }
 

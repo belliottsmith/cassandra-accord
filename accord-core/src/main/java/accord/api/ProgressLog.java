@@ -215,6 +215,7 @@ public interface ProgressLog
     void clear(TxnId txnId);
 
     void start();
+    default void unsafeStart() { start(); }
     void stop();
     void clear();
 
