@@ -53,6 +53,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topology;
+import accord.topology.TopologyException;
 import accord.topology.TopologyUtils;
 
 import static accord.Utils.createNode;
@@ -82,7 +83,7 @@ public class PreAcceptTest
     private static PreAccept preAccept(TxnId txnId, Txn txn, RoutingKey homeKey)
     {
         FullRoute<?> route = txn.keys().toRoute(homeKey);
-        return PreAccept.SerializerSupport.create(txnId, route.slice(FULL_RANGE), txnId.epoch(), txnId.epoch(), txnId.epoch(), txn.slice(FULL_RANGE, true), null, false, route);
+        return PreAccept.SerializerSupport.create(txnId, route.overlapping(FULL_RANGE), txnId.epoch(), txnId.epoch(), txnId.epoch(), txn.slice(FULL_RANGE, true), null, false, route);
     }
 
     @Test
@@ -148,7 +149,7 @@ public class PreAcceptTest
     }
 
     @Test
-    void invalidatedTest()
+    void invalidatedTest() throws TopologyException
     {
         RecordingMessageSink messageSink = new RecordingMessageSink(ID1, Network.BLACK_HOLE);
         Clock clock = new Clock(100);

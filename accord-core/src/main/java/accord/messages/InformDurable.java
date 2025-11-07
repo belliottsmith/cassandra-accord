@@ -37,6 +37,7 @@ import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.topology.Topology;
+import accord.topology.TopologyException;
 import accord.utils.async.Cancellable;
 
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
@@ -90,20 +91,27 @@ public class InformDurable extends RouteRequest<Reply> implements PreLoadContext
 
     public static void informHome(Node node, Topologies any, TxnId txnId, Route<?> route, @Nullable Timestamp executeAt, Durability durability)
     {
-        Shard homeShard = homeShard(node, any, txnId, route.homeKey());
+        Shard homeShard;
+        try
+        {
+            homeShard = homeShard(node, any, txnId, route.homeKey());
+        }
+        catch (TopologyException e)
+        {
+            node.agent().onException(e);
+            return;
+        }
         Topology latest = any.current();
         Topologies homeTopology = new Topologies.Single(any, new Topology(txnId.epoch(), latest.removedIds(), latest.hardRemovedIds(), latest.staleIds(), homeShard));
-        // TODO (required): do not send to faulty
-        node.send(homeShard.nodes, to -> new InformDurable(to, homeTopology, route.homeKeyOnlyRoute(), txnId, executeAt, txnId.epoch(), txnId.epoch(), durability));
+        node.send(homeTopology, to -> new InformDurable(to, homeTopology, route.homeKeyOnlyRoute(), txnId, executeAt, txnId.epoch(), txnId.epoch(), durability));
     }
 
     public static void informAll(Node node, Topologies inform, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability)
     {
-        // TODO (required): do not send to faulty
-        node.send(inform.nodes(), to -> new InformDurable(to, inform, route, txnId, executeAt, inform.oldestEpoch(), inform.currentEpoch(), durability));
+        node.send(inform, to -> new InformDurable(to, inform, route, txnId, executeAt, inform.oldestEpoch(), inform.currentEpoch(), durability));
     }
 
-    static Shard homeShard(Node node, Topologies any, TxnId txnId, RoutingKey homeKey)
+    static Shard homeShard(Node node, Topologies any, TxnId txnId, RoutingKey homeKey) throws TopologyException
     {
         long homeEpoch = txnId.epoch();
         int homeShardIndex = -1;

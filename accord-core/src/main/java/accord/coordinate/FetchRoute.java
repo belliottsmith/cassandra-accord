@@ -36,6 +36,7 @@ import accord.primitives.WithQuorum;
 import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
+import accord.topology.TopologyException;
 
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
@@ -50,7 +51,7 @@ public class FetchRoute extends CheckShards<Route<?>, Participants<?>>
 {
     final LatentStoreSelector reportTo;
 
-    FetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback)
+    FetchRoute(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Participants<?> contactable, LatentStoreSelector reportTo, BiConsumer<Route<?>, Throwable> callback) throws TopologyException
     {
         super(node, node.someSequentialExecutor(), txnId, contactable, txnId.epoch(), IncludeInfo.Route, null, invalidIf, callback);
         this.reportTo = reportTo;
@@ -71,7 +72,16 @@ public class FetchRoute extends CheckShards<Route<?>, Participants<?>>
             return node.withEpochAtLeast(txnId.epoch(), null, callback, () -> fetchRoute(node, txnId, invalidIf, participants, reportTo, callback, tracing));
         }
 
-        FetchRoute fetchRoute = new FetchRoute(node, txnId, invalidIf, participants, reportTo, callback);
+        FetchRoute fetchRoute;
+        try
+        {
+            fetchRoute = new FetchRoute(node, txnId, invalidIf, participants, reportTo, callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+            return null;
+        }
         fetchRoute.start();
         return fetchRoute;
     }

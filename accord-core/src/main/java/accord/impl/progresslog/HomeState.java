@@ -246,7 +246,7 @@ abstract class HomeState extends BaseTxnState
                     tracing.trace(safeStore.commandStore(), "Waiting to retry (%d) with progress token %s", state.homeRunCounter(), prevProgressToken);
                 }
 
-                safeStore.agent().onCaughtException(fail, "Failed recovering " + state);
+                safeStore.agent().onException(fail, "Failed recovering " + state);
 
                 // re-save prior progress token
                 if (prevProgressToken != null && prevProgressToken.compareTo(command) > 0)

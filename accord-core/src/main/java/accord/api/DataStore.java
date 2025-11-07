@@ -26,6 +26,7 @@ import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.utils.async.AsyncResult;
+import accord.utils.async.AsyncResults;
 
 /**
  * A marker interface for a shard instance's storage, that is passed to
@@ -117,6 +118,17 @@ public interface DataStore
          * (This method's behaviour is optional, and may be left a no-op)
          */
         void abort(Ranges ranges);
+
+        class Failure extends AsyncResults.ImmediateFailure<Ranges> implements FetchResult
+        {
+            public Failure(Throwable failure) { super(failure); }
+            @Override public void abort(Ranges ranges) {}
+        }
+
+        static FetchResult failure(Throwable t)
+        {
+            return new Failure(t);
+        }
     }
 
     /**

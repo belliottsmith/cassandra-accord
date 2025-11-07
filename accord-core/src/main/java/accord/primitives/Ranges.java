@@ -93,7 +93,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
     }
 
     @Override
-    public final Ranges slice(Ranges ranges)
+    public final Ranges overlapping(Ranges ranges)
     {
         return slice(ranges, Overlapping);
     }
@@ -114,13 +114,13 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         return slice(ranges, slice, this, null, (i1, i2, rs) -> i1.ranges == rs ? i1 : Ranges.ofSortedAndDeoverlapped(rs));
     }
 
-    private Ranges slice(AbstractRanges ranges, Slice slice)
+    private Ranges sliceOverlapping(AbstractRanges ranges, Slice slice)
     {
         return slice(ranges, slice, this, this, (i1, i2, rs) -> i2.ranges == rs ? i2 : Ranges.ofSortedAndDeoverlapped(rs));
     }
 
     @Override
-    public Participants<Range> intersecting(Seekables<?, ?> intersecting)
+    public Participants<Range> overlapping(Seekables<?, ?> intersecting)
     {
         return intersecting(intersecting, Overlapping);
     }
@@ -131,13 +131,13 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         switch (intersecting.domain())
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
-            case Range: return slice((AbstractRanges) intersecting, slice);
+            case Range: return sliceOverlapping((AbstractRanges) intersecting, slice);
             case Key: return intersecting((Keys) intersecting, this, null, (i1, i2, rs) -> i1.ranges == rs ? i1 : new Ranges(rs), slice);
         }
     }
 
     @Override
-    public Ranges intersecting(Unseekables<?> intersecting)
+    public Ranges overlapping(Unseekables<?> intersecting)
     {
         return intersecting(intersecting, Overlapping);
     }
@@ -148,7 +148,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         switch (intersecting.domain())
         {
             default: throw new AssertionError("Unhandled domain: " + intersecting.domain());
-            case Range: return slice((AbstractRanges) intersecting, slice);
+            case Range: return sliceOverlapping((AbstractRanges) intersecting, slice);
             case Key: return intersecting((AbstractUnseekableKeys) intersecting, this, null, (i1, i2, rs) -> i1.ranges == rs ? i1 : new Ranges(rs), slice);
         }
     }

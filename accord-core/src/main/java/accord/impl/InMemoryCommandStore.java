@@ -201,6 +201,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     {
         super(id, node, agent, store, progressLogFactory, listenersFactory, epochUpdateHolder);
         this.journal = journal;
+        progressLog.unsafeStart();
     }
 
     protected boolean canExposeUnloaded()

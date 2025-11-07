@@ -75,7 +75,7 @@ public class ReadEphemeralTxnData extends ReadData
 
     private ReadEphemeralTxnData(TxnId txnId, Participants<?> readScope, Route<?> scope, long executeAtEpoch, @Nonnull Txn txn, @Nonnull Deps deps, @Nonnull FullRoute<?> route, ExecuteFlags flags)
     {
-        super(txnId, readScope.intersecting(scope), txn.intersecting(scope, false), txnId, executeAtEpoch, flags);
+        super(txnId, readScope.overlapping(scope), txn.intersecting(scope, false), txnId, executeAtEpoch, flags);
         Invariants.require(executeAtEpoch == txnId.epoch(),
                            "Epoch for transaction %s (%d) did not match expected %d", txn, txnId.epoch(), executeAtEpoch);
         this.route = route;

@@ -45,7 +45,7 @@ public class Truncated extends CoordinationFailed
     }
 
     @Override
-    public Truncated wrap()
+    public Truncated rethrowable()
     {
         Invariants.require(this.getClass() == Truncated.class);
         return new Truncated(txnId(), homeKey(), this);

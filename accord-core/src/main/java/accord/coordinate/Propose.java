@@ -45,7 +45,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 
 import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
 import static accord.coordinate.tracking.RequestStatus.Failed;
@@ -261,7 +261,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
                 else
                 {
                     node.agent().coordinatorEvents().onInvalidated(txnId);
-                    node.withEpochExact(invalidateUntil.epoch(), executor, callback, t -> WrappableException.wrap(t), () -> {
+                    node.withEpochExact(invalidateUntil.epoch(), executor, callback, t -> Rethrowable.rethrowable(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
                         callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
                     });

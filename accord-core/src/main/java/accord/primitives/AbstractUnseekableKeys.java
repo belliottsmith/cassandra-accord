@@ -94,11 +94,11 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     @Override
     public AbstractUnseekableKeys intersecting(Unseekables<?> intersecting, Slice slice)
     {
-        return intersecting(intersecting);
+        return overlapping(intersecting);
     }
 
     @Override
-    public AbstractUnseekableKeys intersecting(Unseekables<?> intersecting)
+    public AbstractUnseekableKeys overlapping(Unseekables<?> intersecting)
     {
         switch (intersecting.domain())
         {
@@ -117,7 +117,7 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     }
 
     @Override
-    public AbstractUnseekableKeys intersecting(Seekables<?, ?> intersecting)
+    public AbstractUnseekableKeys overlapping(Seekables<?, ?> intersecting)
     {
         switch (intersecting.domain())
         {
@@ -138,7 +138,7 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     @Override
     public AbstractUnseekableKeys intersecting(Seekables<?, ?> intersecting, Slice slice)
     {
-        return intersecting(intersecting);
+        return this.overlapping(intersecting);
     }
 
     @Override

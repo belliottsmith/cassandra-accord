@@ -43,7 +43,6 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
@@ -66,8 +65,11 @@ import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.Committed;
+import static accord.primitives.SaveStatus.Erased;
+import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
+import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.Invariants.illegalState;
 
@@ -306,7 +308,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             commandStore().markExclusiveSyncPoint(this, updated.txnId(), ranges);
         }
 
-        if (newSaveStatus.compareTo(Committed) >= 0 && oldSaveStatus.compareTo(Committed) < 0 && !newSaveStatus.hasBeen(Status.Truncated))
+        if (newSaveStatus.compareTo(Committed) >= 0 && newSaveStatus.compareTo(TruncatedApply) <= 0 && (force || oldSaveStatus.compareTo(Committed) < 0))
         {
             Ranges ranges = updated.participants().owns().toRanges();
             commandStore().markExclusiveSyncPointDecided(this, updated.txnId(), ranges);
@@ -498,7 +500,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
         if (execute == context)
         {
-            if (next.txnId().is(Range))
+            if (next.txnId().is(Range) && next.txnId().is(VisibilitySyncPoint))
                 registerTransitiveRangeDeps(safeStore, txnId, next);
         }
         else
@@ -510,7 +512,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             CommandStore unsafeStore = safeStore.commandStore();
             AsyncChain<Void> submit = unsafeStore.chain(context, safeStore0 -> { updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys() , txnId, mode); });
             if (next.txnId().is(Range))
-                submit = submit.flatMap(success -> unsafeStore.chain((PreLoadContext.Empty) () -> "Register Transitive Dependencies", safeStore0 -> { registerTransitiveRangeDeps(safeStore0, txnId, next); }));
+                submit = submit.flatMap(success -> unsafeStore.chain(PreLoadContext.contextFor(txnId, "Register Transitive Dependencies"), safeStore0 -> { registerTransitiveRangeDeps(safeStore0, txnId, next); }));
             submit.begin(safeStore.commandStore().agent);
         }
     }
@@ -535,7 +537,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     private static void registerTransitiveRangeDeps(SafeCommandStore safeStore, TxnId syncId, Command syncCommand)
     {
-        if (!syncId.is(Kind.VisibilitySyncPoint))
+        if (!syncId.is(VisibilitySyncPoint))
             return;
 
         CommandStore commandStore = safeStore.commandStore();

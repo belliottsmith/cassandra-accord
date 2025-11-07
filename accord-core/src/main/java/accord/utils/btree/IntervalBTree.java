@@ -490,7 +490,6 @@ public class IntervalBTree
         @Override
         public void close()
         {
-            // TODO (required): validate this in IntervalBTreeTest
             super.close();
             adapter.reset();
         }

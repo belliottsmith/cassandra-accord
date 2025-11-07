@@ -119,7 +119,7 @@ public class RoutingKeys extends AbstractUnseekableKeys implements Unseekables<R
     }
 
     @Override
-    public RoutingKeys slice(Ranges ranges)
+    public RoutingKeys overlapping(Ranges ranges)
     {
         return wrap(slice(ranges, RoutingKey[]::new));
     }
@@ -127,7 +127,7 @@ public class RoutingKeys extends AbstractUnseekableKeys implements Unseekables<R
     @Override
     public RoutingKeys slice(Ranges ranges, Slice slice)
     {
-        return slice(ranges);
+        return overlapping(ranges);
     }
 
     public RoutingKeys without(Range range)

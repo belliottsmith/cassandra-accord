@@ -446,7 +446,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
 
     public static abstract class RecoverReply implements Reply
     {
-        // TODO (required): recover should gracefully handle partial truncation (currently expected to be handled by MaybeRecover)
+        // TODO (expected): recover should gracefully handle partial truncation (currently handled by MaybeRecover)
         public enum Kind { Ok, Retired, Truncated, Reject }
 
         @Override

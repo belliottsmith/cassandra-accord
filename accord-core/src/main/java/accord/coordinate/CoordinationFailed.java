@@ -22,13 +22,12 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.primitives.TxnId;
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 
 /**
- * Thrown when a transaction exceeds its specified timeout for obtaining a result for a client
- * TODO (expected): usage is inconsistent; audit and cleanup
+ * Thrown when a transaction fails
  */
-public abstract class CoordinationFailed extends RuntimeException implements WrappableException<CoordinationFailed>
+public abstract class CoordinationFailed extends RuntimeException implements Rethrowable<CoordinationFailed>
 {
     private @Nullable TxnId txnId;
     private @Nullable RoutingKey homeKey;
@@ -67,5 +66,6 @@ public abstract class CoordinationFailed extends RuntimeException implements Wra
      * Create a new exception of the same type, keeping the original exception as a cause of the new exception,
      * so that we can track the current stack trace as well as the origin stack trace.
      */
-    public abstract CoordinationFailed wrap();
+    @Override
+    public abstract CoordinationFailed rethrowable();
 }

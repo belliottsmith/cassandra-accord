@@ -22,7 +22,7 @@ import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.coordinate.Preempted;
 import accord.coordinate.Timeout;
-import accord.coordinate.TopologyMismatch;
+import accord.topology.TopologyMismatch;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.PrefixedIntHashKey;
 import accord.impl.basic.Cluster;
@@ -103,7 +103,7 @@ class CommandsTest
                     node.coordinate(txnId, txn).invoke((success, failure) -> {
                         if (failure == null)
                         {
-                            node.agent().onUncaughtException(new AssertionError("Expected TopologyMismatch exception, but txn was success"));
+                            node.agent().onException(new AssertionError("Expected TopologyMismatch exception, but txn was success"));
                         }
                         else if (!(failure instanceof TopologyMismatch))
                         {
@@ -113,7 +113,7 @@ class CommandsTest
                             }
                             else
                             {
-                                node.agent().onUncaughtException(new AssertionError("Expected TopologyMismatch exception, but failed with different exception", failure));
+                                node.agent().onException(new AssertionError("Expected TopologyMismatch exception, but failed with different exception", failure));
                             }
                         }
                     });

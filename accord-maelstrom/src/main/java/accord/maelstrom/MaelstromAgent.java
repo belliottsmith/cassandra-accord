@@ -88,12 +88,12 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     }
 
     @Override
-    public void onUncaughtException(Throwable t)
+    public void onException(Throwable t)
     {
     }
 
     @Override
-    public void onCaughtException(Throwable t, String context)
+    public void onException(Throwable t, String context)
     {
     }
 

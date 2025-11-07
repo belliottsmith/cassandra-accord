@@ -44,7 +44,7 @@ public class Redundant extends CoordinationFailed
     }
 
     @Override
-    public Redundant wrap()
+    public Redundant rethrowable()
     {
         Invariants.require(this.getClass() == Redundant.class);
         return new Redundant(txnId(), homeKey(), this, committedExecuteAt);

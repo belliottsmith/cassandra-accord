@@ -52,7 +52,7 @@ public class Aborted extends CoordinationFailed
     }
 
     @Override
-    public Aborted wrap()
+    public Aborted rethrowable()
     {
         Invariants.require(this.getClass() == Aborted.class);
         return new Aborted(txnId(), homeKey(), this);

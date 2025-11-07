@@ -38,6 +38,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 
 import static accord.coordinate.tracking.RequestStatus.Success;
@@ -111,7 +112,10 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
 
             case InsufficientEpochs:
                 Invariants.requireArgument(txnId.isSyncPoint());
-                node.send(from, factory.create(Maximal, from, node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), SHARE) , txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
+                Topologies topologies = tracker.topologies();
+                try { topologies = node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), SHARE); }
+                catch (TopologyException e) { node.agent().onException(e); }
+                node.send(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
                 break;
         }
     }

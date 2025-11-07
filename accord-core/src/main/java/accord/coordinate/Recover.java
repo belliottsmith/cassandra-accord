@@ -58,12 +58,14 @@ import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.topology.Topology;
+import accord.topology.TopologyException;
+import accord.topology.TopologyNotReadyException;
 import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
 import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
@@ -151,38 +153,42 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         return flags;
     }
 
-    public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean isFastPathDecided, BiConsumer<? super Outcome, Throwable> callback)
+    public static void recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean isFastPathDecided, BiConsumer<? super Outcome, Throwable> callback)
     {
-        return recover(node, txnId, txn, route, isFastPathDecided, LatentStoreSelector.standard(), callback);
+        recover(node, txnId, txn, route, isFastPathDecided, LatentStoreSelector.standard(), callback);
     }
 
-    public static Recover recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
+    public static void recover(Node node, TxnId txnId, Txn txn, FullRoute<?> route, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        return recover(node, ballot, txnId, txn, route, isFastPathDecided, reportTo, callback);
+        recover(node, ballot, txnId, txn, route, isFastPathDecided, reportTo, callback);
     }
 
-    private static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
+    private static void recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        return recover(node, ballot, txnId, txn, route, null, isFastPathDecided, reportTo, callback);
+        recover(node, ballot, txnId, txn, route, null, isFastPathDecided, reportTo, callback);
     }
 
-    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp committedExecuteAt, boolean isFastPathDecided, BiConsumer<? super Outcome, Throwable> callback)
+    public static void recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp committedExecuteAt, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        return recover(node, ballot, txnId, txn, route, committedExecuteAt, isFastPathDecided, null, callback);
+        recover(node, null, ballot, txnId, txn, route, committedExecuteAt, isFastPathDecided, reportTo, callback);
     }
 
-    public static Recover recover(Node node, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, @Nullable Timestamp committedExecuteAt, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
+    private static void recover(Node node, @Nullable Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp committedExecuteAt, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        Topologies topologies = node.topology().active().select(route, txnId, committedExecuteAt == null ? txnId : committedExecuteAt, SHARE, QuorumEpochIntersections.recover);
-        return recover(node, topologies, ballot, txnId, txn, route, committedExecuteAt, isFastPathDecided, reportTo, callback);
-    }
-
-    private static Recover recover(Node node, Topologies topologies, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp committedExecuteAt, boolean isFastPathDecided, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
-    {
-        Recover recover = new Recover(node, node.someSequentialExecutor(), topologies, ballot, txnId, txn, route, committedExecuteAt, isFastPathDecided, reportTo, callback);
+        Recover recover;
+        try
+        {
+            if (topologies == null || (committedExecuteAt != null && topologies.currentEpoch() != committedExecuteAt.epoch()))
+                topologies = node.topology().active().select(route, txnId, committedExecuteAt == null ? txnId : committedExecuteAt, SHARE, QuorumEpochIntersections.recover);
+            recover = new Recover(node, node.someSequentialExecutor(), topologies, ballot, txnId, txn, route, committedExecuteAt, isFastPathDecided, reportTo, callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+            return;
+        }
         recover.start();
-        return recover;
     }
 
     @Override
@@ -259,7 +265,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
             }
             else
             {
-                callback.accept(null, WrappableException.wrap(failure));
+                callback.accept(null, Rethrowable.rethrowable(failure));
                 node.agent().coordinatorEvents().onRecoveryStopped(node, txnId, ballot, success, failure);
             }
         };
@@ -611,12 +617,8 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
 
     private void retry(Timestamp executeAt, BiConsumer<? super Outcome, Throwable> callback)
     {
-        Topologies topologies = tracker.topologies();
-        if (executeAt != null && executeAt.epoch() != (this.committedExecuteAt == null ? txnId : this.committedExecuteAt).epoch())
-            topologies = node.topology().active().select(scope, txnId, executeAt, SHARE, QuorumEpochIntersections.recover);
-
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        Recover.recover(node, topologies, ballot, txnId, txn, scope, executeAt, TinyEnumSet.contains(flags, FAST_PATH_DECIDED), reportTo, callback);
+        Recover.recover(node, tracker.topologies(), ballot, txnId, txn, scope, executeAt, TinyEnumSet.contains(flags, FAST_PATH_DECIDED), reportTo, callback);
     }
 
     AsyncChain<InferredFastPath> awaitEarlier(Node node, Deps waitOn, Await.Until awaitUntil)
@@ -707,7 +709,16 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
 
                 Topologies topologies;
                 if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
-                else topologies = node.topology().active().forEpoch(participants, awaitId.epoch(), SHARE);
+                else
+                {
+                    try { topologies = node.topology().active().forEpoch(participants, awaitId.epoch(), SHARE); }
+                    catch (TopologyException t)
+                    {
+                        // this is a future transaction, and we cannot find its topology despite waiting for the relevant epoch;
+                        // most likely the transaction we are recovering is already resolved
+                        return AsyncChains.failure(t);
+                    }
+                }
                 requests.add(SynchronousRecoverAwait.awaitAny(node, executor, topologies, awaitId, awaitUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())

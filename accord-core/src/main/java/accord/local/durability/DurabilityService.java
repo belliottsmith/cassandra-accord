@@ -38,7 +38,10 @@ import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.ActiveEpoch;
+import accord.topology.ActiveEpochs;
 import accord.topology.Topology;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.async.AsyncResult;
@@ -248,9 +251,20 @@ public class DurabilityService implements TopologyListener
     public void onEpochRetired(Ranges retiredRanges, long epoch, @Nullable Topology topology)
     {
         // No need to cancel work for ranges that are still active
-        if (!node.topology().active().isFullyRetired(retiredRanges))
-            return;
+        ActiveEpochs epochs = node.topology().active();
+        ActiveEpoch e = epochs.ifExists(epoch);
+        if (e == null)
+        {
+            if (epoch > epochs.epoch())
+                return;
 
+            e = epochs.getKnown(epochs.minEpoch());
+        }
+
+        // if the ranges are retired and have been removed in the epoch in which they're retired, then we can retire the associated scheduler(s)
+        retiredRanges = retiredRanges.without(e.global().ranges());
+        if (retiredRanges.isEmpty())
+            return;
         shards.retireRanges(retiredRanges, epoch);
     }
 }

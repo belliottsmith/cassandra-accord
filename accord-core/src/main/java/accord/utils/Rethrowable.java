@@ -21,19 +21,19 @@ package accord.utils;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 
-public interface WrappableException<T extends Throwable & WrappableException<T>>
+public interface Rethrowable<T extends Throwable & Rethrowable<T>>
 {
     /**
      * Create a new exception of the same type, keeping the original exception as a cause of the new exception,
      * so that we can track the current stack trace as well as the origin stack trace.
      */
-    T wrap();
+    T rethrowable();
 
-    static Throwable wrap(Throwable t)
+    static Throwable rethrowable(Throwable t)
     {
-        if (t instanceof WrappableException<?>)
+        if (t instanceof Rethrowable<?>)
         {
-            Throwable wrapped = ((WrappableException<?>)t).wrap();
+            Throwable wrapped = ((Rethrowable<?>)t).rethrowable();
             if (wrapped.getClass() != t.getClass())
             {
                 IllegalStateException ise = new IllegalStateException("Wrapping should not change type");
@@ -80,9 +80,7 @@ public interface WrappableException<T extends Throwable & WrappableException<T>>
                     return (Throwable)constructor.newInstance(t);
             }
             // OK to ignore these as we can always throw a runtime exception
-            catch (InstantiationException e) {}
-            catch (IllegalAccessException e) {}
-            catch (InvocationTargetException e) {}
+            catch (InstantiationException | IllegalAccessException | InvocationTargetException ignore) {}
             // Failed to wrap in the same type so use RuntimeException
             return new RuntimeException(t);
         }

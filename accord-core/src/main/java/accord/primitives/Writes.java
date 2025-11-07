@@ -85,7 +85,7 @@ public class Writes
         if (write == null || executes.isEmpty())
             return AsyncChains.success(null);
 
-        Seekables<?, ?> keys = this.keys.intersecting(executes);
+        Seekables<?, ?> keys = this.keys.overlapping(executes);
         int count = keys.size();
         switch (count)
         {

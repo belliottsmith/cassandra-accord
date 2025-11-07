@@ -59,8 +59,6 @@ public interface Journal
     default List<? extends Supplier<CommandChange.Builder>> debugCommand(int commandStoreId, TxnId txnId) { throw new UnsupportedOperationException(); }
     Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     Command.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
-
-    // TODO (required): propagate exceptions
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
     List<? extends TopologyUpdate> replayTopologies();

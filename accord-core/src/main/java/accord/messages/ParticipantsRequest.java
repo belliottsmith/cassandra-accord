@@ -177,12 +177,12 @@ public abstract class ParticipantsRequest<P extends Participants<?>, R extends R
 
     public static Route<?> computeScope(Id node, Topologies topologies, Route<?> route, int startIndex)
     {
-        return computeScope(node, topologies, route, startIndex, Route::slice, Route::with);
+        return computeScope(node, topologies, route, startIndex, Route::overlapping, Route::with);
     }
 
     public static Participants<?> computeScope(Id node, Topologies topologies, Participants<?> route, int startIndex)
     {
-        return computeScope(node, topologies, route, startIndex, Participants::slice, Participants::with);
+        return computeScope(node, topologies, route, startIndex, Participants::overlapping, Participants::with);
     }
 
     // TODO (low priority, clarity): move to Topologies

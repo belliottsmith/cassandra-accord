@@ -36,11 +36,13 @@ import accord.primitives.Route;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 
 import javax.annotation.Nonnull;
 
 import static accord.coordinate.Infer.InvalidIf.NotKnownToBeInvalid;
+import static accord.primitives.Routables.Slice.Minimal;
 
 /**
  * Find data and persist locally
@@ -142,12 +144,12 @@ public class FetchData extends CheckShards<FetchData.FetchResult, Route<?>>
     // (i.e. if preaccept/accept contact a later epoch than execution is decided for)
     final LatentStoreSelector reportTo;
 
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback) throws TopologyException
     {
         this(node, target, txnId, invalidIf, route, route.withHomeKey(), maxRoute, sourceEpoch, reportTo, callback);
     }
 
-    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    private FetchData(Node node, Known target, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> routeWithHomeKey, Route<?> maxRoute, long sourceEpoch, LatentStoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback) throws TopologyException
     {
         // TODO (desired, efficiency): restore behaviour of only collecting info if e.g. Committed or Executed
         super(node, node.someSequentialExecutor(), txnId, routeWithHomeKey, sourceEpoch, CheckStatus.IncludeInfo.All, null, invalidIf, callback);
@@ -157,17 +159,35 @@ public class FetchData extends CheckShards<FetchData.FetchResult, Route<?>>
         this.target = target;
     }
 
-    private static FetchData fetchData(Node node, Route<?> route, Route<?> maxRoute, FetchRequest req)
+    private static Object fetchData(Node node, Route<?> route, Route<?> maxRoute, FetchRequest req)
     {
         Invariants.require(!req.contactable.isEmpty());
-        FetchData fetch = new FetchData(node, req.fetch, req.txnId, req.invalidIf, route, maxRoute, req.srcEpoch, req.reportTo, req.callback);
+        FetchData fetch;
+        try
+        {
+            fetch = new FetchData(node, req.fetch, req.txnId, req.invalidIf, route, maxRoute, req.srcEpoch, req.reportTo, req.callback);
+        }
+        catch (TopologyException e)
+        {
+            req.callback.accept(null, e);
+            return null;
+        }
         fetch.start();
         return fetch;
     }
 
-    private static FetchData fetchData(Node node, Known fetch, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
+    private static Object fetchData(Node node, Known fetch, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
     {
-        FetchData fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, sourceEpoch, reportTo, callback);
+        FetchData fetchData;
+        try
+        {
+            fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, sourceEpoch, reportTo, callback);
+        }
+        catch (TopologyException e)
+        {
+            callback.accept(null, e);
+            return null;
+        }
         fetchData.start();
         return fetchData;
     }
@@ -181,7 +201,7 @@ public class FetchData extends CheckShards<FetchData.FetchResult, Route<?>>
     protected boolean isSufficient(Node.Id from, CheckStatus.CheckStatusOk ok)
     {
         Ranges rangesForNode = topologies().computeRangesForNode(from);
-        Route<?> scope = this.query.slice(rangesForNode);
+        Route<?> scope = this.query.slice(rangesForNode, Minimal);
         return isSufficient(scope, ok);
     }
 

@@ -82,7 +82,7 @@ public class Exhausted extends CoordinationFailed
     }
 
     @Override
-    public Exhausted wrap()
+    public Exhausted rethrowable()
     {
         Invariants.require(this.getClass() == Exhausted.class);
         return new Exhausted(txnId(), homeKey(), failedRanges, failedNodes, this);

@@ -25,13 +25,14 @@ import accord.api.RoutingKey;
  */
 public interface Participants<K extends Unseekable> extends Unseekables<K>
 {
-    @Override Participants<K> intersecting(Seekables<?, ?> intersecting);
+    @Override Participants<K> overlapping(Seekables<?, ?> intersecting);
+    @Override Participants<K> overlapping(Unseekables<?> intersecting);
+    @Override Participants<K> overlapping(Ranges ranges);
+
     @Override Participants<K> intersecting(Seekables<?, ?> intersecting, Slice slice);
-    @Override Participants<K> intersecting(Unseekables<?> intersecting);
     @Override Participants<K> intersecting(Unseekables<?> intersecting, Slice slice);
 
     @Override Participants<K> slice(int from, int to);
-    @Override Participants<K> slice(Ranges ranges);
     @Override Participants<K> slice(Ranges ranges, Slice slice);
 
     Participants<K> with(Participants<K> with);

@@ -20,12 +20,14 @@ package accord.topology;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
@@ -61,7 +63,6 @@ import org.agrona.collections.IntHashSet;
 import static accord.burn.BurnTestBase.HASH_RANGE_END;
 import static accord.burn.BurnTestBase.HASH_RANGE_START;
 import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
-import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 
 // TODO (testing): add change replication factor
 public class TopologyRandomizer
@@ -99,11 +100,9 @@ public class TopologyRandomizer
     private final RandomSource random;
     private final List<Topology> epochs = new ArrayList<>();
     private final @Nullable Function<Id, Node> nodeLookup;
-    private final Map<Id, Ranges> bootstrapping = new HashMap<>();
+    private final Map<Id, Map<Long, Ranges>> bootstrapping = new HashMap<>();
     private final Map<Id, Integer> bootstrappingGeneration = new HashMap<>();
     private final ConcurrentLinkedQueue<Integer> newPrefixes = new ConcurrentLinkedQueue<>();
-    // TODO (required): remove this restriction, we should be able to replicate previously owned ranges just fine
-    private final Map<Id, Ranges> previouslyReplicated = new HashMap<>();
     private final TopologyUpdates topologyUpdates;
     private final Listener listener;
 
@@ -113,8 +112,6 @@ public class TopologyRandomizer
         this.topologyUpdates = topologyUpdates;
         this.epochs.add(Topology.EMPTY);
         this.epochs.add(initialTopology);
-        for (Id node : initialTopology.nodes())
-            previouslyReplicated.put(node, initialTopology.rangesForNode(node));
         this.nodeLookup = nodeLookup;
         this.listener = listener;
         for (int prefix : prefixes)
@@ -150,15 +147,13 @@ public class TopologyRandomizer
         }
     }
 
-    public boolean isBootstrapping(Node.Id node)
-    {
-        return bootstrapping.containsKey(node);
-    }
-
     public void markRebootstrapping(Node node)
     {
+        long epoch = node.topology().epoch();
         Ranges ranges = node.topology().currentLocal().ranges();
-        bootstrapping.merge(node.id(), ranges, Ranges::with);
+        bootstrapping.remove(node.id());
+        bootstrapping.put(node.id(), new TreeMap<>());
+        bootstrapping.get(node.id()).put(epoch, ranges);
     }
 
     private static Shard[] updateBoundary(Shard[] shards, RandomSource random)
@@ -471,8 +466,7 @@ public class TopologyRandomizer
             state.shards = newShards;
             Shard[] testShards = type.apply(state, random);
             Arrays.sort(testShards, (a, b) -> a.range.compareTo(b.range));
-            if (!everyShardHasQuorumOverlaps(oldShards, testShards)
-                || reassignsRanges(current, testShards, previouslyReplicated))
+            if (!everyShardHasQuorumOverlaps(oldShards, testShards))
             {
                 ++rejectedMutations;
             }
@@ -491,8 +485,8 @@ public class TopologyRandomizer
         Map<Id, Ranges> nextAdditions = getAdditions(current, nextTopology);
         for (Map.Entry<Id, Ranges> entry : nextAdditions.entrySet())
         {
-            previouslyReplicated.merge(entry.getKey(), entry.getValue(), (a, b) -> a.union(MERGE_ADJACENT, b));
-            bootstrapping.merge(entry.getKey(), entry.getValue(), Ranges::with);
+            bootstrapping.putIfAbsent(entry.getKey(), new TreeMap<>());
+            bootstrapping.get(entry.getKey()).put(nextTopology.epoch, entry.getValue());
         }
 
         epochs.add(nextTopology);
@@ -510,10 +504,13 @@ public class TopologyRandomizer
     // TODO (expected): relax this to checking only that we have fewer than maxFailures intersections
     public boolean unsafeToRebootstrap(Ranges ranges)
     {
-        for (Ranges test : bootstrapping.values())
+        for (Map<Long, Ranges> map : bootstrapping.values())
         {
-            if (ranges.intersects(test))
-                return true;
+            for (Ranges test : map.values())
+            {
+                if (ranges.intersects(test))
+                    return true;
+            }
         }
         return false;
     }
@@ -524,10 +521,12 @@ public class TopologyRandomizer
             // TODO (expected): support availability loss and recovery, and minority quorums
             int common = (int) ov.nodes.stream().filter(iv::contains).count();
             int commonBootstrap = (int) ov.nodes.stream().filter(iv::contains).filter(id -> {
-                Ranges ranges = bootstrapping.getOrDefault(id, Ranges.EMPTY);
-                return ranges.intersects(iv.range) || ranges.intersects(ov.range);
+                return bootstrapping.getOrDefault(id, Collections.emptyMap()).values().stream()
+                                    .anyMatch(ranges -> ranges.intersects(iv.range) || ranges.intersects(ov.range));
             }).count();
-            int inBootstrap = (int) iv.nodes.stream().filter(id -> bootstrapping.getOrDefault(id, Ranges.EMPTY).intersects(iv.range)).count();
+            int inBootstrap = (int) iv.nodes.stream().filter(id -> bootstrapping.getOrDefault(id, Collections.emptyMap()).values().stream()
+                                                                                .anyMatch(ranges -> ranges.intersects(iv.range)))
+                                            .count();
             return inBootstrap <= iv.maxFailures && commonBootstrap + (ov.rf - common) <= ov.maxFailures;
         });
     }
@@ -574,13 +573,17 @@ public class TopologyRandomizer
                     .flatMap(ignore -> commandStore.awaitVisibility(epoch, ranges))
                     .invoke((success, fail) -> {
                         Invariants.require(fail == null);
-                        bootstrapping.compute(id, (ignore, rs) -> {
+                        bootstrapping.compute(id, (ignore, map) -> {
                             if (generation != bootstrappingGeneration.get(id))
-                                return rs;
+                                return map;
 
-                            Invariants.require(rs != null && rs.intersects(ranges));
-                            rs = rs.without(ranges);
-                            return rs.isEmpty() ? null : rs;
+                            Invariants.require(map != null);
+                            map.compute(epoch, (ignore0, rs) -> {
+                                Invariants.require(rs != null && rs.containsAll(ranges));
+                                rs = rs.without(ranges);
+                                return rs.isEmpty() ? null : rs;
+                            });
+                            return map.isEmpty() ? null : map;
                         });
                     });
             }

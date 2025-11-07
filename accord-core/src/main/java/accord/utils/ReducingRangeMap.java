@@ -64,15 +64,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public <V2> V2 foldlWithBounds(Routables<?> routables, QuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator, Predicate<V2> terminate)
     {
-        return foldl(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], self.starts[k+1]), accumulator, fold, this, terminate);
-    }
-
-    // note: last end bound may be null
-    // TODO (required): should there be a call where start bound is null? Should we always provide null end bound if we match to the end?
-    //  I don't think it should functionally matter in caller, but for symmetry should probably be one or the other
-    public <V2> V2 foldlWithDefaultAndBounds(Routables<?> routables, QuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V defaultValue, V2 accumulator, Predicate<V2> terminate)
-    {
-        return foldlWithDefault(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, self.starts[k], k + 1 >= self.starts.length ? null : self.starts[k+1]), defaultValue, accumulator, fold, this, terminate);
+        return foldl(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, k < 0 ? null : self.starts[k], self.starts[k+1]), accumulator, fold, this, terminate);
     }
 
     public <R extends Routable, V2> V2 foldlWithInputAndBounds(Routables<R> routables, IndexedRangeQuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator, Predicate<V2> terminate)
@@ -88,11 +80,6 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
     public <V2, P1> V2 foldl(Routables<?> routables, TriFunction<V, V2, P1, V2> fold, V2 accumulator, P1 p1, Predicate<V2> terminate)
     {
         return foldl(routables, (a, b, f, p) -> f.apply(a, b, p), accumulator, fold, p1, terminate);
-    }
-
-    public <V2, P1> V2 foldlWithKey(Routables<?> routables, IndexedTriFunction<V, V2, P1, V2> fold, V2 accumulator, P1 p1, Predicate<V2> terminate)
-    {
-        return foldl(routables, (v, v2, f, p, i, j, k) -> f.apply(v, v2, p, i), accumulator, fold, p1, terminate);
     }
 
     public <V2, P1, P2> V2 foldl(Routables<?> routables, QuadFunction<V, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2)
@@ -236,6 +223,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return accumulator;
     }
 
+    // TODO (required): confirm logic applies correctly to keys/ranges not in map
     public <V2, P1, P2> V2 foldlWithDefault(Routables<?> routables, ReduceFunction<V, V2, P1, P2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
     {
         switch (routables.domain())

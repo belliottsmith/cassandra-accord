@@ -57,8 +57,8 @@ public interface Agent extends UncaughtExceptionListener
     }
 
     @Override
-    void onUncaughtException(Throwable t);
-    void onCaughtException(Throwable t, String context);
+    void onException(Throwable t);
+    void onException(Throwable t, String context);
 
     /**
      * Controls pruning of CommandsForKey

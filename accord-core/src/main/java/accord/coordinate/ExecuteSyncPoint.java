@@ -45,7 +45,7 @@ import accord.primitives.Txn;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults.SettableResult;
 
@@ -56,11 +56,11 @@ import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, DurabilityResult, ReadReply, Void> implements Callback<ReadReply>
 {
-    public static class SyncPointErased extends Throwable implements WrappableException<SyncPointErased>
+    public static class SyncPointErased extends Throwable implements Rethrowable<SyncPointErased>
     {
         public SyncPointErased() {}
         public SyncPointErased(Throwable cause) { super(cause); }
-        @Override public SyncPointErased wrap() { return new SyncPointErased(this); }
+        @Override public SyncPointErased rethrowable() { return new SyncPointErased(this); }
     }
 
     public static class DurabilityResults implements BiConsumer<DurabilityResult, Throwable>
@@ -97,12 +97,12 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
     boolean reportedQuorum, reportedMinorityQuorum;
     long retryInFutureEpoch;
 
-    protected ExecuteSyncPoint(Node node, PartialSyncPoint syncPoint, SequentialAsyncExecutor executor, int attempt, DurabilityResults callback)
+    protected ExecuteSyncPoint(Node node, SequentialAsyncExecutor executor, Topologies topologies, PartialSyncPoint syncPoint, int attempt, DurabilityResults callback)
     {
-        this(node, syncPoint, syncPoint.route, exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor), executor, attempt, null, callback);
+        this(node, executor, topologies, syncPoint, syncPoint.route, attempt, null, callback);
     }
 
-    ExecuteSyncPoint(Node node, PartialSyncPoint syncPoint, Route<Range> route, Topologies topologies, SequentialAsyncExecutor executor, int attempt, DurabilityResult partialResult, DurabilityResults callback)
+    ExecuteSyncPoint(Node node, SequentialAsyncExecutor executor, Topologies topologies, PartialSyncPoint syncPoint, Route<Range> route, int attempt, DurabilityResult partialResult, DurabilityResults callback)
     {
         super(node, executor, syncPoint.syncId, route, topologies.nodes(), callback);
         this.syncPoint = syncPoint;
@@ -220,7 +220,18 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         if (retryInFutureEpoch > tracker.topologies().currentEpoch())
         {
             awaitEpochAtLeastToFinish(retryInFutureEpoch, () -> {
-                ExecuteSyncPoint continuation = new ExecuteSyncPoint(node, syncPoint, scope, node.topology().active().preciseEpochs(scope, tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE), executor, attempt, current(), (DurabilityResults) finishAndTakeCallback());
+                DurabilityResults results = (DurabilityResults) finishAndTakeCallback();
+                ExecuteSyncPoint continuation;
+                try
+                {
+                    Topologies topologies = node.topology().active().preciseEpochs(scope, tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE);
+                    continuation = new ExecuteSyncPoint(node, executor, topologies, syncPoint, scope, attempt, current(), results);
+                }
+                catch (Throwable t)
+                {
+                    results.accept(null, t);
+                    return;
+                }
                 continuation.start();
             });
         }
@@ -230,13 +241,11 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
             if (result.min.remote == SyncRemote.All)
             {
                 node.topology().onEpochRetired(scope.toRanges(), syncPoint.syncId.epoch() - 1);
-                // TODO (required): do not send to faulty
-                node.send(tracker.nodes(), new SetShardDurable(syncPoint, Universal));
+                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Universal));
             }
             else if (result.min.remote == SyncRemote.Quorum)
             {
-                // TODO (required): do not send to faulty
-                node.send(tracker.nodes(), new SetShardDurable(syncPoint, Quorum));
+                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Quorum));
             }
             else
             {
@@ -270,7 +279,8 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         DurabilityResults result = new DurabilityResults();
         try
         {
-            ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, syncPoint, executor, attempt, result);
+            Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+            ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, executor, topologies, syncPoint, attempt, result);
             coordinate.start();
         }
         catch (Throwable t)

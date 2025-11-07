@@ -63,7 +63,7 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
     @Override
     public RangeRoute without(Unseekables<?> keysOrRanges)
     {
-        return without(keysOrRanges.domain() == Domain.Range ? (AbstractRanges) keysOrRanges : ((AbstractUnseekableKeys)keysOrRanges).toRanges());
+        return without(keysOrRanges.domain() == Domain.Range ? (AbstractRanges) keysOrRanges : keysOrRanges.toRanges());
     }
 
     @Override
@@ -96,7 +96,7 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
     }
 
     @Override
-    public RangeRoute slice(Ranges ranges)
+    public RangeRoute overlapping(Ranges ranges)
     {
         return slice(ranges, Overlapping);
     }
@@ -108,7 +108,7 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
     }
 
     @Override
-    public RangeRoute intersecting(Unseekables<?> intersecting)
+    public RangeRoute overlapping(Unseekables<?> intersecting)
     {
         return intersecting(intersecting, Overlapping);
     }
@@ -125,7 +125,7 @@ public abstract class RangeRoute extends AbstractRanges implements Route<Range>,
     }
 
     @Override
-    public RangeRoute intersecting(Seekables<?, ?> intersecting)
+    public RangeRoute overlapping(Seekables<?, ?> intersecting)
     {
         return intersecting(intersecting, Overlapping);
     }

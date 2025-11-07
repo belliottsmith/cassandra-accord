@@ -18,9 +18,9 @@
 
 package accord.impl.basic;
 
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 
-public class SimulatedFault extends AssertionError implements WrappableException<SimulatedFault>
+public class SimulatedFault extends AssertionError implements Rethrowable<SimulatedFault>
 {
     public SimulatedFault(Object detailMessage)
     {
@@ -33,7 +33,7 @@ public class SimulatedFault extends AssertionError implements WrappableException
     }
 
     @Override
-    public SimulatedFault wrap()
+    public SimulatedFault rethrowable()
     {
         return new SimulatedFault(getMessage(), this);
     }

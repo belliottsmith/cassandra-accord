@@ -738,9 +738,6 @@ public class Cluster
                                           rebootstrap ? "rebootstrap" : "bounce and journal replay",
                                           id));
 
-                if (rebootstrap)
-                    topologyRandomizer.markRebootstrapping(node);
-
                 // Clean data and restore from snapshot
                 ListStore listStore = (ListStore) node.commandStores().dataStore();
                 NavigableMap<RoutableKey, Timestamped<int[]>> prevData = listStore.copyOfCurrentData();
@@ -775,7 +772,8 @@ public class Cluster
                     if (lastUpdate != null)
                         node.commandStores().resetTopology(lastUpdate);
 
-                    // TODO (expected): we seem to hit Log exceotions when rebootstrapping, suggesting we are handling them poorly
+                    // TODO (expected): we seem to hit Log exceptions when rebootstrapping, suggesting we are handling them poorly
+                    topologyRandomizer.markRebootstrapping(node);
                     stores.rebootstrap(node).invoke(node.agent());
                     Catchup.catchup(node);
 

@@ -104,7 +104,7 @@ class AbstractRangesTest
         }
 
         @Override
-        public Ranges slice(accord.primitives.Ranges ranges)
+        public Ranges overlapping(accord.primitives.Ranges ranges)
         {
             throw new UnsupportedOperationException();
         }
@@ -116,7 +116,7 @@ class AbstractRangesTest
         }
 
         @Override
-        public Ranges intersecting(Unseekables<?> intersecting)
+        public Ranges overlapping(Unseekables<?> intersecting)
         {
             throw new UnsupportedOperationException();
         }
@@ -134,7 +134,7 @@ class AbstractRangesTest
         }
 
         @Override
-        public Ranges intersecting(Seekables<?, ?> intersecting)
+        public Ranges overlapping(Seekables<?, ?> intersecting)
         {
             throw new UnsupportedOperationException();
         }

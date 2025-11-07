@@ -29,10 +29,10 @@ import static accord.primitives.Routables.Slice.Overlapping;
 public interface Seekables<K extends Seekable, U extends Seekables<K, ?>> extends Routables<K>
 {
     @Override
-    default U slice(Ranges ranges) { return slice(ranges, Overlapping); }
+    default U overlapping(Ranges ranges) { return slice(ranges, Overlapping); }
 
     @Override
-    default U intersecting(Unseekables<?> intersecting) { return intersecting(intersecting, Overlapping); }
+    default U overlapping(Unseekables<?> intersecting) { return intersecting(intersecting, Overlapping); }
 
     @Override
     U slice(Ranges ranges, Slice slice);

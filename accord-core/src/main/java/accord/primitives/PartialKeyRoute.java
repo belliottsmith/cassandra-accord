@@ -48,15 +48,6 @@ public class PartialKeyRoute extends KeyRoute implements PartialRoute<RoutingKey
     }
 
     @Override
-    public PartialKeyRoute slice(Ranges select)
-    {
-        RoutingKey[] keys = slice(select, RoutingKey[]::new);
-        if (keys == this.keys)
-            return this;
-        return new PartialKeyRoute(homeKey, keys);
-    }
-
-    @Override
     public Route<RoutingKey> with(Participants<RoutingKey> that)
     {
         Unseekables.UnseekablesKind kind = that.kind();
@@ -117,16 +108,6 @@ public class PartialKeyRoute extends KeyRoute implements PartialRoute<RoutingKey
         System.arraycopy(this.keys, 0, keys, 0, insertPos);
         keys[insertPos] = homeKey;
         System.arraycopy(this.keys, insertPos, keys, insertPos + 1, this.keys.length - insertPos);
-
-        return new PartialKeyRoute(homeKey, keys);
-    }
-
-    @Override
-    public PartialKeyRoute slice(Ranges select, Slice slice)
-    {
-        RoutingKey[] keys = slice(select, RoutingKey[]::new);
-        if (keys == this.keys)
-            return this;
 
         return new PartialKeyRoute(homeKey, keys);
     }

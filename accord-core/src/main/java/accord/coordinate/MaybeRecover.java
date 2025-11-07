@@ -24,6 +24,8 @@ import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.InformDurable;
 import accord.primitives.*;
+import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 
 import accord.local.Node;
@@ -46,7 +48,7 @@ public class MaybeRecover extends CheckShards<Outcome, Route<?>>
     final boolean recoverIfAlreadyDurable;
     final LatentStoreSelector reportTo;
 
-    MaybeRecover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, boolean recoverIfAlreadyDurable, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
+    MaybeRecover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, boolean recoverIfAlreadyDurable, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback) throws TopologyException
     {
         // we only want to enquire with the home shard, but we prefer maximal route information for running Invalidation against, if necessary
         super(node, executor, txnId, someRoute.withHomeKey(), IncludeInfo.Route, null, invalidIf, callback);
@@ -57,7 +59,16 @@ public class MaybeRecover extends CheckShards<Outcome, Route<?>>
 
     public static Object maybeRecover(Node node, TxnId txnId, Infer.InvalidIf invalidIf, Route<?> someRoute, ProgressToken prevProgress, boolean recoverIfAlreadyDurable, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        MaybeRecover maybeRecover = new MaybeRecover(node, node.someSequentialExecutor(), txnId, invalidIf, someRoute, prevProgress, recoverIfAlreadyDurable, reportTo, callback);
+        MaybeRecover maybeRecover;
+        try
+        {
+            maybeRecover = new MaybeRecover(node, node.someSequentialExecutor(), txnId, invalidIf, someRoute, prevProgress, recoverIfAlreadyDurable, reportTo, callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+            return null;
+        }
         maybeRecover.start();
         return maybeRecover;
     }
@@ -71,7 +82,6 @@ public class MaybeRecover extends CheckShards<Outcome, Route<?>>
 
     public boolean hasMadeProgress(CheckStatusOk ok)
     {
-        // TODO (required): if Ballot.hlc is stale enough then preempt; also do not query isCoordinating, query directly the node that owns the ballot (or TxnId if Ballot is ZERO)
         return (ok.durability.isDurable() && !recoverIfAlreadyDurable && !prevProgress.outcome.isDurableOrInvalidated())
                || ok.isCoordinating || ok.toProgressToken().compareTo(prevProgress) > 0;
     }

@@ -116,7 +116,7 @@ class ReadDataTest
     private Read mockRead(Keys keys, AsyncResults.SettableResult<Data> readResult)
     {
         Read read = Mockito.mock(Read.class);
-        Mockito.when(read.intersecting(any())).thenAnswer(i -> mockRead(keys.intersecting((Unseekables) i.getArgument(0)), readResult));
+        Mockito.when(read.intersecting(any())).thenAnswer(i -> mockRead(keys.overlapping((Unseekables) i.getArgument(0)), readResult));
         Mockito.when(read.merge(any())).thenReturn(read);
         Mockito.when(read.keys()).thenReturn((Seekables)keys);
         Mockito.when(read.read(any(), any(), any())).thenAnswer(new Answer<AsyncChain<Data>>()
@@ -269,7 +269,7 @@ class ReadDataTest
             this.keys = (Keys) partialTxn.keys();
             this.key = keys.get(0).toUnseekable();
             this.route = keys.toRoute(key.toUnseekable());
-            this.partialRoute = route.slice(RANGES);
+            this.partialRoute = route.overlapping(RANGES);
             this.executeAt = txnId;
             this.deps = PartialDeps.builder(partialRoute, true).build();
             this.readResult = readResult;

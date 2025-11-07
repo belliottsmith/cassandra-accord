@@ -27,9 +27,12 @@ import accord.messages.Callback;
 import accord.primitives.FullRoute;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.topology.Topology;
+import accord.topology.TopologyException;
+import accord.topology.TopologyMismatch;
+import accord.topology.TopologyRetiredException;
 
-import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.TopologyMismatch.TopologyMatch.LATEST;
 
 /**
  * Abstract parent class for implementing preaccept-like operations where we may need to fetch additional replies
@@ -39,12 +42,7 @@ abstract class AbstractCoordinatePreAccept<Result, Reply extends accord.messages
 {
     final Topologies topologies;
 
-    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<? super Result, Throwable> callback)
-    {
-        this(node, executor, route, txnId, node.topology().active().select(route, txnId, txnId, SHARE, QuorumEpochIntersections.preaccept.include), callback);
-    }
-
-    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, FullRoute<?> route, @Nonnull TxnId txnId, Topologies topologies, BiConsumer<? super Result, Throwable> callback)
+    AbstractCoordinatePreAccept(Node node, SequentialAsyncExecutor executor, Topologies topologies, FullRoute<?> route, @Nonnull TxnId txnId, BiConsumer<? super Result, Throwable> callback)
     {
         super(node, executor, txnId, route, topologies.nodes(), callback);
         this.topologies = topologies;
@@ -63,7 +61,16 @@ abstract class AbstractCoordinatePreAccept<Result, Reply extends accord.messages
 
     final void onPreAcceptedInNewEpoch(Topologies topologies, long latestEpoch)
     {
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(node.topology().active().globalForEpoch(latestEpoch), txnId, scope.homeKey(), scope);
+        TopologyMismatch mismatch;
+        try
+        {
+            mismatch = TopologyMismatch.checkForMismatch(latestEpoch, scope, node.topology().active(), LATEST);
+        }
+        catch (TopologyException t)
+        {
+            finishWithFailureOverride(t);
+            return;
+        }
         if (mismatch == null) onPreAccepted(topologies);
         else onNewEpochTopologyMismatch(mismatch);
     }

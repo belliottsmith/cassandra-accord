@@ -44,11 +44,10 @@ import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedList;
 import accord.utils.SortedListMap;
 import accord.utils.SortedListSet;
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.Cancellable;
 
-// TODO (expected): move message sending here, so we can invalidate any pending callbacks when we advance the state machine
 public abstract class AbstractCoordination<P extends Participants<?>, Result, Reply extends accord.messages.Reply, Ok> extends AbstractSimpleCoordination<P> implements Callback<Reply>
 {
     private final SortedArrayList<Node.Id> nodes;
@@ -135,7 +134,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     void awaitEpochExactToFinish(long epoch, Runnable runnable)
     {
         setFinishing();
-        node.withEpochExact(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), WrappableException::wrap, () -> {
+        node.withEpochExact(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), Rethrowable::rethrowable, () -> {
             runnable.run();
             Invariants.require(isDone(), "%s", this);
         });
@@ -144,7 +143,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     void awaitEpochAtLeastToFinish(long epoch, Runnable runnable)
     {
         setFinishing();
-        node.withEpochAtLeast(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), WrappableException::wrap, () -> {
+        node.withEpochAtLeast(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), Rethrowable::rethrowable, () -> {
             runnable.run();
             Invariants.require(isDone(), "%s", this);
         });
@@ -282,7 +281,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         setDone();
         BiConsumer<?, Throwable> callback = tryTakeCallback();
         if (callback != null) callback.accept(null, failure);
-        else node.agent().onUncaughtException(failure);
+        else node.agent().onException(failure);
         if (tracing != null)
             tracing.trace(null, "callback failure processing from %s: %s", from, failure);
         return true;

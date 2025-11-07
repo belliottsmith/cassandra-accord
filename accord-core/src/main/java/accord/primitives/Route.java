@@ -44,12 +44,12 @@ public interface Route<K extends Unseekable> extends Participants<K>
     @Override
     Route<K> slice(int from, int to);
     @Override
-    Route<K> slice(Ranges ranges);
+    Route<K> overlapping(Ranges ranges);
     @Override
     Route<K> slice(Ranges ranges, Slice slice);
 
     @Override
-    Route<K> intersecting(Unseekables<?> intersecting);
+    Route<K> overlapping(Unseekables<?> intersecting);
     @Override
     Route<K> intersecting(Unseekables<?> intersecting, Slice slice);
 

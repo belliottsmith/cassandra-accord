@@ -221,12 +221,12 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
 
     public KeyDeps slice(Ranges ranges)
     {
-        return select(keys.slice(ranges));
+        return select(keys.overlapping(ranges));
     }
 
     public KeyDeps intersecting(Unseekables<?> participants)
     {
-        AbstractUnseekableKeys select = keys.intersecting(participants);
+        AbstractUnseekableKeys select = keys.overlapping(participants);
         return select(toRoutingKeys(select));
     }
 

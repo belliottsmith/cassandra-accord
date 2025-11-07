@@ -49,6 +49,7 @@ import accord.primitives.Writes;
 import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
 import accord.topology.Topologies.SelectNodeOwnership;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
@@ -290,12 +291,19 @@ public interface CoordinationAdapter<R>
             {
                 if (callback != null) callback.accept(result, null);
 
-                Topologies all = execution(node, any, sendTo, selectNodeOwnership, route, txnId, executeAt);
-                new PersistTxn(node, executor, all, txnId, ballot, require, txn, executeAt, deps, writes, result, route, flags, informDurableOnDone, Apply.FACTORY, applyKind)
-                .start();
+                try
+                {
+                    Topologies all = execution(node, any, sendTo, selectNodeOwnership, route, txnId, executeAt);
+                    new PersistTxn(node, executor, all, txnId, ballot, require, txn, executeAt, deps, writes, result, route, flags, informDurableOnDone, Apply.FACTORY, applyKind)
+                    .start();
+                }
+                catch (TopologyException e)
+                {
+                    node.agent().onException(e, "Unable to persist " + txnId);
+                }
             }
 
-            protected Topologies execution(Node node, @Nullable Topologies preacceptOrCommit, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Timestamp executeAt)
+            protected Topologies execution(Node node, @Nullable Topologies preacceptOrCommit, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, TxnId txnId, Timestamp executeAt) throws TopologyException
             {
                 ActiveEpochs epochs = node.topology().active();
                 if (route != sendTo) preacceptOrCommit = null;
@@ -313,38 +321,78 @@ public interface CoordinationAdapter<R>
                 this.preacceptTrackerFactory = preacceptTrackerFactory;
             }
 
-            abstract Topologies forDecision(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt);
-            abstract Topologies forExecution(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt, Deps deps);
+            abstract Topologies forDecision(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt) throws TopologyException;
+            abstract Topologies forExecution(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt, Deps deps) throws TopologyException;
             abstract void invokeSuccess(Node node, FullRoute<?> route, TxnId txnId, Timestamp executeAt, Txn txn, Deps deps, BiConsumer<? super R, Throwable> callback);
 
             @Override
             public void propose(Node node, SequentialAsyncExecutor executor, Topologies any, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
-                Topologies all = forDecision(node, route, SHARE, txnId, executeAt);
-                new ProposeSyncPoint<>(this, node, executor, all, route, kind, ballot, txnId, txn, executeAt, deps, callback).start();
+                ProposeSyncPoint<R> propose;
+                try
+                {
+                    Topologies all = forDecision(node, route, SHARE, txnId, executeAt);
+                    propose = new ProposeSyncPoint<>(this, node, executor, all, route, kind, ballot, txnId, txn, executeAt, deps, callback);
+                }
+                catch (Throwable t)
+                {
+                    callback.accept(null, t);
+                    return;
+                }
+                propose.start();
             }
 
             @Override
             public void proposeOnly(Node node, SequentialAsyncExecutor executor, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback)
             {
-                Topologies all = forDecision(node, sendTo, selectNodeOwnership, txnId, executeAt);
-                new ProposeOnly(node, executor, all, sendTo, route, kind, ballot, txnId, txn, executeAt, deps, callback).start();
+                ProposeOnly propose;
+                try
+                {
+                    Topologies all = forDecision(node, sendTo, selectNodeOwnership, txnId, executeAt);
+                    propose = new ProposeOnly(node, executor, all, sendTo, route, kind, ballot, txnId, txn, executeAt, deps, callback);
+                }
+                catch (Throwable t)
+                {
+                    callback.accept(null, t);
+                    return;
+                }
+                propose.start();
             }
 
             @Override
             public void stabilise(Node node, SequentialAsyncExecutor executor, Topologies any, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
             {
-                Topologies all = forExecution(node, route, SHARE, txnId, executeAt, deps);
-                Topologies coordinates = all.forEpoch(txnId.epoch());
-                new StabiliseSyncPoint<>(this, node, executor, coordinates, all, route, ballot, txnId, txn, executeAt, deps, callback).start();
+                StabiliseSyncPoint<R> stabilise;
+                try
+                {
+                    Topologies all = forExecution(node, route, SHARE, txnId, executeAt, deps);
+                    Topologies coordinates = all.forEpoch(txnId.epoch());
+                    stabilise = new StabiliseSyncPoint<>(this, node, executor, coordinates, all, route, ballot, txnId, txn, executeAt, deps, callback);
+                }
+                catch (Throwable t)
+                {
+                    callback.accept(null, t);
+                    return;
+                }
+                stabilise.start();
             }
 
             @Override
             public void stabiliseOnly(Node node, SequentialAsyncExecutor executor, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, BiConsumer<? super Deps, Throwable> callback)
             {
-                Topologies all = forExecution(node, route, selectNodeOwnership, txnId, executeAt, deps);
-                Topologies coordinates = all.forEpoch(txnId.epoch());
-                new StabiliseOnly(node, executor, coordinates, all, sendTo, route, ballot, txnId, txn, executeAt, deps, callback).start();
+                StabiliseOnly stabilise;
+                try
+                {
+                    Topologies all = forExecution(node, route, selectNodeOwnership, txnId, executeAt, deps);
+                    Topologies coordinates = all.forEpoch(txnId.epoch());
+                    stabilise = new StabiliseOnly(node, executor, coordinates, all, sendTo, route, ballot, txnId, txn, executeAt, deps, callback);
+                }
+                catch (Throwable t)
+                {
+                    callback.accept(null, t);
+                    return;
+                }
+                stabilise.start();
             }
 
             @Override
@@ -356,11 +404,18 @@ public interface CoordinationAdapter<R>
             @Override
             public void persist(Node node, SequentialAsyncExecutor executor, Topologies ignore, Route<?> require, Route<?> sendTo, SelectNodeOwnership selectNodeOwnership, FullRoute<?> route, Ballot ballot, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, boolean informDurableOnDone, BiConsumer<? super R, Throwable> callback)
             {
-                Topologies all = forExecution(node, sendTo, selectNodeOwnership, txnId, executeAt, deps);
-
                 invokeSuccess(node, route, txnId, executeAt, txn, deps, callback);
-                new PersistSyncPoint(node, executor, all, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, informDurableOnDone, route, Maximal)
-                .start();
+
+                try
+                {
+                    Topologies all = forExecution(node, sendTo, selectNodeOwnership, txnId, executeAt, deps);
+                    new PersistSyncPoint(node, executor, all, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, informDurableOnDone, route, Maximal)
+                    .start();
+                }
+                catch (Throwable t)
+                {
+                    node.agent().onException(t);
+                }
             }
         }
 
@@ -372,13 +427,13 @@ public interface CoordinationAdapter<R>
             }
 
             @Override
-            Topologies forDecision(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt)
+            Topologies forDecision(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt) throws TopologyException
             {
                 return node.topology().active().withOpenEpochs(route, null, txnId);
             }
 
             @Override
-            Topologies forExecution(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt, Deps deps)
+            Topologies forExecution(Node node, Route<?> route, SelectNodeOwnership selectNodeOwnership, TxnId txnId, Timestamp executeAt, Deps deps) throws TopologyException
             {
                 return node.topology().active().withUncompletedEpochs(route, txnId, txnId);
             }

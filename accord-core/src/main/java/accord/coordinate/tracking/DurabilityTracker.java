@@ -58,7 +58,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
     {
         static final IntHashSet EMPTY_SET = new IntHashSet();
 
-        // TODO (expected): support partial success (but perhaps requires support also from execution)
+        // TODO (desired): support partial success (but perhaps requires support also from execution)
         protected final SortedListSet<Node.Id> including;
         protected final IntHashSet exclude;
         protected int waitingOnSuccess;

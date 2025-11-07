@@ -44,6 +44,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.UnhandledEnum;
@@ -305,14 +306,22 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
             Invariants.require(untilEpoch >= txnId.epoch());
             ActiveEpochs epochs = node.topology().active();
             Invariants.require(epochs.hasAtLeastEpoch(untilEpoch));
-            Topologies commitTo = epochs.preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, SHARE);
+            Topologies commitTo;
+            try
+            {
+                commitTo = epochs.preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, SHARE);
+            }
+            catch (TopologyException e)
+            {
+                node.agent().onException(e);
+                return;
+            }
             commitInvalidate(node, commitTo, txnId, inform);
         }
 
         public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Participants<?> inform)
         {
-            // TODO (required): do not send to faulty
-            node.send(commitTo.nodes(), to -> new Invalidate(to, commitTo, txnId, inform));
+            node.send(commitTo, to -> new Invalidate(to, commitTo, txnId, inform));
         }
 
         public final long invalidateUntilEpoch;
@@ -324,7 +333,7 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
 
         private Invalidate(Id to, Topologies topologies, TxnId txnId, Participants<?> scope, int latestRelevantIndex)
         {
-            super(txnId, computeScope(to, topologies, (Participants)scope, latestRelevantIndex, Participants::slice, Participants::with), computeWaitForEpoch(to, topologies, latestRelevantIndex));
+            super(txnId, computeScope(to, topologies, (Participants)scope, latestRelevantIndex, Participants::overlapping, Participants::with), computeWaitForEpoch(to, topologies, latestRelevantIndex));
             // TODO (expected): make sure we're picking the right upper limit - it can mean future owners that have never witnessed the command are invalidated
             this.invalidateUntilEpoch = topologies.currentEpoch();
         }

@@ -16,37 +16,12 @@
  * limitations under the License.
  */
 
-package accord.coordinate;
+package accord.topology;
 
-import accord.api.Agent;
-import accord.utils.Invariants;
+import accord.utils.Rethrowable;
 
-public class EpochTimeout extends Timeout
+public abstract class TopologyException extends Exception implements Rethrowable<TopologyException>
 {
-    public final long epoch;
-
-    public static EpochTimeout timeout(long epoch, Agent agent)
-    {
-        agent.coordinatorEvents().onEpochTimeout(epoch);
-        return new EpochTimeout(epoch);
-    }
-
-    EpochTimeout(long epoch)
-    {
-        super(null, null, "Timeout waiting for epoch " + epoch);
-        this.epoch = epoch;
-    }
-
-    private EpochTimeout(long epoch, EpochTimeout cause)
-    {
-        super(null, null, cause);
-        this.epoch = epoch;
-    }
-
-    @Override
-    public EpochTimeout rethrowable()
-    {
-        Invariants.require(this.getClass() == EpochTimeout.class);
-        return new EpochTimeout(epoch, this);
-    }
+    public TopologyException(String message) { super(message); }
+    public TopologyException(String message, Throwable cause) { super(message, cause); }
 }

@@ -38,6 +38,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.UnhandledEnum;
 
@@ -109,9 +110,17 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
                                                txnId, txn, scope, ballot, executeAt, stabiliseDeps));
                     break;
                 case InsufficientEpochs:
-                    node.send(from, new Commit(CommitWithTxn, from, node.topology().active().preciseEpochs(scope, Math.min(allTopologies.oldestEpoch(), nack.minEpoch()), allTopologies.currentEpoch(), SHARE),
+                {
+                    Topologies topologies = allTopologies;
+                    if (nack.minEpoch() < topologies.oldestEpoch())
+                    {
+                        try { topologies = node.topology().active().preciseEpochs(scope, Math.min(allTopologies.oldestEpoch(), nack.minEpoch()), allTopologies.currentEpoch(), SHARE); }
+                        catch (TopologyException e) { node.agent().onException(e); }
+                    }
+                    node.send(from, new Commit(CommitWithTxn, from, topologies,
                                                txnId, txn, scope, ballot, executeAt, stabiliseDeps));
                     break;
+                }
             }
         }
     }

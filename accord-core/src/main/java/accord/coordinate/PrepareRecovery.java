@@ -45,8 +45,9 @@ import accord.primitives.Status;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
-import accord.utils.WrappableException;
+import accord.utils.Rethrowable;
 
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ReadCoordinator.Success.Quorum;
@@ -56,6 +57,7 @@ import static accord.primitives.Known.Outcome.Apply;
 import static accord.primitives.ProgressToken.APPLIED;
 import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.Durability.AllQuorums;
 import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
 import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
@@ -66,7 +68,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
     final Status witnessedByInvalidation;
     final LatentStoreSelector reportTo;
 
-    private PrepareRecovery(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
+    private PrepareRecovery(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback) throws TopologyException
     {
         super(node, executor, txnId, route, IncludeInfo.All, node.uniqueTimestamp(Ballot::fromValues), invalidIf, callback);
         this.reportTo = reportTo;
@@ -78,16 +80,20 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
         assert topologies.oldestEpoch() == topologies.currentEpoch() && topologies.currentEpoch() == txnId.epoch();
     }
 
-    public static PrepareRecovery recover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
+    public static void recover(Node node, SequentialAsyncExecutor executor, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
     {
-        return recover(node, executor, node.topology().active().forEpoch(route, txnId.epoch(), SHARE), txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
-    }
-
-    private static PrepareRecovery recover(Node node, SequentialAsyncExecutor executor, Topologies topologies, TxnId txnId, Infer.InvalidIf invalidIf, FullRoute<?> route, @Nullable Status witnessedByInvalidation, LatentStoreSelector reportTo, BiConsumer<? super Outcome, Throwable> callback)
-    {
-        PrepareRecovery recover = new PrepareRecovery(node, executor, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
+        PrepareRecovery recover;
+        try
+        {
+            Topologies topologies = node.topology().active().forEpoch(route, txnId.epoch(), SHARE);
+            recover = new PrepareRecovery(node, executor, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+            return;
+        }
         recover.start();
-        return recover;
     }
 
     @Override
@@ -100,7 +106,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
     protected boolean isSufficient(Id from, CheckStatusOk ok)
     {
         Ranges rangesForNode = topologies().getEpoch(txnId.epoch()).rangesForNode(from);
-        Route<?> route = this.query.slice(rangesForNode);
+        Route<?> route = this.query.slice(rangesForNode, Minimal);
         return isSufficient(route, ok);
     }
 
@@ -285,7 +291,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
                         }
                     }
                     LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, executor, txnId, full.executeAt, full.partialTxn, deps, missingDeps, missingDeps, SHARE, query, (s, f) -> invokeCallback(null, f), mergedDeps -> {
-                        node.withEpochAtLeast(full.executeAt.epoch(), executor, node.agent(), t -> WrappableException.wrap(t), () -> {
+                        node.withEpochAtLeast(full.executeAt.epoch(), executor, node.agent(), t -> Rethrowable.rethrowable(t), () -> {
                             node.coordinationAdapter(txnId, Recovery).persist(node, executor, topologies, query, bumpBallot, CoordinationFlags.none(), txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
                                 invokeCallback(f == null ? APPLIED : null, f);
                             });

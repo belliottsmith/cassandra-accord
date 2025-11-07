@@ -48,7 +48,7 @@ public class Preempted extends CoordinationFailed
     }
 
     @Override
-    public Preempted wrap()
+    public Preempted rethrowable()
     {
         Invariants.require(this.getClass() == Preempted.class);
         return new Preempted(txnId(), homeKey(), this);

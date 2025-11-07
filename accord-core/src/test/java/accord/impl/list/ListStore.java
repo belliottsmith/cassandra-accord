@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
+import java.util.function.BiConsumer;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -290,7 +291,6 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
             {
                 case EphemeralRead:
                 case ExclusiveSyncPoint:
-                    // TODO (required): introduce some mechanism for EphemeralReads/ExclusiveSyncPoints to abort if local store has been expunged (and check it here)
                     return; // safe to access later
             }
         }
@@ -424,7 +424,15 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
                 delegate.fail(ranges, new Throwable("Failed Fetch", failure));
             }
         };
-        ListFetchCoordinator coordinator = new ListFetchCoordinator(node, ranges, syncPoint, hook, safeStore.commandStore(), this);
+        ListFetchCoordinator coordinator;
+        try
+        {
+            coordinator = new ListFetchCoordinator(node, ranges, syncPoint, hook, safeStore.commandStore(), this);
+        }
+        catch (Throwable t)
+        {
+            return new FetchResult.Failure(t);
+        }
         coordinator.start();
         return coordinator.result();
     }

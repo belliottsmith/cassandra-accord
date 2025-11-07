@@ -284,27 +284,49 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
         return prev.reduce(bounds.max);
     }
 
+    // TODO (expected): test this
     public Participants<?> knownFor(Known required, Participants<?> expect)
     {
-        return foldlWithDefaultAndBounds(expect, (known, prev, start, end) -> {
+        return foldlWithBounds(expect, (known, prev, start, end) -> {
             if (known == null || !required.isSatisfiedBy(known.max))
             {
-                if (end != null)
+                if (start != null && end != null)
                     return prev.without(Ranges.of(start.rangeFactory().newAntiRange(start, end)));
 
-                int i = prev.find(start, FAST);
-                if (i < 0)
-                    return prev.slice(0, -1 - i);
+                if (start == null && end == null)
+                    return prev.slice(0, 0);
 
-                if (prev.domain() == Routable.Domain.Key)
-                    return prev.slice(0, i + 1);
+                if (start == null)
+                {
+                    int i = prev.find(end, FAST);
+                    if (i < 0)
+                        return prev.slice(-1 - i, prev.size());
 
-                Range r = prev.get(i).asRange();
-                Range newR = r.start().equals(start) ? start.asRange() : r.newRange(r.start(), start);
-                return prev.slice(0, i).with((Participants)Ranges.of(newR));
+                    if (prev.domain() == Routable.Domain.Key)
+                        return prev.slice(i + (inclusiveEnds() ? 1 : 0), prev.size());
+
+                    Range r = prev.get(i).asRange();
+                    prev = prev.slice(i, prev.size());
+                    if (!r.end().equals(end))
+                        prev = prev.with((Participants)Ranges.of(r.newRange(r.end(), end)));
+                }
+                else
+                {
+                    int i = prev.find(start, FAST);
+                    if (i < 0)
+                        return prev.slice(0, -1 - i);
+
+                    if (prev.domain() == Routable.Domain.Key)
+                        return prev.slice(0, i + (inclusiveStarts() ? 0 : 1));
+
+                    Range r = prev.get(i).asRange();
+                    prev = prev.slice(0, i);
+                    if (!r.start().equals(start))
+                        prev = prev.with((Participants)Ranges.of(r.newRange(r.start(), start)));
+                }
             }
             return prev;
-        }, null, expect, i -> false);
+        }, expect, i -> false);
     }
 
     public static class Builder extends AbstractBoundariesBuilder<RoutingKey, MinAndMaxKnown, KnownMap>
