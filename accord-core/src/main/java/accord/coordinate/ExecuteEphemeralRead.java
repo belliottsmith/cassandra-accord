@@ -41,6 +41,7 @@ import accord.messages.ReadData.ReadReply;
 import accord.messages.ReadEphemeralTxnData;
 import accord.messages.SafeCallback;
 import accord.messages.StableThenRead;
+import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
@@ -52,6 +53,7 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
+import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.primitives.Status.Phase.Execute;
@@ -89,6 +91,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void startOnceInitialised()
     {
+        node.agent().coordinatorEvents().onExecuting(txnId, Ballot.ZERO, deps, FAST);
         if (permitLocalExecution() && tryIfUniversal(node.id()))
         {
             new LocalExecute(txnId, node.id()).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
@@ -158,9 +161,14 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     protected void onDone(Success success, Throwable failure)
     {
         if (failure == null)
+        {
+            node.agent().coordinatorEvents().onExecuted(txnId, Ballot.ZERO);
             invokeCallback(txn.result(txnId, txnId.withEpochAtLeast(allTopologies.currentEpoch()), data), null);
+        }
         else
+        {
             invokeCallback(null, failure);
+        }
     }
 
     class LocalExecute extends ReadEphemeralTxnData

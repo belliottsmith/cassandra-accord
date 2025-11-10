@@ -120,7 +120,7 @@ public final class TxnState extends WaitingState implements PreLoadContext
         }
         else
         {
-            long nowMicros = owner.node().elapsed(MICROSECONDS);
+            long nowMicros = owner.node().recentElapsed(MICROSECONDS);
             long newDeadline = nowMicros + newDelay;
             if (otherDeadline == 0)
             {

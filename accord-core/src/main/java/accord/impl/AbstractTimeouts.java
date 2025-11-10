@@ -123,7 +123,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
         @Override
         public void run()
         {
-            long now = time.elapsed(MICROSECONDS);
+            long now = time.recentElapsed(MICROSECONDS);
             lock();
             unlock(now);
         }
@@ -241,7 +241,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
     @Override
     public RegisteredTimeout registerAt(Timeout timeout, long deadline, TimeUnit units)
     {
-        long now = time.elapsed(MICROSECONDS);
+        long now = time.recentElapsed(MICROSECONDS);
         deadline = units.toMicros(deadline);
         return registerAt(timeout, now, deadline);
     }
@@ -262,7 +262,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
     @Override
     public void maybeNotify()
     {
-        long nowMicros = time.elapsed(MICROSECONDS);
+        long nowMicros = time.recentElapsed(MICROSECONDS);
         for (Stripe stripe : stripes)
         {
             if (stripe.timeouts.shouldWake(nowMicros) && stripe.tryLock())

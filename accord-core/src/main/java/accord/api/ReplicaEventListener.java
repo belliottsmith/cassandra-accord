@@ -45,7 +45,7 @@ public interface ReplicaEventListener
 
     default void onPreApplied(SafeCommandStore safeStore, Command cmd) {}
     // startedApplyAt may be less than zero, indicating it has not been populated
-    default void onApplied(SafeCommandStore safeStore, Command cmd, long startedApplyAt) {}
+    default void onApplied(SafeCommandStore safeStore, Command cmd) {}
 
     ReplicaEventListener NOOP = new ReplicaEventListener()
     {

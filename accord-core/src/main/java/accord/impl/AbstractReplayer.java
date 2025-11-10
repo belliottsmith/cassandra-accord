@@ -81,7 +81,7 @@ public abstract class AbstractReplayer implements Journal.Replayer
                     command.writes()
                            .apply(safeStore, executes, command.partialTxn())
                            .invoke(() -> unsafeStore.chain(PreLoadContext.contextFor(txnId, "Replay"), ss -> {
-                               Commands.postApply(ss, txnId, -1, true);
+                               Commands.postApply(ss, txnId, true);
                            }))
                            .begin(safeStore.agent());
                 }
