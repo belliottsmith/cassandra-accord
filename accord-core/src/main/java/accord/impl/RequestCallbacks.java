@@ -212,7 +212,7 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
         private <T, P> RegisteredCallback<T> safeInvoke(long callbackId, Node.Id from, P param, BiConsumer<RegisteredCallback<T>, P> invoker, boolean remove)
         {
             RegisteredCallback<T> registered = null;
-            long now = time.elapsed(MICROSECONDS);
+            long now = time.recentElapsed(MICROSECONDS);
             lock();
             try
             {

@@ -872,7 +872,7 @@ public class Node implements NodeCommandStoreService
         long mostRecent = coordinations.mostRecent(txnId, COORDINATES_STATE_MACHINE, ballot);
         if (mostRecent < 0)
             return false;
-        long ageNanos = Math.max(elapsed(NANOSECONDS) - mostRecent, 0);
+        long ageNanos = Math.max(recentElapsed(NANOSECONDS) - mostRecent, 0);
         return !agent.isSlowCoordinator(ageNanos, NANOSECONDS, txnId, 1);
     }
 

@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import accord.api.RoutingKey;
 import accord.local.MaxDecidedRX.DecidedRX;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.cfk.CommandsForKey;
@@ -227,17 +228,20 @@ public interface CommandSummaries
             if (cfk == null || cfk.size() == 0)
                 return false;
 
+            return isRelevant(cfk.key(), cfk.get(cfk.size() - 1), cfk.minUndecided());
+        }
+
+        public boolean isRelevant(RoutingKey key, TxnId last, TxnId minUndecided)
+        {
             // NOTE: we CANNOT safely filter on first element, as we may have pruned dependencies we need to witness
             //  and that will be populated on the receiving replicas as necessary - that is,
             //  we must permit adopting future dependencies
-            CommandsForKey.TxnInfo last = cfk.get(cfk.size() - 1);
             if (last.compareTo(minTxnId) < 0)
                 return false;
 
             if (maxDecidedRX == null)
                 return true;
 
-            CommandsForKey.TxnInfo minUndecided = cfk.minUndecided();
             if (minUndecided != null)
                 return true;
 
@@ -245,7 +249,7 @@ public interface CommandSummaries
             if (decidedRx != null && decidedRx.excludeDecided(last))
                 return false;
 
-            DecidedRX decidedRx = maxDecidedRX.forDeps(cfk.key(), primaryTxnId);
+            DecidedRX decidedRx = maxDecidedRX.forDeps(key, primaryTxnId);
             return decidedRx == null || decidedRx.includeDecided(last);
         }
 

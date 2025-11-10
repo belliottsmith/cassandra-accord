@@ -38,6 +38,12 @@ public interface TimeService
      */
     long elapsed(TimeUnit unit);
 
+    /**
+     * {@link #elapsed(TimeUnit)} but accepts a "recently" updated value; this must be no earlier than the start
+     * of processing the relevant task.
+     */
+    default long recentElapsed(TimeUnit unit) { return elapsed(unit); }
+
     static TimeService ofNonMonotonic(LongSupplier now, TimeUnit units)
     {
         return of(now, elapsedWrapperFromNonMonotonicSource(units, now));

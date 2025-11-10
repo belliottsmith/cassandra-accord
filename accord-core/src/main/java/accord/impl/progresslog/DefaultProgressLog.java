@@ -527,7 +527,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (stopped || processing)
             return;
 
-        long nowMicros = node.elapsed(TimeUnit.MICROSECONDS);
+        long nowMicros = node.recentElapsed(TimeUnit.MICROSECONDS);
         processing = true;
         try
         {
@@ -815,7 +815,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     long nextCallbackId()
     {
-        long id = node.elapsed(NANOSECONDS);
+        long id = node.recentElapsed(NANOSECONDS);
         if (id > prevCallbackId) prevCallbackId = id;
         else id = ++prevCallbackId;
         return id;
@@ -948,7 +948,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
         else
         {
-            long now = node.elapsed(MICROSECONDS);
+            long now = node.recentElapsed(MICROSECONDS);
             if (timers.shouldWake(now))
                 commandStore.execute((PreLoadContext.Empty) () -> "Run ProgressLog", this, node.agent());
         }

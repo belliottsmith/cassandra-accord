@@ -19,7 +19,6 @@
 package accord.api;
 
 import accord.local.Node;
-import accord.topology.EpochReady;
 import accord.topology.Topology;
 import accord.utils.async.AsyncResult;
 

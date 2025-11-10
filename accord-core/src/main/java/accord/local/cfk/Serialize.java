@@ -133,11 +133,16 @@ public class Serialize
      */
     public static ByteBuffer toBytesWithoutKey(CommandsForKey cfk)
     {
-        Invariants.requireArgument(!cfk.isLoadingPruned());
-        return unsafeToBytesWithoutKey(cfk);
+        return toBytesWithoutKey(0, cfk);
     }
 
-    private static ByteBuffer unsafeToBytesWithoutKey(CommandsForKey cfk)
+    public static ByteBuffer toBytesWithoutKey(int prefixBytes, CommandsForKey cfk)
+    {
+        Invariants.requireArgument(!cfk.isLoadingPruned());
+        return unsafeToBytesWithoutKey(prefixBytes, cfk);
+    }
+
+    private static ByteBuffer unsafeToBytesWithoutKey(int prefixBytes, CommandsForKey cfk)
     {
         Invariants.require(!cfk.isLoadingPruned());
 
@@ -145,10 +150,11 @@ public class Serialize
         if (commandCount == 0)
         {
             if (!cfk.hasMaxUniqueHlc())
-                return ByteBuffer.allocate(1);
+                return ByteBuffer.allocate(prefixBytes + 1);
 
             int size = 1 + VIntCoding.sizeOfUnsignedVInt(cfk.maxUniqueHlc);
-            ByteBuffer result = ByteBuffer.allocate(size);
+            ByteBuffer result = ByteBuffer.allocate(prefixBytes + size);
+            result.position(prefixBytes);
             VIntCoding.writeUnsignedVInt32(1, result);
             VIntCoding.writeUnsignedVInt(cfk.maxUniqueHlc, result);
             Invariants.require(!result.hasRemaining());
@@ -458,7 +464,8 @@ public class Serialize
             totalBytes += sizeOfUnsignedVInt(unmanagedPendingCommitCount);
             totalBytes += sizeOfUnsignedVInt(cfk.unmanagedCount() - unmanagedPendingCommitCount);
 
-            ByteBuffer out = ByteBuffer.allocate(totalBytes);
+            ByteBuffer out = ByteBuffer.allocate(prefixBytes + totalBytes);
+            out.position(prefixBytes);
             VIntCoding.writeUnsignedVInt32(commandCount + 1, out);
             VIntCoding.writeUnsignedVInt32(nodeIdCount, out);
             VIntCoding.writeUnsignedVInt32(nodeIds[0], out);
@@ -757,10 +764,17 @@ public class Serialize
 
     public static CommandsForKey fromBytes(RoutingKey key, ByteBuffer in)
     {
+        return fromBytes(key, in, true);
+    }
+
+    public static CommandsForKey fromBytes(RoutingKey key, ByteBuffer in, boolean duplicate)
+    {
         if (!in.hasRemaining())
             return null;
 
-        in = in.duplicate();
+        if (duplicate)
+            in = in.duplicate();
+
         int commandCount = VIntCoding.readUnsignedVInt32(in) - 1;
         if (commandCount <= 0)
         {

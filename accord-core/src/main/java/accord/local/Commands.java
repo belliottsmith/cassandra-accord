@@ -131,7 +131,6 @@ import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
-import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public class Commands
 {
@@ -616,7 +615,7 @@ public class Commands
             {
                 Command.Executed executed = safeCommand.applied(safeStore, participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result);
                 safeStore.agent().replicaEvents().onPreApplied(safeStore, executed);
-                safeStore.agent().replicaEvents().onApplied(safeStore, executed, -1);
+                safeStore.agent().replicaEvents().onApplied(safeStore, executed);
                 safeStore.notifyListeners(safeCommand, command);
                 break;
             }
@@ -664,7 +663,7 @@ public class Commands
         }
     }
 
-    public static void postApply(SafeCommandStore safeStore, TxnId txnId, long startedApplyAt, boolean forceApply)
+    public static void postApply(SafeCommandStore safeStore, TxnId txnId, boolean forceApply)
     {
         SafeCommand safeCommand = safeStore.get(txnId);
         Command command = safeCommand.current();
@@ -673,7 +672,7 @@ public class Commands
             return;
 
         safeCommand.applied(safeStore, forceApply);
-        safeStore.agent().replicaEvents().onApplied(safeStore, command, startedApplyAt);
+        safeStore.agent().replicaEvents().onApplied(safeStore, command);
         safeStore.notifyListeners(safeCommand, command);
     }
 
@@ -682,16 +681,14 @@ public class Commands
         final CommandStore commandStore;
         final TxnId txnId;
         final Participants<?> participants;
-        final long startedApplyAt;
         final boolean force;
 
-        protected PostApply(Head<?> head, CommandStore commandStore, TxnId txnId, Participants<?> participants, long startedApplyAt, boolean force)
+        protected PostApply(Head<?> head, CommandStore commandStore, TxnId txnId, Participants<?> participants, boolean force)
         {
             super(head);
             this.commandStore = commandStore;
             this.txnId = txnId;
             this.participants = participants;
-            this.startedApplyAt = startedApplyAt;
             this.force = force;
         }
 
@@ -704,7 +701,7 @@ public class Commands
         @Override
         public void accept(SafeCommandStore safeStore)
         {
-            postApply(safeStore, txnId, startedApplyAt, force);
+            postApply(safeStore, txnId, force);
         }
 
         @Override public TxnId primaryTxnId() { return txnId; }
@@ -722,14 +719,13 @@ public class Commands
         // TODO (required, API): do we care about tracking the write persistence latency, when this is just a memtable write?
         //  the only reason it will be slow is because Memtable flushes are backed-up (which will be reported elsewhere)
         // TODO (required): this is anyway non-monotonic and milliseconds granularity
-        long startedApplyAt = safeStore.node().elapsed(MICROSECONDS);
         TxnId txnId = command.txnId();
         //noinspection DataFlowIssue
         safeStore = safeStore; // disable reuse
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
         return command.writes()
                       .apply(safeStore, executes, command.partialTxn())
-                      .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, startedApplyAt, false));
+                      .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, false));
     }
 
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn)
