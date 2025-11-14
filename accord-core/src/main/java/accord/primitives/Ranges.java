@@ -185,6 +185,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         return with(Ranges.of(withKey.asRange()));
     }
 
+    // TODO (expected): should return self if no changes
     public Ranges without(Unseekables<?> keysOrRanges)
     {
         if (keysOrRanges.domain() == Routable.Domain.Key)
@@ -192,6 +193,7 @@ public class Ranges extends AbstractRanges implements Iterable<Range>, Seekables
         return ofSortedAndDeoverlappedUnchecked(withoutInternal((AbstractRanges) keysOrRanges));
     }
 
+    // TODO (expected): should return self if no changes
     /**
      * Subtracts the given set of ranges from this
      */

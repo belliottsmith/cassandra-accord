@@ -486,4 +486,18 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             return new ReducingRangeMap<>(inclusiveEnds, starts.toArray(new RoutingKey[0]), (V[])values.toArray(new Object[0]));
         }
     }
+
+    public Ranges ranges(Predicate<V> include)
+    {
+        Range[] ranges = new Range[values.length];
+        int count = 0;
+        for (int i = 0 ; i < values.length ; ++i)
+        {
+            if (include.test(values[i]))
+                ranges[count++] = Range.create(starts[i], starts[i+1]);
+        }
+        if (count < ranges.length)
+            ranges = Arrays.copyOf(ranges, count);
+        return Ranges.ofSortedAndDeoverlapped(ranges);
+    }
 }

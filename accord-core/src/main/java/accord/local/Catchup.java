@@ -20,6 +20,7 @@ package accord.local;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.slf4j.Logger;
@@ -56,7 +57,7 @@ public class Catchup
 
         void register(SafeCommandStore safeStore)
         {
-            waitingOn = safeStore.ranges().all();
+            waitingOn = safeStore.ranges().all().slice(durableBefore.ranges(Objects::nonNull), Minimal);
             updateWaitingOn(safeStore);
 
             if (waitingOn.isEmpty()) setSuccess(null);
@@ -68,7 +69,11 @@ public class Catchup
             RedundantBefore redundantBefore = safeStore.redundantBefore();
             Ranges newWaitingOn = redundantBefore.removeLostOrStale(waitingOn);
             if (newWaitingOn != waitingOn)
-                logger.info("{}: {} are retired (or stale)", safeStore.commandStore(), waitingOn.without(newWaitingOn));
+            {
+                Ranges retiredOrStale = waitingOn.without(newWaitingOn);
+                if (!retiredOrStale.isEmpty())
+                    logger.info("{}: {} are retired (or stale)", safeStore.commandStore(), retiredOrStale);
+            }
 
             newWaitingOn = durableBefore.foldlWithBounds(newWaitingOn, (DurableBefore.Entry entry, Ranges ranges, RoutingKey entryStart, RoutingKey entryEnd) -> {
                 Ranges entryRanges = Ranges.of(Range.create(entryStart, entryEnd));
