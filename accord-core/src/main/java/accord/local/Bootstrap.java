@@ -118,7 +118,7 @@ class Bootstrap
 
         TxnId start(SafeCommandStore safeStore)
         {
-            globalSyncId = node.nextTxnIdWithDefaultFlags(epoch, 0, ExclusiveSyncPoint, Domain.Range, Cardinality.Any);
+            globalSyncId = node.nextTxnIdWithDefaultFlags(epoch, 0, valid, ExclusiveSyncPoint, Domain.Range, Cardinality.Any);
             Invariants.require(epoch <= globalSyncId.epoch(), "Attempting to use local epoch %d which is larger than global epoch %d", epoch, globalSyncId.epoch());
 
             if (valid.isEmpty())

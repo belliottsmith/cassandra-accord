@@ -240,7 +240,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
             DurabilityResult result = current();
             if (result.min.remote == SyncRemote.All)
             {
-                node.topology().onEpochRetired(scope.toRanges(), syncPoint.syncId.epoch() - 1);
+                node.topology().onEpochRetired(scope.toRanges(), syncPoint.syncId);
                 node.send(tracker.topologies(), new SetShardDurable(syncPoint, Universal));
             }
             else if (result.min.remote == SyncRemote.Quorum)

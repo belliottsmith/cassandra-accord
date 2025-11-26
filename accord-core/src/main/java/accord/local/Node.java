@@ -82,7 +82,6 @@ import accord.primitives.TxnId;
 import accord.primitives.TxnId.Cardinality;
 import accord.topology.TopologyException;
 import accord.topology.TopologyManager;
-import accord.topology.TopologyMismatch.TopologyMatch;
 import accord.topology.TopologyRetiredException;
 import accord.utils.Invariants;
 import accord.utils.PersistentField;
@@ -567,47 +566,56 @@ public class Node implements NodeCommandStoreService
         messageSink.reply(replyingToNode, replyContext, send);
     }
 
-    public TxnId nextTxnIdWithDefaultFlags(Txn.Kind rw, Domain domain)
+    public TxnId nextTxnIdWithDefaultFlags(Seekables<?, ?> keys, Txn.Kind kind, Domain domain)
     {
-        return nextTxnIdWithFlags(rw, domain, Any, defaultMediumPath().bit());
+        return nextTxnIdWithFlags(keys, kind, domain, Any, defaultMediumPath().bit());
     }
 
-    public TxnId nextStaleTxnIdWithDefaultFlags(long minEpoch, long minHlc, Txn.Kind rw, Domain domain)
+    public TxnId nextStaleTxnIdWithDefaultFlags(long minEpoch, long minHlc, Seekables<?, ?> keys, Txn.Kind kind, Domain domain)
     {
-        return nextStaleTxnIdWithFlags(minEpoch, minHlc, rw, domain, Any, defaultMediumPath().bit());
+        return nextStaleTxnIdWithFlags(minEpoch, minHlc, keys, kind, domain, Any, defaultMediumPath().bit());
     }
 
-    public TxnId nextTxnIdWithDefaultFlags(Txn.Kind rw, Domain domain, Cardinality cardinality)
+    public TxnId nextTxnIdWithDefaultFlags(Seekables<?, ?> keys, Txn.Kind kind, Domain domain, Cardinality cardinality)
     {
-        return nextTxnIdWithFlags(rw, domain, cardinality, defaultMediumPath().bit());
+        return nextTxnIdWithFlags(keys, kind, domain, cardinality, defaultMediumPath().bit());
     }
 
-    public TxnId nextTxnIdWithDefaultFlags(long minEpoch, long minHlc, Txn.Kind rw, Domain domain, Cardinality cardinality)
+    private long epoch(long minEpoch, Seekables<?, ?> keys, Txn.Kind kind)
     {
-        return newTxnId(Math.max(minEpoch, epoch()), uniqueNow(minHlc), rw, domain, cardinality, defaultMediumPath().bit(), id);
+        if (!kind.isSyncPoint())
+            return Math.max(minEpoch, epoch());
+
+        return topology.active().maxEpoch(minEpoch, keys);
+    }
+
+    public TxnId nextTxnIdWithDefaultFlags(long minEpoch, long minHlc, Seekables<?, ?> keys, Txn.Kind kind, Domain domain, Cardinality cardinality)
+    {
+        long epoch = epoch(minEpoch, keys, kind);
+        return newTxnId(epoch, uniqueNow(minHlc), kind, domain, cardinality, defaultMediumPath().bit(), id);
     }
 
     /**
      * TODO (required): Make sure we cannot re-issue the same txnid on startup
      * TODO (required): Don't use new epoch for TxnId until a quorum is ready to coordinate it
      */
-    public TxnId nextTxnIdWithFlags(Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    public TxnId nextTxnIdWithFlags(Seekables<?, ?> keys, Txn.Kind kind, Domain domain, Cardinality cardinality, int flags)
     {
-        return newTxnId(epoch(), uniqueNow(), rw, domain, cardinality, flags, id);
+        return newTxnId(epoch(Long.MIN_VALUE, keys, kind), uniqueNow(), kind, domain, cardinality, flags, id);
     }
 
-    public TxnId nextStaleTxnIdWithFlags(long minEpoch, long minHlc, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags)
+    public TxnId nextStaleTxnIdWithFlags(long minEpoch, long minHlc, Seekables<?, ?> keys, Txn.Kind kind, Domain domain, Cardinality cardinality, int flags)
     {
-        long epoch = Math.max(minEpoch, epoch());
+        long epoch = epoch(minEpoch, keys, kind);
         long hlc = uniqueStale(minHlc);
-        return newTxnId(epoch, hlc, rw, domain, cardinality, flags, id);
+        return newTxnId(epoch, hlc, kind, domain, cardinality, flags, id);
     }
 
-    private static TxnId newTxnId(long epoch, long now, Txn.Kind rw, Domain domain, Cardinality cardinality, int flags, Node.Id node)
+    private static TxnId newTxnId(long epoch, long now, Txn.Kind kind, Domain domain, Cardinality cardinality, int flags, Node.Id node)
     {
-        Invariants.require(domain == Key || rw != Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
-        Invariants.require(domain == Range || !rw.isSyncPoint, "Key ExclusiveSyncPoint not supported without improvements to CommandsForKey for managing execution");
-        TxnId txnId = new TxnId(epoch, now, flags, rw, domain, cardinality, node);
+        Invariants.require(domain == Key || kind != Write, "Range writes not supported without forwarding uniqueHlc information to WaitingOn for direct dependencies");
+        Invariants.require(domain == Range || !kind.isSyncPoint, "Key ExclusiveSyncPoint not supported without improvements to CommandsForKey for managing execution");
+        TxnId txnId = new TxnId(epoch, now, flags, kind, domain, cardinality, node);
         Invariants.require((txnId.lsb & (0xffff & ~TxnId.IDENTITY_FLAGS)) == 0);
         return txnId;
     }
@@ -635,9 +643,9 @@ public class Node implements NodeCommandStoreService
         Cardinality cardinality = cardinality(domain, keys);
 
         if (!usePrivilegedCoordinator() || (kind != Read && kind != Write))
-            return nextTxnIdWithDefaultFlags(minEpoch, minHlc, kind, domain, cardinality);
+            return nextTxnIdWithDefaultFlags(minEpoch, minHlc, keys, kind, domain, cardinality);
 
-        long epoch = Math.max(minEpoch, epoch());
+        long epoch = epoch(minEpoch, keys, kind);
         long hlc = uniqueNow(minHlc);
         int flags = computeBestDefaultTxnIdFlags(keys, epoch);
         TxnId txnId = new TxnId(epoch, hlc, flags, kind, domain, cardinality, id);
@@ -662,7 +670,7 @@ public class Node implements NodeCommandStoreService
         Txn.Kind kind = txn.kind();
         Domain domain = keys.domain();
 
-        long epoch = epoch();
+        long epoch = epoch(Long.MIN_VALUE, keys, kind);
         long now = uniqueNow();
         fastPath = ensurePermitted(fastPath);
         if (fastPath != Unoptimised && (!epochs.hasEpoch(epoch) || !epochs.supportsPrivilegedFastPath(keys, epoch)))
@@ -699,17 +707,17 @@ public class Node implements NodeCommandStoreService
 
     public FullRoute<?> computeRoute(TxnId txnId, Routables<?> keysOrRanges) throws TopologyException
     {
-        return computeRoute(txnId.epoch(), keysOrRanges, topology.active(), txnId.isSyncPoint() ? TopologyMatch.ANY : TopologyMatch.LATEST);
+        return computeRoute(txnId.epoch(), keysOrRanges, topology.active(), txnId.kind());
     }
 
-    public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges, ActiveEpochs active, TopologyMatch match) throws TopologyException
+    public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges, ActiveEpochs active, Txn.Kind kind) throws TopologyException
     {
         Invariants.requireArgument(!keysOrRanges.isEmpty(), "Attempted to compute a route from empty keys or ranges");
 
         RoutingKey homeKey = selectHomeKey(active.get(epoch), keysOrRanges);
         FullRoute<?> route = keysOrRanges.toRoute(homeKey);
 
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(epoch, keysOrRanges, active, match);
+        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(epoch, keysOrRanges, active, kind);
         if (mismatch != null)
             throw mismatch;
 

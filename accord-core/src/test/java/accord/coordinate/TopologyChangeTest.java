@@ -69,7 +69,7 @@ public class TopologyChangeTest
                                               .build())
         {
             Node node1 = cluster.get(1);
-            TxnId txnId1 = node1.nextTxnIdWithDefaultFlags(Write, Key);
+            TxnId txnId1 = node1.nextTxnIdWithDefaultFlags(keys, Write, Key);
             Txn txn1 = writeTxn(keys);
             getUninterruptibly(node1.coordinate(txnId1, txn1));
 
@@ -93,7 +93,7 @@ public class TopologyChangeTest
             });
 
             Node node4 = cluster.get(4);
-            TxnId txnId2 = node4.nextTxnIdWithDefaultFlags(Write, Key);
+            TxnId txnId2 = node4.nextTxnIdWithDefaultFlags(keys, Write, Key);
             Txn txn2 = writeTxn(keys);
             getUninterruptibly(node4.coordinate(txnId2, txn2));
 
@@ -202,7 +202,7 @@ public class TopologyChangeTest
             });
 
             Node node4 = cluster.get(4);
-            TxnId epoch2txnId = node4.nextTxnIdWithDefaultFlags(Write, Key);
+            TxnId epoch2txnId = node4.nextTxnIdWithDefaultFlags(keys, Write, Key);
             Assertions.assertEquals(2, epoch2txnId.epoch());
 
             cluster.nodes(1, 2, 3, 4, 5).forEach(node -> node.topology().reportTopology(topology3));

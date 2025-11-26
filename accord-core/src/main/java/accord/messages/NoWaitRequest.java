@@ -124,6 +124,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
 
     protected void acceptInternal(R reply, Throwable failure)
     {
+        Invariants.require(reply != null || failure != null, "No reply produced for %s", this);
         if (failure != null || reply.isFinal())
         {
             Invariants.require(!hasSentFinalReply);

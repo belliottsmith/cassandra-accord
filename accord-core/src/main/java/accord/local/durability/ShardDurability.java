@@ -38,7 +38,6 @@ import accord.coordinate.CoordinationFailed;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.ShardDistributor;
-import accord.primitives.FullRoute;
 import accord.primitives.SyncPoint;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -369,7 +368,7 @@ public class ShardDurability
                 }
             }
             minHlc = Math.max(minHlc, node.agent().minStaleHlc(node, activeRequest != null));
-            TxnId staleId = node.nextStaleTxnIdWithDefaultFlags(minEpoch, minHlc, kind, Domain.Range);
+            TxnId staleId = node.nextStaleTxnIdWithDefaultFlags(minEpoch, minHlc, ranges, kind, Domain.Range);
             if (activeRequest != null) logger.info("Initiating RX requested by {} for {} with TxnId {}. Remaining: {}.", activeRequest.requestedBy, ranges, staleId, active);
             else logger.debug("Initiating RX for durability of {} with TxnId {}.", ranges, staleId);
 

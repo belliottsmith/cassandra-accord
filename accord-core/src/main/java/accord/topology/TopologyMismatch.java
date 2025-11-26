@@ -20,28 +20,12 @@ package accord.topology;
 
 import javax.annotation.Nullable;
 
-import accord.primitives.Ranges;
 import accord.primitives.Routables;
+import accord.primitives.Txn;
 import accord.utils.UnhandledEnum;
 
 public final class TopologyMismatch extends TopologyException
 {
-    public enum TopologyMatch
-    {
-        /**
-         * All participating topologies are expected to contain all participating keys.
-         * This is for user transactions, which must operate at all times on topologies
-         * consistent with the operation.
-         */
-        LATEST,
-
-        /**
-         * All participating keys are expected to be contained in SOME participating epoch.
-         * This is used for sync points which may be run after some range has been removed.
-         */
-        ANY
-    }
-
     private TopologyMismatch(String message)
     {
         super(message);
@@ -58,37 +42,34 @@ public final class TopologyMismatch extends TopologyException
         return new TopologyMismatch(getMessage(), this);
     }
 
+    private enum Mismatch { NOT_KNOWN, PENDING_REMOVAL }
+
     @Nullable
-    public static TopologyMismatch checkForMismatch(long epoch, Routables<?> keysOrRanges, ActiveEpochs active, TopologyMatch match) throws TopologyException
+    public static TopologyMismatch checkForMismatch(long epoch, Routables<?> keysOrRanges, ActiveEpochs active, Txn.Kind kind) throws TopologyException
     {
-        switch (match)
+        Topology topology = active.globalForEpoch(epoch);
+        Mismatch result = topology.foldlWithDefault(keysOrRanges, (shard, k, v, i) -> {
+            if (shard == null)
+                return Mismatch.NOT_KNOWN;
+            if (shard.is(Shard.Flag.PENDING_REMOVAL) && !k.isSyncPoint())
+                return Mismatch.PENDING_REMOVAL;
+            return v;
+        }, null, kind, null);
+
+        if (result == null)
+            return null;
+
+        String message;
+        switch (result)
         {
-            default: throw new UnhandledEnum(match);
-            case ANY:
-            {
-                long e = Math.min(active.currentEpoch, epoch);
-                while (e >= active.minEpoch())
-                {
-                    Ranges rs = active.getKnown(e).global.ranges();
-                    if (rs.containsAll(keysOrRanges))
-                        return null;
-
-                    keysOrRanges = keysOrRanges.without(rs);
-                    --e;
-                }
-
-                String message = String.format("Txn attempted to access keys or ranges that are not known in any epoch (%s)", keysOrRanges);
-                return new TopologyMismatch(message);
-            }
-            case LATEST:
-            {
-                Topology topology = active.globalForEpoch(epoch);
-                if (topology.ranges().containsAll(keysOrRanges))
-                    return null;
-
-                String message = String.format("Txn attempted to access keys or ranges that are not known in the epoch %d (%s)", topology.epoch(), keysOrRanges);
-                return new TopologyMismatch(message);
-            }
+            default: throw new UnhandledEnum(result);
+            case PENDING_REMOVAL:
+                message = String.format("Txn attempted to access keys or ranges that are being removed in epoch %d (%s)", topology.epoch(), keysOrRanges);
+                break;
+            case NOT_KNOWN:
+                message = String.format("Txn attempted to access keys or ranges that are not known in the epoch %d (%s)", topology.epoch(), keysOrRanges);
+                break;
         }
+        return new TopologyMismatch(message);
     }
 }

@@ -96,7 +96,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
     public static AsyncChain<SyncPoint> coordinate(Node node, Txn.Kind kind, Ranges ranges, SyncPointAdapter<SyncPoint> adapter)
     {
         Invariants.requireArgument(kind.isSyncPoint());
-        TxnId txnId = node.nextTxnIdWithDefaultFlags(kind, ranges.domain(), cardinality(ranges));
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(ranges, kind, ranges.domain(), cardinality(ranges));
         return node.withEpochExact(txnId.epoch(), null, () -> coordinate(node, txnId, ranges, adapter));
     }
 
