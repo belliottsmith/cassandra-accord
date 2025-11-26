@@ -132,6 +132,16 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return currentEpoch;
     }
 
+    public long maxEpoch(long minEpoch, Routables<?> keys)
+    {
+        long epoch = Math.max(epoch(), minEpoch);
+        while (!getKnown(epoch).global().ranges().containsAll(keys))
+        {
+            if (--epoch < minEpoch())
+                throw new IllegalArgumentException(keys + " not found in any active epoch");
+        }
+        return epoch;
+    }
     public Topology current()
     {
         return epochs.length > 0 ? epochs[0].global() : Topology.EMPTY;
@@ -606,7 +616,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         ActiveEpoch e = ifExists(epoch);
         if (e == null)
             return null;
-        return e.global().forKey(key);
+        return e.global().forKeyIfKnown(key);
     }
 
     public Shard forEpoch(RoutableKey key, long epoch) throws TopologyException

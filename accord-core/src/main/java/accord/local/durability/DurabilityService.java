@@ -40,6 +40,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
+import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.topology.TopologyException;
 import accord.utils.Invariants;
@@ -239,12 +240,11 @@ public class DurabilityService implements TopologyListener
             next.reportSuccess();
     }
 
-
     @Override
-    public void onReceived(Topology topology)
+    public void onActive(ActiveEpoch epoch)
     {
-        shards.updateTopology(topology);
-        global.updateTopology(topology);
+        shards.updateTopology(epoch.global());
+        global.updateTopology(epoch.global());
     }
 
     @Override
@@ -261,10 +261,13 @@ public class DurabilityService implements TopologyListener
             e = epochs.getKnown(epochs.minEpoch());
         }
 
+        Ranges retiredAndRemoved = e.global().foldl(retiredRanges, (shard, rs, i) -> {
+            if (shard.is(Shard.Flag.PENDING_REMOVAL))
+                return rs.with(Ranges.of(shard.range));
+            return rs;
+        }, Ranges.EMPTY);
         // if the ranges are retired and have been removed in the epoch in which they're retired, then we can retire the associated scheduler(s)
-        retiredRanges = retiredRanges.without(e.global().ranges());
-        if (retiredRanges.isEmpty())
-            return;
-        shards.retireRanges(retiredRanges, epoch);
+        if (!retiredAndRemoved.isEmpty())
+            shards.retireRanges(retiredAndRemoved, epoch);
     }
 }

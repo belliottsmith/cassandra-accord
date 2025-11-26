@@ -103,6 +103,8 @@ public class TopologyRandomizer
     private final Map<Id, Map<Long, Ranges>> bootstrapping = new HashMap<>();
     private final Map<Id, Integer> bootstrappingGeneration = new HashMap<>();
     private final ConcurrentLinkedQueue<Integer> newPrefixes = new ConcurrentLinkedQueue<>();
+    // TODO (required): remove this restriction, we should be able to replicate previously owned ranges just fine
+    private final Map<Id, Ranges> previouslyReplicated = new HashMap<>();
     private final TopologyUpdates topologyUpdates;
     private final Listener listener;
 
@@ -112,6 +114,8 @@ public class TopologyRandomizer
         this.topologyUpdates = topologyUpdates;
         this.epochs.add(Topology.EMPTY);
         this.epochs.add(initialTopology);
+        for (Id node : initialTopology.nodes())
+            previouslyReplicated.put(node, initialTopology.rangesForNode(node));
         this.nodeLookup = nodeLookup;
         this.listener = listener;
         for (int prefix : prefixes)
@@ -466,7 +470,8 @@ public class TopologyRandomizer
             state.shards = newShards;
             Shard[] testShards = type.apply(state, random);
             Arrays.sort(testShards, (a, b) -> a.range.compareTo(b.range));
-            if (!everyShardHasQuorumOverlaps(oldShards, testShards))
+            if (!everyShardHasQuorumOverlaps(oldShards, testShards)
+                || reassignsRanges(current, testShards, previouslyReplicated))
             {
                 ++rejectedMutations;
             }

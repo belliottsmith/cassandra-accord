@@ -30,6 +30,7 @@ import accord.utils.SimpleBitSet;
 
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
+import static accord.primitives.Routables.Slice.Minimal;
 
 public final class ActiveEpoch
 {
@@ -165,7 +166,8 @@ public final class ActiveEpoch
         ranges = ranges.without(closed);
         if (ranges.isEmpty())
             return ranges;
-        closed = closed.union(MERGE_ADJACENT, ranges);
+        Ranges add = ranges.slice(global.ranges, Minimal);
+        closed = closed.union(MERGE_ADJACENT, add);
         Invariants.require(closed.mergeTouching() == closed);
         return ranges.without(addedRanges);
     }
@@ -177,8 +179,9 @@ public final class ActiveEpoch
         if (ranges.isEmpty())
             return ranges;
         quorumReady = quorumReady.union(MERGE_ADJACENT, ranges);
-        closed = closed.union(MERGE_ADJACENT, ranges);
-        retired = retired.union(MERGE_ADJACENT, ranges);
+        Ranges add = ranges.slice(global.ranges, Minimal);
+        closed = closed.union(MERGE_ADJACENT, add);
+        retired = retired.union(MERGE_ADJACENT, add);
         Invariants.require(closed.mergeTouching() == closed);
         Invariants.require(retired.mergeTouching() == retired);
         return ranges.without(addedRanges);

@@ -27,12 +27,8 @@ import accord.messages.Callback;
 import accord.primitives.FullRoute;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
-import accord.topology.Topology;
 import accord.topology.TopologyException;
 import accord.topology.TopologyMismatch;
-import accord.topology.TopologyRetiredException;
-
-import static accord.topology.TopologyMismatch.TopologyMatch.LATEST;
 
 /**
  * Abstract parent class for implementing preaccept-like operations where we may need to fetch additional replies
@@ -64,7 +60,7 @@ abstract class AbstractCoordinatePreAccept<Result, Reply extends accord.messages
         TopologyMismatch mismatch;
         try
         {
-            mismatch = TopologyMismatch.checkForMismatch(latestEpoch, scope, node.topology().active(), LATEST);
+            mismatch = TopologyMismatch.checkForMismatch(latestEpoch, scope, node.topology().active(), txnId.kind());
         }
         catch (TopologyException t)
         {

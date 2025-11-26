@@ -30,8 +30,6 @@ import accord.impl.mock.MockStore;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.FullKeyRoute;
-import accord.primitives.FullRangeRoute;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Txn;
@@ -63,8 +61,8 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Key);
             Keys keys = keys(10);
+            TxnId txnId = node.nextTxnIdWithDefaultFlags(keys, Write, Key);
             Txn txn = writeTxn(keys);
             Result result = getUninterruptibly(CoordinateTransaction.coordinate(node, txnId, txn));
             assertEquals(MockStore.RESULT, result);
@@ -79,8 +77,8 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId txnId = node.nextTxnIdWithDefaultFlags(Read, Range);
             Ranges keys = ranges(range(1, 2));
+            TxnId txnId = node.nextTxnIdWithDefaultFlags(keys, Read, Range);
             Txn txn = writeTxn(keys);
             Result result = getUninterruptibly(CoordinateTransaction.coordinate(node, txnId, txn));
             assertEquals(MockStore.RESULT, result);
@@ -95,10 +93,11 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId oldId1 = node.nextTxnIdWithDefaultFlags(Write, Key);
-            TxnId oldId2 = node.nextTxnIdWithDefaultFlags(Write, Key);
+            Ranges syncRanges = ranges(range(0, 1));
+            TxnId oldId1 = node.nextTxnIdWithDefaultFlags(syncRanges, Write, Key);
+            TxnId oldId2 = node.nextTxnIdWithDefaultFlags(syncRanges, Write, Key);
 
-            getUninterruptibly(CoordinateSyncPoint.exclusive(node, ranges(range(0, 1))));
+            getUninterruptibly(CoordinateSyncPoint.exclusive(node, syncRanges));
             try
             {
                 Keys keys = keys(1);
@@ -135,7 +134,7 @@ public class CoordinateTransactionTest
 
     private TxnId coordinate(Node node, long clock, Keys keys) throws Throwable
     {
-        TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Key);
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(keys, Write, Key);
         txnId = new TxnId(txnId.epoch(), txnId.hlc() + clock, 0, Write, Key, txnId.node);
         Txn txn = writeTxn(keys);
         Result result = getUninterruptibly(CoordinateTransaction.coordinate(node, txnId, txn));
@@ -199,9 +198,9 @@ public class CoordinateTransactionTest
             Node node = cluster.get(1);
             assertNotNull(node);
 
-            TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Key);
             Keys oneKey = keys(10);
             Keys twoKeys = keys(10, 20);
+            TxnId txnId = node.nextTxnIdWithDefaultFlags(twoKeys, Write, Key);
             Txn txn = new Txn.InMemory(oneKey, MockStore.read(oneKey), MockStore.QUERY, MockStore.update(twoKeys));
             Result result = getUninterruptibly(CoordinateTransaction.coordinate(node, txnId, txn));
             assertEquals(MockStore.RESULT, result);

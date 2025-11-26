@@ -462,7 +462,7 @@ public interface CoordinationAdapter<R>
                 if (txnId.is(Routable.Domain.Range))
                 {
                     MinimalSyncPoint syncPoint = new MinimalSyncPoint(txnId, executeAt, (RangeRoute) route);
-                    node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
+                    node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId);
                     node.durability().report(new DurabilityResult(syncPoint, DurabilityLevel.NONE, null));
                 }
             }
@@ -482,7 +482,7 @@ public interface CoordinationAdapter<R>
                 }
                 if (txnId.is(Routable.Domain.Range))
                 {
-                    node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId.epoch() - 1);
+                    node.topology().onEpochClosed(syncPoint.route.toRanges(), syncPoint.syncId);
                     node.durability().report(new DurabilityResult(syncPoint, DurabilityLevel.NONE, null));
                 }
             }

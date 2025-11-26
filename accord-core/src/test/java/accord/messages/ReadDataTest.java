@@ -97,8 +97,8 @@ class ReadDataTest
         MessageSink sink = Mockito.mock(MessageSink.class);
         Node node = createNode(ID1, TOPOLOGY, sink, new MockCluster.Clock(100));
 
-        TxnId txnId = node.nextTxnIdWithDefaultFlags(Txn.Kind.Write, Key);
         Keys keys = Keys.of(IntKey.key(1), IntKey.key(43));
+        TxnId txnId = node.nextTxnIdWithDefaultFlags(keys, Txn.Kind.Write, Key);
 
         AsyncResults.SettableResult<Data> readResult = new AsyncResults.SettableResult<>();
 

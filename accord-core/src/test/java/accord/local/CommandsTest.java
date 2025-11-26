@@ -95,7 +95,7 @@ class CommandsTest
                     Keys keys = Keys.of(Gens.lists(keyGen).unique().ofSizeBetween(1, 10).next(rs));
                     Txn txn = listWriteTxn(from, keys);
 
-                    TxnId txnId = node.nextTxnIdWithDefaultFlags(Write, Routable.Domain.Key);
+                    TxnId txnId = node.nextTxnIdWithDefaultFlags(keys, Write, Routable.Domain.Key);
 
                     for (Node n : nodeMap.values())
                         node.topology().reportTopology(updatedTopology);

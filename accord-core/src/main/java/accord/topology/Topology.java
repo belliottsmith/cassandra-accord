@@ -348,9 +348,17 @@ public class Topology
     // TODO (low priority, efficiency): optimised HomeKey concept containing the Key, Shard and Topology to avoid lookups when topology hasn't changed
     public Shard forKey(RoutableKey key)
     {
-        int i = subsetOfRanges.indexOf(key);
+        int i = indexForKey(key);
         if (i < 0)
             throw illegalArgument("Range not found for " + key);
+        return shards[supersetIndexes[i]];
+    }
+
+    public Shard forKeyIfKnown(RoutableKey key)
+    {
+        int i = indexForKey(key);
+        if (i < 0)
+            return null;
         return shards[supersetIndexes[i]];
     }
 
@@ -497,6 +505,7 @@ public class Topology
                     if (abi < 0)
                         break;
 
+                    ai = (int)abi;
                     bi = (int)(abi >>> 32);
                     if (count == newSubset.length)
                         newSubset = cachedInts.resize(newSubset, count, count * 2);
@@ -541,6 +550,32 @@ public class Topology
             bi = (int)(abi >>> 32);
 
             accumulator = function.apply(shards[supersetIndexes[bi]], accumulator, bi);
+            ++bi;
+        }
+
+        return accumulator;
+    }
+
+    public <P, T> T foldlWithDefault(Routables<?> select, IndexedTriFunction<Shard, P, T, T> function, Shard ifNull, P param, T accumulator)
+    {
+        Routables<?> as = select;
+        Ranges bs = subsetOfRanges;
+        int ai = 0, amax = 0, bi = 0;
+
+        while (true)
+        {
+            long abi = as.findNextIntersection(ai, bs, bi);
+            if (abi < 0)
+                break;
+
+            int nextai = (int)(abi);
+            bi = (int)(abi >>> 32);
+
+            if (nextai > amax + 1)
+                accumulator = function.apply(null, param, accumulator, -1 - bi);
+            accumulator = function.apply(shards[supersetIndexes[bi]], param, accumulator, bi);
+            amax = nextai + 1;
+            ai = nextai;
             ++bi;
         }
 
