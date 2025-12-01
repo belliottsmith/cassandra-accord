@@ -23,6 +23,9 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.RemoteListeners;
 import accord.local.Command;
 import accord.local.Node;
@@ -38,6 +41,8 @@ import accord.utils.Invariants;
 
 public class DefaultRemoteListeners implements RemoteListeners
 {
+    private static final Logger logger = LoggerFactory.getLogger(DefaultRemoteListeners.class);
+
     public interface NotifySink
     {
         void notify(TxnId txnId, SaveStatus saveStatus, Route<?> participants, long[] listeners, int listenerCount);
@@ -60,7 +65,8 @@ public class DefaultRemoteListeners implements RemoteListeners
                 // we could in theory reply to the same node multiple times here, but should not be common enough to optimise
                 Node.Id replyTo = new Node.Id(listenerNodeId(listener));
                 int callbackId = listenerCallbackId(listener);
-                node.send(replyTo, new AsyncAwaitComplete(txnId, route, saveStatus, callbackId));
+                if (route == null) logger.warn("{}/{} attempting to notify {} with callbackId {} but no route", txnId, saveStatus, replyTo, callbackId);
+                else node.send(replyTo, new AsyncAwaitComplete(txnId, route, saveStatus, callbackId));
             }
         }
     }

@@ -235,28 +235,40 @@ public class ShardDurability
                 start();
         }
 
-        synchronized void success(SyncPoint success, Ranges ranges)
+        void success(SyncPoint success, Ranges ranges)
         {
-            Object requestedBy = null;
-            if (activeRequest != null)
-                requestedBy = activeRequest.requestedBy;
-
-            durabilityQueue.submit(success, activeRequest);
-
-            decrementBackoff();
-            int index = activeIndex;
-            active = active.without(ranges);
-            if (!active.isEmpty())
+            DurabilityRequest request = null;
+            try
             {
-                start();
+                synchronized (this)
+                {
+                    request = activeRequest;
+
+                    Object requestedBy = null;
+                    if (request != null)
+                        requestedBy = request.requestedBy;
+
+                    decrementBackoff();
+                    int index = activeIndex;
+                    active = active.without(ranges);
+                    if (!active.isEmpty())
+                    {
+                        start();
+                    }
+                    else
+                    {
+                        if (index >= 0) logCycleProgress(index);
+                        else logger.info("Successfully agreed RX requested by {} for {} with {}. Remaining ranges: {}.", requestedBy, ranges, success.syncId, active);
+                        active = null;
+                        activeRequest = null;
+                        updateActive();
+                    }
+                }
             }
-            else
+            finally
             {
-                if (index >= 0) logCycleProgress(index);
-                else logger.info("Successfully agreed RX requested by {} for {} with {}. Remaining ranges: {}.", requestedBy, ranges, success.syncId, active);
-                active = null;
-                activeRequest = null;
-                updateActive();
+                // submit without holding lock to avoid deadlock
+                durabilityQueue.submit(success, request);
             }
         }
 
