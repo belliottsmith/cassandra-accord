@@ -75,7 +75,7 @@ import static accord.impl.progresslog.WaitingState.CallbackKind.AwaitSlice;
 import static accord.impl.progresslog.WaitingState.CallbackKind.Fetch;
 import static accord.local.SafeCommand.maxParticipants;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtErased;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 /**
  * This represents a simple state machine encoded in a small number of bits for efficiently gathering
@@ -940,7 +940,7 @@ abstract class WaitingState extends HomeState
             Topologies topologies;
             try
             {
-                topologies = node.topology().active().forEpoch(route, epoch, SHARE);
+                topologies = node.topology().active().forEpoch(route, epoch, ALL);
                 topologies = node.agent().selectPreferred(node.id(), topologies);
             }
             catch (Throwable t)

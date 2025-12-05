@@ -62,7 +62,7 @@ import static accord.messages.Commit.WithDeps.NoDeps;
 import static accord.messages.Commit.WithTxn.HasNewlyOwnedTxnRanges;
 import static accord.messages.Commit.WithTxn.HasTxn;
 import static accord.messages.Commit.WithTxn.NoTxn;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
 {
@@ -309,7 +309,7 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
             Topologies commitTo;
             try
             {
-                commitTo = epochs.preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, SHARE);
+                commitTo = epochs.preciseEpochsIfExists(inform, txnId.epoch(), untilEpoch, ALL);
             }
             catch (TopologyException e)
             {

@@ -24,7 +24,6 @@ import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.InformDurable;
 import accord.primitives.*;
-import accord.topology.Topologies;
 import accord.topology.TopologyException;
 import accord.utils.Invariants;
 

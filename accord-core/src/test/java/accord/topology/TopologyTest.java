@@ -41,8 +41,6 @@ import java.util.List;
 import java.util.TreeSet;
 import java.util.function.Consumer;
 
-import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.topology.TopologyUtils.routingKey;
 import static accord.topology.TopologyUtils.routingKeyOutsideRange;
 import static accord.topology.TopologyUtils.withEpoch;
@@ -63,7 +61,7 @@ public class TopologyTest
         Assertions.assertTrue(shard.range.contains(expectedKey));
         Assertions.assertEquals(expectedRange, shard.range);
 
-        Topology subTopology = topology.select(Keys.of(expectedKey).toParticipants(), SHARE);
+        Topology subTopology = topology.selectIfExists(Keys.of(expectedKey).toParticipants());
         shard = Iterables.getOnlyElement(subTopology.shards());
         Assertions.assertTrue(shard.range.contains(expectedKey));
         Assertions.assertEquals(expectedRange, shard.range);
@@ -129,7 +127,7 @@ public class TopologyTest
             {
                 Shard shard = topology.get(i);
 
-                Topology subset = topology.forSubset(new int[] {i}, SLICE);
+                Topology subset = topology.forSubset(new int[] {i});
                 Topology trimmed = subset.trim();
 
                 assertThat(subset)
@@ -154,7 +152,7 @@ public class TopologyTest
                                                                 .isEqualTo(System.identityHashCode(shard));
                 Consumer<Unseekables<?>> visitNodeForKeysOnceOrMore = unseekables -> {
                     List<Node.Id> actual = new ArrayList<>(shard.nodes.size());
-                    subset.visitNodeForKeysOnceOrMore(unseekables, actual::add);
+                    visitNodeForKeysOnceOrMore(subset, unseekables, actual::add);
                     assertThat(actual).isEqualTo(shard.nodes);
                 };
                 for (Range range : subset.ranges())
@@ -199,12 +197,12 @@ public class TopologyTest
         }
         for (Range range : topology.ranges())
         {
-            Topology subset = topology.select(Ranges.single(range), SHARE);
+            Topology subset = topology.selectIfExists(Ranges.single(range));
             for (int i = 0; i < 10; i++)
             {
                 RoutingKey key = routingKey(range, rs);
 
-                assertThat(topology.select(RoutingKeys.of(key), SHARE)).isEqualTo(subset);
+                assertThat(topology.selectIfExists(RoutingKeys.of(key))).isEqualTo(subset);
 
                 assertThat(topology.forKey(key))
                         .describedAs("forKey(key) != get(indexForKey(key)) for key %s", key)
@@ -222,6 +220,15 @@ public class TopologyTest
                         .hasMessage("Range not found for %s", outsideRange);
             }
         }
-        assertThat(topology.select(topology.ranges(), SHARE)).isEqualTo(topology);
+        assertThat(topology.selectIfExists(topology.ranges())).isEqualTo(topology);
+    }
+
+    private static void visitNodeForKeysOnceOrMore(Topology topology, Unseekables<?> select, Consumer<Node.Id> nodes)
+    {
+        topology.foldlWithDefault(select, (shard, i1, i2, i3) -> {
+            for (Node.Id id : shard.nodes)
+                nodes.accept(id);
+            return null;
+        }, null, null, null);
     }
 }

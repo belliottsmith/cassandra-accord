@@ -168,7 +168,8 @@ public interface CommandSummaries
             L create(RedundantBefore redundantBefore, @Nullable MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, Kinds testKind, TxnId minTxnId, Timestamp maxTxnId, @Nullable TxnId findAsDep);
         }
 
-        private static ReducingRangeMap<TxnId> NO_FUTURE_RX = new ReducingRangeMap<>();
+        private static final ReducingRangeMap<TxnId> NO_FUTURE_RX = new ReducingRangeMap<>();
+        
         protected final RedundantBefore redundantBefore;
         protected final MaxDecidedRX maxDecidedRX;
         protected final Unseekables<?> searchKeysOrRanges;

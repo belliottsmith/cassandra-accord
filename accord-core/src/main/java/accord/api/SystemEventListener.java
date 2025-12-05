@@ -16,11 +16,14 @@
  * limitations under the License.
  */
 
-package accord.topology;
+package accord.api;
 
-import accord.primitives.Unseekables;
-
-public interface SelectTopology
+public interface SystemEventListener
 {
-    Topology apply(Topology topology, Unseekables<?> select) throws TopologyException;
+    default void onWaitingForEpoch(long epoch) {}
+    default void onTimeoutForEpoch(long epoch, int count) {}
+
+    SystemEventListener NOOP = new SystemEventListener()
+    {
+    };
 }

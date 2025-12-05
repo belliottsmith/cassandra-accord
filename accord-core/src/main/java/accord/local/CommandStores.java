@@ -27,7 +27,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -43,7 +45,6 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.AsyncExecutorFactory;
 import accord.api.AsyncExecutor;
-import accord.topology.ActiveEpochs;
 import accord.topology.EpochReady;
 import accord.api.DataStore;
 import accord.api.Journal;
@@ -935,6 +936,18 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
+    }
+
+    public <O> O mapReduceUnsafe(StoreSelector selector, Function<CommandStore, O> map, BiFunction<O, O, O> reduce, O accumulator)
+    {
+        Snapshot snapshot = current;
+        Iterator<CommandStore> stores = selector.select(snapshot);
+        while (stores.hasNext())
+        {
+            O next = map.apply(stores.next());
+            accumulator = reduce.apply(accumulator, next);
+        }
+        return accumulator;
     }
 
     /**

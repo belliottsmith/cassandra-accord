@@ -22,11 +22,13 @@ import javax.annotation.Nullable;
 
 import accord.primitives.Routables;
 import accord.primitives.Txn;
-import accord.utils.UnhandledEnum;
+
+import static accord.topology.SelectShards.ALL;
+import static accord.topology.SelectShards.LIVE;
 
 public final class TopologyMismatch extends TopologyException
 {
-    private TopologyMismatch(String message)
+    public TopologyMismatch(String message)
     {
         super(message);
     }
@@ -45,31 +47,19 @@ public final class TopologyMismatch extends TopologyException
     private enum Mismatch { NOT_KNOWN, PENDING_REMOVAL }
 
     @Nullable
-    public static TopologyMismatch checkForMismatch(long epoch, Routables<?> keysOrRanges, ActiveEpochs active, Txn.Kind kind) throws TopologyException
+    public static TopologyMismatch checkForMismatch(long epoch, ActiveEpochs active, Routables<?> keysOrRanges, Txn.Kind kind) throws TopologyException
     {
-        Topology topology = active.globalForEpoch(epoch);
-        Mismatch result = topology.foldlWithDefault(keysOrRanges, (shard, k, v, i) -> {
-            if (shard == null)
-                return Mismatch.NOT_KNOWN;
-            if (shard.is(Shard.Flag.PENDING_REMOVAL) && !k.isSyncPoint())
-                return Mismatch.PENDING_REMOVAL;
-            return v;
-        }, null, kind, null);
-
-        if (result == null)
+        ActiveEpoch e = active.get(epoch);
+        Topology topology = e.get(kind.isSyncPoint() ? ALL : LIVE);
+        if (topology.ranges.containsAll(keysOrRanges))
             return null;
 
         String message;
-        switch (result)
-        {
-            default: throw new UnhandledEnum(result);
-            case PENDING_REMOVAL:
-                message = String.format("Txn attempted to access keys or ranges that are being removed in epoch %d (%s)", topology.epoch(), keysOrRanges);
-                break;
-            case NOT_KNOWN:
-                message = String.format("Txn attempted to access keys or ranges that are not known in the epoch %d (%s)", topology.epoch(), keysOrRanges);
-                break;
-        }
+        if (kind.isSyncPoint() || !e.all.ranges.containsAll(keysOrRanges))
+            message = String.format("Txn attempted to access keys or ranges that are not known in the epoch %d (%s)", topology.epoch(), keysOrRanges.without(topology.ranges));
+        else
+            message = String.format("Txn attempted to access keys or ranges that are being removed in epoch %d (%s)", topology.epoch(), keysOrRanges.without(e.all.ranges));
+
         return new TopologyMismatch(message);
     }
 }

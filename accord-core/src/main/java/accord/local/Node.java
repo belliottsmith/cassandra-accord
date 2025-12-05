@@ -36,7 +36,6 @@ import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.TopologyService;
 import accord.topology.Topologies;
-import accord.topology.TopologyMismatch;
 import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
 import accord.topology.EpochReady;
@@ -586,7 +585,7 @@ public class Node implements NodeCommandStoreService
         if (!kind.isSyncPoint())
             return Math.max(minEpoch, epoch());
 
-        return topology.active().maxEpoch(minEpoch, keys);
+        return topology.active().maxEpoch(minEpoch, ActiveEpoch::all, keys);
     }
 
     public TxnId nextTxnIdWithDefaultFlags(long minEpoch, long minHlc, Seekables<?, ?> keys, Txn.Kind kind, Domain domain, Cardinality cardinality)
@@ -707,21 +706,16 @@ public class Node implements NodeCommandStoreService
 
     public FullRoute<?> computeRoute(TxnId txnId, Routables<?> keysOrRanges) throws TopologyException
     {
-        return computeRoute(txnId.epoch(), keysOrRanges, topology.active(), txnId.kind());
+        return computeRoute(txnId.epoch(), keysOrRanges, topology.active());
     }
 
-    public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges, ActiveEpochs active, Txn.Kind kind) throws TopologyException
+    public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges, ActiveEpochs active) throws TopologyException
     {
         Invariants.requireArgument(!keysOrRanges.isEmpty(), "Attempted to compute a route from empty keys or ranges");
 
         RoutingKey homeKey = selectHomeKey(active.get(epoch), keysOrRanges);
-        FullRoute<?> route = keysOrRanges.toRoute(homeKey);
 
-        TopologyMismatch mismatch = TopologyMismatch.checkForMismatch(epoch, keysOrRanges, active, kind);
-        if (mismatch != null)
-            throw mismatch;
-
-        return route;
+        return keysOrRanges.toRoute(homeKey);
     }
 
     private RoutingKey selectHomeKey(ActiveEpoch e, Routables<?> keysOrRanges)

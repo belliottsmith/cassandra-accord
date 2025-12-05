@@ -37,7 +37,6 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekable;
-import accord.topology.Topologies;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
@@ -58,7 +57,6 @@ import static accord.local.durability.DurabilityService.SyncRemote.Quorum;
 import static accord.messages.Await.Until.IsApplied;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Txn.Kind.Ws;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 import static accord.utils.Invariants.illegalState;
 
 /**

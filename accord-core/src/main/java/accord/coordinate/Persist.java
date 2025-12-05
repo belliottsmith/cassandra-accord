@@ -44,7 +44,7 @@ import accord.utils.Invariants;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.primitives.Status.Durability.AllQuorums;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, ApplyReply, Void>
 {
@@ -113,7 +113,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
             case InsufficientEpochs:
                 Invariants.requireArgument(txnId.isSyncPoint());
                 Topologies topologies = tracker.topologies();
-                try { topologies = node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), SHARE); }
+                try { topologies = node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), ALL); }
                 catch (TopologyException e) { node.agent().onException(e); }
                 node.send(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
                 break;

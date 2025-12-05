@@ -18,9 +18,15 @@
 
 package accord.topology;
 
-import accord.primitives.Unseekables;
-
-public interface SelectTopology
+public enum SelectShards
 {
-    Topology apply(Topology topology, Unseekables<?> select) throws TopologyException;
+    /**
+     * Select from all shards including those being removed (used only for sync points)
+     */
+    ALL,
+
+    /**
+     * Limit selection to live shards (i.e. throw TopologyException if some requested keys are marked for removal)
+     */
+    LIVE
 }

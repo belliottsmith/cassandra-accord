@@ -679,7 +679,7 @@ public class DefaultLocalListeners implements LocalListeners
                     {
                         if (!iter.hasMoreElements())
                         {
-                            cachedAny().forceDiscard(buffer, maxBufferCount);
+                            cachedAny().forceDiscard(buffer, Math.max(bufferCount, maxBufferCount));
                             buffer = null;
                             return false;
                         }
@@ -696,9 +696,9 @@ public class DefaultLocalListeners implements LocalListeners
 
                             if (bufferCount > maxBufferCount)
                             {
-                                maxBufferCount = bufferCount;
                                 if (bufferCount > buffer.length)
-                                    buffer = cachedAny().resize(buffer, maxBufferCount, Math.max(buffer.length * 2, bufferCount));
+                                    buffer = cachedAny().resize(buffer, 0, Math.max(buffer.length * 2, bufferCount));
+                                maxBufferCount = bufferCount;
                             }
 
                             int count = 0;

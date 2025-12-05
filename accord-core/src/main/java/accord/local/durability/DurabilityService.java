@@ -42,7 +42,6 @@ import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
 import accord.topology.Shard;
 import accord.topology.Topology;
-import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.async.AsyncResult;
@@ -243,8 +242,8 @@ public class DurabilityService implements TopologyListener
     @Override
     public void onActive(ActiveEpoch epoch)
     {
-        shards.updateTopology(epoch.global());
-        global.updateTopology(epoch.global());
+        shards.updateTopology(epoch.all());
+        global.updateTopology(epoch.all());
     }
 
     @Override
@@ -261,7 +260,7 @@ public class DurabilityService implements TopologyListener
             e = epochs.getKnown(epochs.minEpoch());
         }
 
-        Ranges retiredAndRemoved = e.global().foldl(retiredRanges, (shard, rs, i) -> {
+        Ranges retiredAndRemoved = e.all().foldl(retiredRanges, (shard, rs, i) -> {
             if (shard.is(Shard.Flag.PENDING_REMOVAL))
                 return rs.with(Ranges.of(shard.range));
             return rs;

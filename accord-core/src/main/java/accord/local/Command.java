@@ -1646,14 +1646,18 @@ public abstract class Command implements ICommand
                 default: throw new UnhandledEnum(known.executeAt());
                 case ExecuteAtErased:
                 case ExecuteAtUnknown:
+                    // TODO (expected): should we permit executeAt != null for ExecuteAtErased? Not urgent, but tighten this.
                     Invariants.require(executeAt == null || executeAt.compareTo(validate.txnId()) >= 0);
                     break;
                 case ExecuteAtKnown:
                 case ApplyAtKnown:
                 case ExecuteAtProposed:
-                    Invariants.require(executeAt != null);
-                    int c =  executeAt.compareTo(validate.txnId());
-                    Invariants.require(c > 0 || (c == 0 && (executeAt.hasDistinctHlcAndUniqueHlc() || executeAt.hasNonIdentityFlags())));
+                    if (executeAt != txnId)
+                    {
+                        Invariants.require(executeAt != null);
+                        int c =  executeAt.compareTo(validate.txnId());
+                        Invariants.require(c > 0 || (c == 0 && (executeAt.hasDistinctHlcAndUniqueHlc() || executeAt.hasNonIdentityFlags())));
+                    }
                     break;
                 case NoExecuteAt:
                     Invariants.require(executeAt.equals(Timestamp.NONE));

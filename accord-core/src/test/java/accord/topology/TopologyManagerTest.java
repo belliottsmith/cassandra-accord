@@ -28,7 +28,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.function.Supplier;
 import java.util.stream.IntStream;
 
 import javax.annotation.Nullable;
@@ -70,7 +69,7 @@ import static accord.impl.IntKey.keys;
 import static accord.impl.IntKey.range;
 import static accord.impl.SizeOfIntersectionSorter.SUPPLIER;
 import static accord.messages.RouteRequest.computeWaitForEpoch;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 import static accord.utils.ExtendedAssertions.assertThat;
 import static accord.utils.Property.qt;
 
@@ -97,12 +96,12 @@ public class TopologyManagerTest
 
         for (Unseekables<?> select : Arrays.asList(Ranges.ofSortedAndDeoverlapped(range(10, 20)), Ranges.ofSortedAndDeoverlapped(range(110, 120))))
         {
-            Topologies t = tm.active().preciseEpochs(select, 1, 2, SHARE);
+            Topologies t = tm.active().preciseEpochs(select, 1, 2, ALL);
             for (int i : unmoved)
                 org.assertj.core.api.Assertions.assertThat(computeWaitForEpoch(new Node.Id(i), t, select)).isEqualTo(1);
             for (int i : moved)
                 org.assertj.core.api.Assertions.assertThat(computeWaitForEpoch(new Node.Id(i), t, select)).isEqualTo(2);
-            t = tm.active().withUnsyncedEpochs(select, 1, 2);
+            t = tm.active().withUnsyncedEpochs(select, 1, 2, ALL);
             for (int i : unmoved)
                 org.assertj.core.api.Assertions.assertThat(computeWaitForEpoch(new Node.Id(i), t, select)).isEqualTo(1);
             for (int i : moved)
@@ -224,15 +223,15 @@ public class TopologyManagerTest
         Assertions.assertFalse(service.unsafeGetActiveEpoch(2).isQuorumReady());
 
         RoutingKeys keys = keys(150).toParticipants();
-        Assertions.assertEquals(topologies(topology3.select(keys, SHARE), topology2.select(keys, SHARE), topology1.select(keys, SHARE)),
-                                service.active().withUnsyncedEpochs(keys, 3, 3));
+        Assertions.assertEquals(topologies(topology3.select(keys), topology2.select(keys), topology1.select(keys)),
+                                service.active().withUnsyncedEpochs(keys, 3, 3, ALL));
 
         service.onReadyToCoordinate(id(2), 2);
         service.onReadyToCoordinate(id(3), 2);
         service.onReadyToCoordinate(id(2), 3);
         service.onReadyToCoordinate(id(3), 3);
-        Assertions.assertEquals(topologies(topology3.select(keys, SHARE)),
-                                service.active().withUnsyncedEpochs(keys, 3, 3));
+        Assertions.assertEquals(topologies(topology3.select(keys)),
+                                service.active().withUnsyncedEpochs(keys, 3, 3, ALL));
     }
 
     @Test
@@ -249,8 +248,8 @@ public class TopologyManagerTest
         service.reportTopology(topology5);
         service.reportTopology(topology6);
 
-        Assertions.assertSame(topology6, service.unsafeGetActiveEpoch(6L).global());
-        Assertions.assertSame(topology5, service.unsafeGetActiveEpoch(5L).global());
+        Assertions.assertSame(topology6, service.unsafeGetActiveEpoch(6L).all());
+        Assertions.assertSame(topology5, service.unsafeGetActiveEpoch(5L).all());
         for (int i=1; i<=6; i++) service.onReadyToCoordinate(id(i), 6);
         Assertions.assertTrue(service.unsafeGetActiveEpoch(5).isQuorumReady());
         try { service.active().get(4); Assertions.fail(); }
@@ -261,7 +260,7 @@ public class TopologyManagerTest
 
     private static void markTopologySynced(TopologyManager service, long epoch)
     {
-        service.unsafeGetActiveEpoch(epoch).global().nodes().forEach(id -> service.onReadyToCoordinate(id, epoch));
+        service.unsafeGetActiveEpoch(epoch).all().nodes().forEach(id -> service.onReadyToCoordinate(id, epoch));
     }
 
     private static void addAndMarkSynced(TopologyManager service, Topology topology)
@@ -337,13 +336,13 @@ public class TopologyManagerTest
                         Unseekables<?> unseekables = TopologyUtils.select(ranges, rs);
                         long maxEpoch = topology.epoch();
                         long minEpoch = tm.minEpoch() == maxEpoch ? maxEpoch : rs.nextLong(tm.minEpoch(), maxEpoch + 1);
-                        assertThat(tm.active().preciseEpochs(unseekables, minEpoch, maxEpoch, SHARE))
+                        assertThat(tm.active().preciseEpochs(unseekables, minEpoch, maxEpoch, ALL))
                                 .isNotEmpty()
                                 .epochsBetween(minEpoch, maxEpoch)
                                 .containsAll(unseekables)
                                 .topology(maxEpoch, a -> a.isNotEmpty());
 
-                        assertThat(tm.active().withUnsyncedEpochs(unseekables, minEpoch, maxEpoch))
+                        assertThat(tm.active().withUnsyncedEpochs(unseekables, minEpoch, maxEpoch, ALL))
                                 .isNotEmpty()
                                 .epochsBetween(minEpoch, maxEpoch, false) // older epochs are allowed
                                 .containsAll(unseekables)
@@ -380,8 +379,8 @@ public class TopologyManagerTest
         // prefix=0 was added in epoch=1, removed in epoch=2, and added back to epoch=3; the ABA problem
         RoutingKeys unseekables = RoutingKeys.of(PrefixedIntHashKey.forHash(0, 42));
 
-        for (Callable<Topologies> fn : Arrays.<Callable<Topologies>>asList(() -> service.active().preciseEpochs(unseekables, 1, 3, SHARE),
-                                                                           () -> service.active().withUnsyncedEpochs(unseekables, 1, 3)))
+        for (Callable<Topologies> fn : Arrays.<Callable<Topologies>>asList(() -> service.active().preciseEpochs(unseekables, 1, 3, ALL),
+                                                                           () -> service.active().withUnsyncedEpochs(unseekables, 1, 3, ALL)))
         {
             assertThat(fn.call())
                     .isNotEmpty()
@@ -440,12 +439,12 @@ public class TopologyManagerTest
             EpochRange range = EpochRange.from(service, rand);
             Unseekables<?> select = select(service, range, rand);
 
-            assertThat(service.active().preciseEpochs(select, range.min, range.max, SHARE))
+            assertThat(service.active().preciseEpochs(select, range.min, range.max, ALL))
                     .isNotEmpty()
                     .epochsBetween(range.min, range.max)
                     .containsAll(select);
 
-            assertThat(service.active().withUnsyncedEpochs(select, range.min, range.max))
+            assertThat(service.active().withUnsyncedEpochs(select, range.min, range.max, ALL))
                     .isNotEmpty()
                     .epochsBetween(range.min, range.max, false) // older epochs are allowed
                     .containsAll(select);

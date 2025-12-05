@@ -144,7 +144,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
     }
 
     @Override
-    void onPreAccepted(Topologies topologies)
+    void onPreAccepted()
     {
         SortedListMap<Node.Id, PreAcceptOk> oks = finishOks();
         onPreAccepted(topologies, oks);

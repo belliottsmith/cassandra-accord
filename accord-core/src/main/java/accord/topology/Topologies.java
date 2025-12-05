@@ -39,20 +39,6 @@ import static accord.utils.SortedArrays.isSortedUnique;
 //  (e.g. at least implementing Topologies by Topology)
 public interface Topologies extends TopologySorter
 {
-    enum SelectNodeOwnership
-    {
-        /**
-         * Slice node ownership information to cover only those ranges we have queried.
-         */
-        SLICE,
-
-        /**
-         * Use the node information from the topology we are selecting from. This means nodes may report
-         * ranges that do not intersect the ranges we are selecting.
-         */
-        SHARE
-    }
-
     Topology current();
 
     default boolean containsEpoch(long epoch) { return epoch >= oldestEpoch() && epoch <= currentEpoch(); }
@@ -106,9 +92,7 @@ public interface Topologies extends TopologySorter
 
     Topologies select(SortedArrayList<Node.Id> nodes);
 
-    Topologies selectSince(Participants<?> participants, long sinceEpoch, SelectNodeOwnership selectNodeOwnership);
-
-    Topologies selectEpoch(Participants<?> participants, long epoch, SelectNodeOwnership selectNodeOwnership);
+    Topologies selectIfExists(Participants<?> participants, long epoch);
 
     default void forEach(IndexedConsumer<Topology> consumer)
     {
@@ -229,18 +213,10 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topologies selectSince(Participants<?> participants, long sinceEpoch, SelectNodeOwnership selectNodeOwnership)
-        {
-            Invariants.require(sinceEpoch <= currentEpoch());
-            Topology subset = topology.select(participants, selectNodeOwnership);
-            return subset == topology ? this : new Single(sorter, subset);
-        }
-
-        @Override
-        public Topologies selectEpoch(Participants<?> participants, long epoch, SelectNodeOwnership selectNodeOwnership)
+        public Topologies selectIfExists(Participants<?> participants, long epoch)
         {
             Invariants.require(epoch == currentEpoch());
-            Topology subset = topology.select(participants, selectNodeOwnership);
+            Topology subset = topology.selectIfExists(participants);
             return subset == topology ? this : new Single(sorter, subset);
         }
 
@@ -531,44 +507,13 @@ public interface Topologies extends TopologySorter
         }
 
         @Override
-        public Topologies selectSince(Participants<?> participants, long sinceEpoch, SelectNodeOwnership selectNodeOwnership)
-        {
-            Topology[] subsets = null;
-            int limit = topologies.length;
-            if (sinceEpoch > oldestEpoch())
-                limit = indexForEpoch(sinceEpoch) + 1;
-            for (int i = 0 ; i < limit ; ++i)
-            {
-                Topology superset = topologies[i];
-                Topology subset = superset.select(participants, selectNodeOwnership);
-                if (subset != superset && subsets == null)
-                {
-                    subsets = new Topology[limit];
-                    System.arraycopy(topologies, 0, subsets, 0, i);
-                }
-                if (subsets != null)
-                    subsets[i] = subset;
-            }
-
-            if (subsets == null)
-            {
-                if (limit == topologies.length)
-                    return this;
-                if (limit == 1)
-                    return new Single(supplier, topologies[0]);
-                return new Multi(supplier, Arrays.copyOf(topologies, limit));
-            }
-            return new Multi(supplier, subsets);
-        }
-
-        @Override
-        public Topologies selectEpoch(Participants<?> participants, long epoch, SelectNodeOwnership selectNodeOwnership)
+        public Topologies selectIfExists(Participants<?> participants, long epoch)
         {
             if (!containsEpoch(epoch))
                 throw new IndexOutOfBoundsException();
 
             Topology superset = getEpoch(epoch);
-            Topology subset = superset.select(participants, selectNodeOwnership);
+            Topology subset = superset.selectIfExists(participants);
             return new Single(sorter, subset);
         }
     }

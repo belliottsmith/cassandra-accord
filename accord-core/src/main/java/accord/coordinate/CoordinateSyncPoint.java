@@ -62,7 +62,7 @@ import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.TxnId.Cardinality.cardinality;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 /**
  * Perform initial rounds of PreAccept and Accept until we have reached agreement about when we should execute.
@@ -115,7 +115,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                     {
                         FullRoute<Range> route = (FullRoute<Range>) node.computeRoute(txnId, ranges);
                         Txn txn = node.agent().emptySystemTxn(txnId.kind(), txnId.domain());
-                        Topologies topologies = adapter.forDecision(node, route, SHARE, txnId, txnId);
+                        Topologies topologies = adapter.forDecision(node, route, txnId, txnId);
                         coordinate = new CoordinateSyncPoint<>(node, node.someSequentialExecutor(), txnId, topologies, txn, route, adapter, callback);
                     }
                     catch (Throwable t)
@@ -179,7 +179,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         Topologies topologies;
         try
         {
-            topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+            topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
         }
         catch (TopologyException e)
         {
@@ -196,7 +196,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         Topologies topologies;
         try
         {
-            topologies = node.topology().active().preciseEpochs(syncPoint.route, minEpoch, maxEpoch, SHARE);
+            topologies = node.topology().active().preciseEpochs(syncPoint.route, minEpoch, maxEpoch, ALL);
         }
         catch (Throwable t)
         {

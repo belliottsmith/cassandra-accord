@@ -59,7 +59,7 @@ import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.topology.Topology;
 import accord.topology.TopologyException;
-import accord.topology.TopologyNotReadyException;
+import accord.topology.TopologyMismatch;
 import accord.utils.ArrayBuffers.BufferList;
 import accord.utils.Invariants;
 import accord.utils.SortedListMap;
@@ -91,7 +91,7 @@ import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.AcceptedSlow;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FLOOR;
@@ -180,7 +180,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         try
         {
             if (topologies == null || (committedExecuteAt != null && topologies.currentEpoch() != committedExecuteAt.epoch()))
-                topologies = node.topology().active().select(route, txnId, committedExecuteAt == null ? txnId : committedExecuteAt, SHARE, QuorumEpochIntersections.recover);
+                topologies = node.topology().active().select(route, txnId, committedExecuteAt == null ? txnId : committedExecuteAt, ALL, QuorumEpochIntersections.recover);
             recover = new Recover(node, node.someSequentialExecutor(), topologies, ballot, txnId, txn, route, committedExecuteAt, isFastPathDecided, reportTo, callback);
         }
         catch (Throwable t)
@@ -637,8 +637,12 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                 Participants<?> participants = waitOn.participants(awaitId);
 
                 Topologies topologies;
-                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
-                else topologies = node.topology().active().forEpochAtLeast(participants, awaitId.epoch(), SHARE);
+                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectIfExists(participants, awaitId.epoch());
+                else
+                {
+                    try { topologies = node.topology().active().forEpochAtLeast(participants, awaitId.epoch(), ALL); }
+                    catch (TopologyMismatch e) { throw new RuntimeException(e); }
+                }
                 requests.add(SynchronousRecoverAwait.awaitAny(node, executor, topologies, awaitId, awaitUntil, true, participants, recoverId));
             }
             if (requests.isEmpty())
@@ -708,10 +712,10 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                     continue;
 
                 Topologies topologies;
-                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectEpoch(participants, awaitId.epoch(), SHARE);
+                if (tracker.topologies().containsEpoch(awaitId.epoch())) topologies = tracker.topologies().selectIfExists(participants, awaitId.epoch());
                 else
                 {
-                    try { topologies = node.topology().active().forEpoch(participants, awaitId.epoch(), SHARE); }
+                    try { topologies = node.topology().active().forEpoch(participants, awaitId.epoch(), ALL); }
                     catch (TopologyException t)
                     {
                         // this is a future transaction, and we cannot find its topology despite waiting for the relevant epoch;

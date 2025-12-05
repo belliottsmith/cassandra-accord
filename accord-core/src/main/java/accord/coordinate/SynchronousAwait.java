@@ -36,7 +36,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 /**
  * Synchronously await some set of replicas reaching a given wait condition.
@@ -74,7 +74,7 @@ public class SynchronousAwait extends AbstractCoordination<Participants<?>, Bool
                 SynchronousAwait await;
                 try
                 {
-                    Topologies topologies = node.topology().active().forEpoch(participants, txnId.epoch(), SHARE);
+                    Topologies topologies = node.topology().active().forEpoch(participants, txnId.epoch(), ALL);
                     await = new SynchronousAwait(node, executor, txnId, participants, new QuorumTracker(topologies), until, notifyProgressLog, callback);
                 }
                 catch (Throwable t)

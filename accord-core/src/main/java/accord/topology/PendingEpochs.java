@@ -129,6 +129,7 @@ class PendingEpochs
 
     PendingEpoch getOrCreate(long epoch)
     {
+        Invariants.require(manager.active().currentEpoch < epoch);
         if (isEmpty())
         {
             append(new PendingEpoch(epoch, manager));

@@ -47,7 +47,7 @@ import static accord.primitives.Status.AcceptedMedium;
 import static accord.primitives.Status.PreAccepted;
 import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 import static accord.utils.Invariants.illegalState;
 
 public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, InvalidateReply, InvalidateReply>
@@ -84,7 +84,7 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
         Invalidate invalidate;
         try
         {
-            Topologies topologies = node.topology().active().forEpoch(invalidateWith, txnId.epoch(), SHARE);
+            Topologies topologies = node.topology().active().forEpoch(invalidateWith, txnId.epoch(), ALL);
             invalidate = new Invalidate(node, node.someSequentialExecutor(), topologies, ballot, txnId, invalidateWith, transitivelyInvokedByPriorInvalidation, reportTo, callback);
         }
         catch (Throwable t)

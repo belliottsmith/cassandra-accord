@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.Result;
@@ -48,7 +49,7 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owne
 import static accord.coordinate.ExecuteFlag.CoordinationFlags.empty;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.LIVE;
 
 /**
  * An Ephemeral Read is a single-key linearizable read, that is invisible to other transactions so can be non-durable.
@@ -165,12 +166,13 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     }
 
     @Override
-    void onPreAccepted(Topologies topologies)
+    void onPreAccepted()
     {
         node.agent().coordinatorEvents().onPreAccepted(txnId);
         SortedListMap<Node.Id, GetEphemeralReadDepsOk> oks = finishOks();
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
-        try { topologies = node.topology().active().reselect(topologies, QuorumEpochIntersections.preaccept.include, scope, executeAtEpoch, executeAtEpoch, SHARE, Owned); }
+        Topologies topologies;
+        try { topologies = node.topology().active().reselect(this.topologies, QuorumEpochIntersections.preaccept.include, scope, executeAtEpoch, executeAtEpoch, LIVE, Owned); }
         catch (Throwable t)
         {
             finishWithFailureOverride(t);
@@ -184,6 +186,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         if (!Invariants.debug()) oks.clear();
     }
 
+    @Nonnull
     @Override
     public AbstractTracker<?> tracker()
     {

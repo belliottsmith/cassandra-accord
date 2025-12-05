@@ -53,12 +53,13 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
+import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.primitives.Status.Phase.Execute;
 import static accord.primitives.Txn.Kind.EphemeralRead;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.LIVE;
 import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -91,7 +92,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void startOnceInitialised()
     {
-        node.agent().coordinatorEvents().onExecuting(txnId, Ballot.ZERO, deps, FAST);
+        node.agent().coordinatorEvents().onExecuting(txnId, Ballot.ZERO, deps, EPHEMERAL);
         if (permitLocalExecution() && tryIfUniversal(node.id()))
         {
             new LocalExecute(txnId, node.id()).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
@@ -101,7 +102,6 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
             super.startOnceInitialised();
         }
     }
-
 
     @Override
     public void contact(Id to)
@@ -129,7 +129,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
                     ExecuteEphemeralRead execute;
                     try
                     {
-                        Topologies topologies = node.topology().active().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch, SHARE);
+                        Topologies topologies = node.topology().active().preciseEpochs(route, ok.futureEpoch, ok.futureEpoch, LIVE);
                         execute = new ExecuteEphemeralRead(node, executor, topologies, route, txnId.withEpoch(ok.futureEpoch), txn, deps, CoordinationFlags.none(), callback);
                     }
                     catch (Throwable t)
