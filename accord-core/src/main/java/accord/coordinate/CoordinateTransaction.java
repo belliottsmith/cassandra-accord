@@ -71,7 +71,7 @@ import static accord.messages.Accept.Kind.SLOW;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.LIVE;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 /**
@@ -106,7 +106,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         try
         {
             FullRoute<?> route = node.computeRoute(txnId, txn.keys());
-            Topologies topologies = node.topology().active().select(route, txnId, txnId, SHARE, ProtocolModifiers.QuorumEpochIntersections.preaccept.include);
+            Topologies topologies = node.topology().active().select(route, txnId, txnId, LIVE, ProtocolModifiers.QuorumEpochIntersections.preaccept.include);
             coordinate = new CoordinateTransaction(node, node.someSequentialExecutor(), topologies, route, txnId, txn, callback);
         }
         catch (Throwable t)
@@ -130,7 +130,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     @Override
     void onPreAccepted(Topologies topologies, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
-        Timestamp executeAt = oks.foldlNonNullValues(topologies.current().nodes(), (ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
+        Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
         if (executeAt.is(REJECTED) && !(topologies.size() == 1 && (tracker.hasFastPathAccepted() || tracker.hasMediumPathAccepted())))
         {
             // we special case having fast or medium path accepted with only the latest topology because this is compatible with

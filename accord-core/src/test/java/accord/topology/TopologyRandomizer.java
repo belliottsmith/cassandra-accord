@@ -63,6 +63,7 @@ import org.agrona.collections.IntHashSet;
 import static accord.burn.BurnTestBase.HASH_RANGE_END;
 import static accord.burn.BurnTestBase.HASH_RANGE_START;
 import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
+import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 
 // TODO (testing): add change replication factor
 public class TopologyRandomizer
@@ -490,6 +491,7 @@ public class TopologyRandomizer
         Map<Id, Ranges> nextAdditions = getAdditions(current, nextTopology);
         for (Map.Entry<Id, Ranges> entry : nextAdditions.entrySet())
         {
+            previouslyReplicated.merge(entry.getKey(), entry.getValue(), (a, b) -> a.union(MERGE_ADJACENT, b));
             bootstrapping.putIfAbsent(entry.getKey(), new TreeMap<>());
             bootstrapping.get(entry.getKey()).put(nextTopology.epoch, entry.getValue());
         }

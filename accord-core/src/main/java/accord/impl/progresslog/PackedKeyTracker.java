@@ -73,7 +73,7 @@ public class PackedKeyTracker
         int start = roundSize * roundIndex;
         int end = Math.min((roundSize + 1) * roundIndex, route.size());
 
-        Ranges sliceRanges = epoch.global().rangesForNode(from);
+        Ranges sliceRanges = epoch.all().rangesForNode(from);
         Route<?> ready = route.slice(start, end)
                               .overlapping(sliceRanges);
 

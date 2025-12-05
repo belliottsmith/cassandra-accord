@@ -52,7 +52,7 @@ import accord.utils.async.AsyncResults.SettableResult;
 import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
 import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.primitives.Status.Durability.HasOutcome.Universal;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, DurabilityResult, ReadReply, Void> implements Callback<ReadReply>
 {
@@ -224,7 +224,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
                 ExecuteSyncPoint continuation;
                 try
                 {
-                    Topologies topologies = node.topology().active().preciseEpochs(scope, tracker.topologies().currentEpoch(), retryInFutureEpoch, SHARE);
+                    Topologies topologies = node.topology().active().preciseEpochs(scope, tracker.topologies().currentEpoch(), retryInFutureEpoch, ALL);
                     continuation = new ExecuteSyncPoint(node, executor, topologies, syncPoint, scope, attempt, current(), results);
                 }
                 catch (Throwable t)
@@ -279,7 +279,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         DurabilityResults result = new DurabilityResults();
         try
         {
-            Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+            Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
             ExecuteSyncPoint coordinate = new ExecuteSyncPoint(node, executor, topologies, syncPoint, attempt, result);
             coordinate.start();
         }

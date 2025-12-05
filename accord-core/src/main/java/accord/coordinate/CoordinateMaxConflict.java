@@ -33,8 +33,8 @@ import accord.messages.GetMaxConflict.GetMaxConflictOk;
 import accord.primitives.FullRoute;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
-import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
 import accord.topology.TopologyMismatch;
@@ -44,6 +44,7 @@ import accord.utils.async.Cancellable;
 
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
+import static accord.topology.SelectShards.ALL;
 
 /**
  * Calculate the maximum TxnId that could have been agreed before this operation started
@@ -82,9 +83,9 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
         try
         {
             ActiveEpochs active = node.topology().active();
-            long epoch = active.maxEpoch(Long.MIN_VALUE, keysOrRanges);
-            FullRoute<?> route = node.computeRoute(epoch, keysOrRanges, active, Txn.Kind.ExclusiveSyncPoint);
-            Topologies topologies = active.withUnsyncedEpochs(route, epoch, epoch);
+            long epoch = active.maxEpoch(Long.MIN_VALUE, ActiveEpoch::all, keysOrRanges);
+            FullRoute<?> route = node.computeRoute(epoch, keysOrRanges, active);
+            Topologies topologies = active.withUnsyncedEpochs(route, epoch, epoch, ALL);
             coordinate = new CoordinateMaxConflict(node, node.someSequentialExecutor(), topologies, route, epoch, callback);
         }
         catch (Throwable t)
@@ -133,7 +134,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     }
 
     @Override
-    void onPreAccepted(Topologies topologies)
+    void onPreAccepted()
     {
         finishAndInvokeCallback(maxConflict, null);
     }

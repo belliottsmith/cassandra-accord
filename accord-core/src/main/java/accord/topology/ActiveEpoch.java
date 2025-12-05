@@ -31,11 +31,12 @@ import accord.utils.SimpleBitSet;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.topology.SelectShards.ALL;
 
 public final class ActiveEpoch
 {
     final Node.Id self;
-    final Topology global, local;
+    final Topology all, live, local;
 
     public final Ranges addedRanges, removedRanges;
 
@@ -53,35 +54,37 @@ public final class ActiveEpoch
         if (allRetired)
             return true;
 
-        if (!retired.containsAll(global.ranges))
+        if (!retired.containsAll(all.ranges))
             return false;
 
-        Invariants.require(closed.containsAll(global.ranges));
+        Invariants.require(closed.containsAll(all.ranges));
         allRetired = true;
         return true;
     }
 
-    ActiveEpoch(Node.Id self, Topology global, EpochReady epochReady, TopologySorter sorter, Ranges prevRanges)
+    ActiveEpoch(Node.Id self, Topology all, EpochReady epochReady, TopologySorter sorter, Ranges prevRanges)
     {
         this.self = self;
-        this.global = Invariants.requireArgument(global, !global.isSubset());
+        this.all = Invariants.requireArgument(all, !all.isSubset());
+        this.live = all.selectLive();
         this.epochReady = epochReady;
-        this.local = global.forNode(self).trim();
-        this.shardQuorumReady = SimpleBitSet.allocate(global.shards.length);
-        this.receivedNodeReady = SimpleBitSet.allocate(global.nodes.size());
-        if (global().isEmpty()) this.quorumReadyTracker = null;
-        else this.quorumReadyTracker = new QuorumTracker(new Topologies.Single(sorter, global()));
+        this.local = all.forNode(self).trim();
+        this.shardQuorumReady = SimpleBitSet.allocate(all.shards.length);
+        this.receivedNodeReady = SimpleBitSet.allocate(all.nodes.size());
+        if (all.isEmpty()) this.quorumReadyTracker = null;
+        else this.quorumReadyTracker = new QuorumTracker(new Topologies.Single(sorter, all));
 
-        this.addedRanges = global.ranges.without(prevRanges).mergeTouching();
-        this.removedRanges = prevRanges.mergeTouching().without(global.ranges);
+        this.addedRanges = all.ranges.without(prevRanges).mergeTouching();
+        this.removedRanges = prevRanges.mergeTouching().without(all.ranges);
         this.quorumReady = addedRanges;
     }
 
-    ActiveEpoch(Node.Id node, Topology global, SimpleBitSet shardQuorumReady, SimpleBitSet receivedNodeReady, QuorumTracker quorumReadyTracker, Ranges addedRanges, Ranges removedRanges, EpochReady epochReady, Ranges quorumReady, Ranges closed, Ranges retired)
+    ActiveEpoch(Node.Id node, Topology all, SimpleBitSet shardQuorumReady, SimpleBitSet receivedNodeReady, QuorumTracker quorumReadyTracker, Ranges addedRanges, Ranges removedRanges, EpochReady epochReady, Ranges quorumReady, Ranges closed, Ranges retired)
     {
         this.self = node;
-        this.global = Invariants.requireArgument(global, !global.isSubset());
-        this.local = global.forNode(node).trim();
+        this.all = Invariants.requireArgument(all, !all.isSubset());
+        this.live = all.selectLive();
+        this.local = all.forNode(node).trim();
         this.shardQuorumReady = shardQuorumReady;
         this.receivedNodeReady = receivedNodeReady;
         this.quorumReadyTracker = quorumReadyTracker;
@@ -97,7 +100,7 @@ public final class ActiveEpoch
     {
         return quorumReadyTracker == null
                || quorumReadyTracker.hasReachedQuorum()
-               || quorumReady.containsAll(global.ranges);
+               || quorumReady.containsAll(all.ranges);
     }
 
     /**
@@ -133,7 +136,7 @@ public final class ActiveEpoch
         if (quorumReadyTracker == null)
             return true;
 
-        int index = global.nodes.indexOf(node);
+        int index = all.nodes.indexOf(node);
         if (index < 0)
             return true;
 
@@ -143,16 +146,16 @@ public final class ActiveEpoch
         receivedNodeReady.set(index);
         if (quorumReadyTracker.recordSuccess(node) == Success)
         {
-            quorumReady = global.ranges.mergeTouching();
+            quorumReady = all.ranges.mergeTouching();
         }
         else
         {
             // loop over each current shard, and test if its ranges are complete
-            for (int i = 0; i < global.shards.length; ++i)
+            for (int i = 0; i < all.shards.length; ++i)
             {
                 if (quorumReadyTracker.get(i).hasReachedQuorum() && !shardQuorumReady.get(i))
                 {
-                    quorumReady = quorumReady.union(MERGE_ADJACENT, Ranges.of(global.shards[i].range));
+                    quorumReady = quorumReady.union(MERGE_ADJACENT, Ranges.of(all.shards[i].range));
                     shardQuorumReady.set(i);
                 }
             }
@@ -166,7 +169,7 @@ public final class ActiveEpoch
         ranges = ranges.without(closed);
         if (ranges.isEmpty())
             return ranges;
-        Ranges add = ranges.slice(global.ranges, Minimal);
+        Ranges add = ranges.slice(all.ranges, Minimal);
         closed = closed.union(MERGE_ADJACENT, add);
         Invariants.require(closed.mergeTouching() == closed);
         return ranges.without(addedRanges);
@@ -179,7 +182,7 @@ public final class ActiveEpoch
         if (ranges.isEmpty())
             return ranges;
         quorumReady = quorumReady.union(MERGE_ADJACENT, ranges);
-        Ranges add = ranges.slice(global.ranges, Minimal);
+        Ranges add = ranges.slice(all.ranges, Minimal);
         closed = closed.union(MERGE_ADJACENT, add);
         retired = retired.union(MERGE_ADJACENT, add);
         Invariants.require(closed.mergeTouching() == closed);
@@ -187,9 +190,19 @@ public final class ActiveEpoch
         return ranges.without(addedRanges);
     }
 
-    public Topology global()
+    public Topology all()
     {
-        return global;
+        return all;
+    }
+
+    public Topology live()
+    {
+        return live;
+    }
+
+    public Topology get(SelectShards select)
+    {
+        return select == ALL ? all : live;
     }
 
     public Topology local()
@@ -199,14 +212,14 @@ public final class ActiveEpoch
 
     public long epoch()
     {
-        return global().epoch;
+        return all.epoch;
     }
 
     @Override
     public String toString()
     {
         return "EpochState{" +
-               "epoch=" + global.epoch() +
+               "epoch=" + all.epoch() +
                '}';
     }
 

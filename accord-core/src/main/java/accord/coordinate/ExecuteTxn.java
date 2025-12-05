@@ -75,6 +75,7 @@ import static accord.api.ProtocolModifiers.Toggles.sendNoStableIfFastExec;
 import static accord.api.ProtocolModifiers.Toggles.sendOnlyReadStableMessages;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
+import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
@@ -302,7 +303,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         switch (path)
         {
-            default: throw new UnhandledEnum(path);
+            default: throw UnhandledEnum.unknown(path);
+            case EPHEMERAL: throw UnhandledEnum.invalid(EPHEMERAL);
             case FAST:    return StableFastPath;
             case MEDIUM:  return StableMediumPath;
             case SLOW:    return StableSlowPath;

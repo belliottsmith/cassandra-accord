@@ -2092,29 +2092,17 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return (int)(unappliedCounters >>> ((~kindOrdinal & 1) << 5));
     }
 
-    public CommandsForKeyUpdate withRedundantBeforeAtLeast(QuickBounds newBounds, boolean expectUpToDate)
+    public CommandsForKeyUpdate withBoundsAtLeast(QuickBounds withBounds, boolean expectUpToDate)
     {
-        // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
-        if (newBounds.gcBefore.hlc() < bounds.gcBefore.hlc())
-        {
-            if (newBounds.endEpoch != bounds.endEpoch || !newBounds.readyAt.equals(bounds.readyAt) || !newBounds.locallyAppliedBefore.equals(bounds.locallyAppliedBefore))
-            {
-                newBounds = bounds.withEpochs(bounds.startEpoch, newBounds.endEpoch)
-                                  .withReadyAtLeast(newBounds.readyAt)
-                                  .withLocallyAppliedAtLeast(bounds.locallyAppliedBefore);
-            }
-            else
-            {
-                return this;
-            }
-        }
-        else if (newBounds.gcBefore.equals(bounds.gcBefore)
-                 && newBounds.readyAt.equals(bounds.readyAt)
-                 && newBounds.locallyAppliedBefore.equals(bounds.locallyAppliedBefore)
-                 && newBounds.endEpoch == bounds.endEpoch)
-        {
+        Invariants.expect(withBounds.gcBefore.compareTo(bounds.gcBefore) >= 0, "gcBefore %s may have moved backwards from %s for key %s", withBounds.gcBefore, bounds, key);
+
+        QuickBounds newBounds = bounds.withEpochs(bounds.startEpoch, withBounds.endEpoch)
+                                      .withGcBeforeBeforeAtLeast(withBounds.gcBefore)
+                                      .withReadyAtLeast(withBounds.readyAt)
+                                      .withLocallyAppliedAtLeast(withBounds.locallyAppliedBefore);
+
+        if (newBounds == bounds)
             return this;
-        }
 
         if (newBounds.gcBefore.epoch() >= newBounds.endEpoch)
         {
@@ -2143,16 +2131,21 @@ public class CommandsForKey extends CommandsForKeyUpdate
      * on load and not no-op due to e.g. newSafelyPrunedBefore or newReadyAt being non-null.
      */
     @VisibleForImplementation
-    public CommandsForKey withRedundantBeforeAtLeast(TxnId newRedundantBefore, boolean expectUpToDate)
+    public CommandsForKey withGcBeforeAtLeast(TxnId newGcBefore, boolean expectUpToDate)
     {
-        QuickBounds newBoundsInfo = bounds.withGcBeforeBeforeAtLeast(newRedundantBefore);
+        QuickBounds newBounds = bounds.withGcBeforeBeforeAtLeast(newGcBefore);
+        if (newBounds == bounds)
+        {
+            Invariants.expect(newGcBefore.compareTo(bounds.gcBefore) >= 0, "gcBefore %s may have moved backwards from %s for key %s", newGcBefore, bounds, key);
+            return this;
+        }
 
-        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newRedundantBefore);
-        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBoundsInfo, expectUpToDate);
-        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newRedundantBefore);
-        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newRedundantBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newGcBefore);
+        TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds, expectUpToDate);
+        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newGcBefore);
+        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newGcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
 
-        return reconstruct(key, newBoundsInfo, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate);
+        return reconstruct(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate);
     }
 
     /**

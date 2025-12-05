@@ -27,6 +27,7 @@ import accord.local.Node.Id;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Txn.Kind;
 import accord.primitives.Txn.Kind.Kinds;
+import accord.topology.SelectShards;
 import accord.utils.Invariants;
 import accord.utils.TinyEnumSet;
 
@@ -477,6 +478,11 @@ public class TxnId extends Timestamp
     public Cardinality cardinality()
     {
         return Cardinality.forFlags(flagsUnmasked());
+    }
+
+    public SelectShards selectsShards()
+    {
+        return isSyncPoint() ? SelectShards.ALL : SelectShards.LIVE;
     }
 
     public boolean hasOnlyIdentityFlags()

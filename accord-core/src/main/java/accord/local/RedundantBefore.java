@@ -125,23 +125,36 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
         public QuickBounds withReadyAtLeast(TxnId newReadyAt)
         {
-            if (newReadyAt.equals(readyAt))
+            if (newReadyAt.compareTo(readyAt) <= 0)
                 return this;
             return new QuickBounds(startEpoch, endEpoch, newReadyAt, gcBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withLocallyAppliedAtLeast(TxnId newLocallyAppliedBefore)
         {
-            if (newLocallyAppliedBefore.equals(locallyAppliedBefore))
+            if (newLocallyAppliedBefore.compareTo(locallyAppliedBefore) <= 0)
                 return this;
             return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, newLocallyAppliedBefore);
         }
 
         public QuickBounds withGcBeforeBeforeAtLeast(TxnId newGcBefore)
         {
-            if (newGcBefore.equals(this.gcBefore))
+            if (newGcBefore.compareTo(this.gcBefore) <= 0)
+                return this;
+            // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
+            if (newGcBefore.hlc() < this.gcBefore.hlc())
                 return this;
             return new QuickBounds(startEpoch, endEpoch, readyAt, newGcBefore, locallyAppliedBefore);
+        }
+
+        @Override
+        public String toString()
+        {
+            TreeMap<TxnId, Set<Property>> build = new TreeMap<>(Comparator.reverseOrder());
+            build.computeIfAbsent(gcBefore, ignore -> new TreeSet<>(Comparator.reverseOrder())).add(GC_BEFORE);
+            build.computeIfAbsent(readyAt, ignore -> new TreeSet<>(Comparator.reverseOrder())).add(UNREADY);
+            build.computeIfAbsent(locallyAppliedBefore, ignore -> new TreeSet<>(Comparator.reverseOrder())).add(LOCALLY_APPLIED);
+            return build.toString();
         }
     }
 
@@ -776,7 +789,8 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                    && Objects.equals(this.staleUntilAtLeast, that.staleUntilAtLeast);
         }
 
-        private static Property[] PROPERTIES = Property.values();
+        private static final Property[] PROPERTIES = Property.values();
+
         @Override
         public String toString()
         {

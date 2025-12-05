@@ -54,7 +54,7 @@ import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedInvalidate;
 import static accord.primitives.TxnId.MediumPath.TrackStable;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptReply, AcceptReply>
 {
@@ -241,7 +241,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
             try
             {
                 Participants<?> participants = Participants.singleton(txnId.domain(), participatingKey);
-                Topologies topologies = node.topology().active().forEpoch(participants, txnId.epoch(), SHARE);
+                Topologies topologies = node.topology().active().forEpoch(participants, txnId.epoch(), ALL);
                 NotAccept notAccept = new NotAccept(node, executor, status, topologies, ballot, txnId, participants, callback);
                 notAccept.start();
             }

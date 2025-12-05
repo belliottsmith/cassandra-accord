@@ -46,7 +46,7 @@ import static accord.coordinate.ExecutePath.SLOW;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.messages.Commit.Kind.CommitSlowPath;
 import static accord.messages.Commit.Kind.CommitWithTxn;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 
 public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R, ReadReply, Void> implements Callback<ReadReply>
 {
@@ -114,7 +114,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
                     Topologies topologies = allTopologies;
                     if (nack.minEpoch() < topologies.oldestEpoch())
                     {
-                        try { topologies = node.topology().active().preciseEpochs(scope, Math.min(allTopologies.oldestEpoch(), nack.minEpoch()), allTopologies.currentEpoch(), SHARE); }
+                        try { topologies = node.topology().active().preciseEpochs(scope, Math.min(allTopologies.oldestEpoch(), nack.minEpoch()), allTopologies.currentEpoch(), ALL); }
                         catch (TopologyException e) { node.agent().onException(e); }
                     }
                     node.send(from, new Commit(CommitWithTxn, from, topologies,

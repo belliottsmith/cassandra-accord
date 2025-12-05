@@ -56,6 +56,11 @@ public interface Agent extends UncaughtExceptionListener
         return ReplicaEventListener.NOOP;
     }
 
+    default SystemEventListener systemEvents()
+    {
+        return SystemEventListener.NOOP;
+    }
+
     @Override
     void onException(Throwable t);
     void onException(Throwable t, String context);

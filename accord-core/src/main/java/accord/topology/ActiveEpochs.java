@@ -68,7 +68,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         this.currentEpoch = epochs.length > 0 ? epochs[0].epoch() : 0;
         if (prevFirstNonEmptyEpoch != -1)
             this.firstNonEmptyEpoch = prevFirstNonEmptyEpoch;
-        else if (epochs.length > 0 && !epochs[0].global().isEmpty())
+        else if (epochs.length > 0 && !epochs[0].all().isEmpty())
             this.firstNonEmptyEpoch = currentEpoch;
         else
             this.firstNonEmptyEpoch = prevFirstNonEmptyEpoch;
@@ -96,7 +96,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
             {
                 ActiveEpoch e = epochs[i];
                 Invariants.require(epochs[i].isQuorumReady());
-                logger.info("Retired epoch {} with added/removed ranges {}/{}. Topology: {}. Closed: {}", e.epoch(), e.addedRanges, e.removedRanges, e.global.ranges, e.closed());
+                logger.info("Retired epoch {} with added/removed ranges {}/{}. Topology: {}. Closed: {}", e.epoch(), e.addedRanges, e.removedRanges, e.all.ranges, e.closed());
             }
             if (logger.isTraceEnabled())
             {
@@ -132,19 +132,20 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return currentEpoch;
     }
 
-    public long maxEpoch(long minEpoch, Routables<?> keys)
+    public long maxEpoch(long minEpoch, Function<ActiveEpoch, Topology> topology, Routables<?> keys)
     {
         long epoch = Math.max(epoch(), minEpoch);
-        while (!getKnown(epoch).global().ranges().containsAll(keys))
+        while (!topology.apply(getKnown(epoch)).ranges().containsAll(keys))
         {
             if (--epoch < minEpoch())
                 throw new IllegalArgumentException(keys + " not found in any active epoch");
         }
         return epoch;
     }
+
     public Topology current()
     {
-        return epochs.length > 0 ? epochs[0].global() : Topology.EMPTY;
+        return epochs.length > 0 ? epochs[0].all() : Topology.EMPTY;
     }
 
     public Topology currentLocal()
@@ -295,14 +296,9 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         int diff =  Math.toIntExact(currentEpoch - minEpoch + 1);
         List<Topology> topologies = new ArrayList<>(diff);
         for (int i = 0; minEpoch + i <= maxEpoch && i < diff; i++)
-            topologies.add(getKnown(minEpoch + i).global);
+            topologies.add(getKnown(minEpoch + i).all);
 
         return new TopologyRange(minEpoch, currentEpoch, firstNonEmptyEpoch, topologies);
-    }
-
-    public Topologies preciseEpochs(long epoch) throws TopologyException
-    {
-        return new Topologies.Single(manager.sorter, get(epoch).global);
     }
 
     // TODO (testing): test all of these methods when asking for epochs that have been cleaned up (and other code paths)
@@ -312,47 +308,52 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
      * Can be used during coordination operations to ensure they contact all relevant nodes across topology changes,
      * particularly when some ranges are still syncing after cluster membership changes.
      */
-    public Topologies withUnsyncedEpochs(Unseekables<?> select, Timestamp min, Timestamp max) throws TopologyException
+    public Topologies withUnsyncedEpochs(Unseekables<?> select, TxnId txnId, Timestamp max) throws TopologyException
     {
-        return withUnsyncedEpochs(select, min.epoch(), max.epoch());
+        return withUnsyncedEpochs(select, txnId, max, txnId.selectsShards());
     }
 
-    public Topologies select(Unseekables<?> select, Timestamp min, Timestamp max, Topologies.SelectNodeOwnership selectNodeOwnership, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
+    public Topologies withUnsyncedEpochs(Unseekables<?> select, Timestamp min, Timestamp max, SelectShards selectShards) throws TopologyException
     {
-        return select(select, min.epoch(), max.epoch(), selectNodeOwnership, include);
+        return withUnsyncedEpochs(select, min.epoch(), max.epoch(), selectShards);
     }
 
-    public Topologies select(Unseekables<?> select, long minEpoch, long maxEpoch, Topologies.SelectNodeOwnership selectNodeOwnership, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
+    public Topologies select(Unseekables<?> select, Timestamp min, Timestamp max, SelectShards selectShards, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
+    {
+        return select(select, min.epoch(), max.epoch(), selectShards, include);
+    }
+
+    public Topologies select(Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards selectShards, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
     {
         switch (include)
         {
-            default: throw new AssertionError("Unhandled Include: " +include);
-            case Unsynced: return withUnsyncedEpochs(select, minEpoch, maxEpoch);
-            case Owned: return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership);
+            default: throw new AssertionError("Unhandled Include: " + include);
+            case Unsynced: return withUnsyncedEpochs(select, minEpoch, maxEpoch, selectShards);
+            case Owned: return preciseEpochs(select, minEpoch, maxEpoch, selectShards);
         }
     }
 
-    public Topologies reselect(@Nullable Topologies prev, @Nullable ProtocolModifiers.QuorumEpochIntersections.Include prevIncluded, Unseekables<?> select, Timestamp min, Timestamp max, Topologies.SelectNodeOwnership selectNodeOwnership, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
+    public Topologies reselect(@Nullable Topologies prev, @Nullable ProtocolModifiers.QuorumEpochIntersections.Include prevIncluded, Unseekables<?> select, Timestamp min, Timestamp max, SelectShards selectNodeOwnership, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
     {
         return reselect(prev, prevIncluded, select, min.epoch(), max.epoch(), selectNodeOwnership, include);
     }
 
     // prevIncluded may be null even when prev is not null, in cases where we do not know what prev was produced with
-    public Topologies reselect(@Nullable Topologies prev, @Nullable ProtocolModifiers.QuorumEpochIntersections.Include prevIncluded, Unseekables<?> select, long minEpoch, long maxEpoch, Topologies.SelectNodeOwnership selectNodeOwnership, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
+    public Topologies reselect(@Nullable Topologies prev, @Nullable ProtocolModifiers.QuorumEpochIntersections.Include prevIncluded, Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards selectShards, ProtocolModifiers.QuorumEpochIntersections.Include include) throws TopologyException
     {
         if (include == Owned)
         {
             if (prev != null && prev.currentEpoch() >= maxEpoch && prev.oldestEpoch() <= minEpoch)
                 return prev.forEpochs(minEpoch, maxEpoch);
             else
-                return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership);
+                return preciseEpochs(select, minEpoch, maxEpoch, selectShards);
         }
         else
         {
-            if (prevIncluded == Unsynced && prev != null && prev.currentEpoch() == maxEpoch && prev.oldestEpoch() == minEpoch)
+            if (prevIncluded == Unsynced && prev != null && prev.currentEpoch() == maxEpoch && prev.oldestEpoch() <= minEpoch)
                 return prev;
             else // TODO (desired): can we avoid recalculating when only minEpoch advances?
-                return withUnsyncedEpochs(select, minEpoch, maxEpoch);
+                return withUnsyncedEpochs(select, minEpoch, maxEpoch, selectShards);
         }
 
     }
@@ -362,10 +363,10 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return extra(select, 0, beforeEpoch, ActiveEpoch::quorumReady, (TopologyCollector.Simple.UnsyncedSelector<U>) TopologyCollector.Simple.UnsyncedSelector.INSTANCE);
     }
 
-    public Topologies withUnsyncedEpochs(Unseekables<?> select, long minEpoch, long maxEpoch) throws TopologyException
+    public Topologies withUnsyncedEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards selectShards) throws TopologyException
     {
         Invariants.requireArgument(minEpoch <= maxEpoch, "min epoch %d > max %d", minEpoch, maxEpoch);
-        return withSufficientEpochsAtLeast(select, minEpoch, maxEpoch, ActiveEpoch::quorumReady);
+        return withSufficientEpochsAtLeast(select, minEpoch, maxEpoch, selectShards, ActiveEpoch::quorumReady);
     }
 
     public TxnId.FastPath selectFastPath(Routables<?> select, long epoch)
@@ -378,30 +379,34 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return atLeast(select, epoch, epoch, ActiveEpoch::quorumReady, manager.supportsPrivilegedFastPath);
     }
 
-    public Topologies withOpenEpochs(Routables<?> select, @Nullable EpochSupplier min, @Nullable EpochSupplier max) throws TopologyException
+    public Topologies withOpenEpochs(Routables<?> select, @Nullable EpochSupplier min, @Nullable EpochSupplier max, SelectShards selectShards) throws TopologyException
     {
         return withSufficientEpochsAtMost(select,
                                           min == null ? Long.MIN_VALUE : min.epoch(),
                                           max == null ? Long.MAX_VALUE : max.epoch(),
+                                          selectShards,
                                           ActiveEpoch::closed);
     }
 
-    public Topologies withUncompletedEpochs(Unseekables<?> select, @Nullable EpochSupplier min, EpochSupplier max) throws TopologyException
+    public Topologies withUncompletedEpochs(Unseekables<?> select, @Nullable EpochSupplier min, EpochSupplier max, SelectShards selectShards) throws TopologyException
     {
         return withSufficientEpochsAtLeast(select,
                                            min == null ? Long.MIN_VALUE : min.epoch(),
                                            max == null ? Long.MAX_VALUE : max.epoch(),
+                                           selectShards,
                                            ActiveEpoch::retired);
     }
 
-    private Topologies withSufficientEpochsAtLeast(Unseekables<?> select, long minEpoch, long maxEpoch, Function<ActiveEpoch, Ranges> isSufficientFor) throws TopologyException
+    private Topologies withSufficientEpochsAtLeast(Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards selectShards, Function<ActiveEpoch, Ranges> isSufficientFor) throws TopologyException
     {
-        return atLeast(select, minEpoch, maxEpoch, isSufficientFor, manager.collector);
+        return atLeast(select, minEpoch, maxEpoch, isSufficientFor,
+                       selectShards == SelectShards.LIVE ? manager.liveCollector : manager.allCollector);
     }
 
     private <C, K extends Routables<?>, T, E extends Exception>
-    T atLeast(K select, long minEpoch, long maxEpoch, Function<ActiveEpoch, Ranges> isSufficientFor,
-              TopologyCollector<C, K, T, E> collectors) throws IllegalArgumentException, E
+    T atLeast(K select, long minEpoch, long maxEpoch,
+              Function<ActiveEpoch, Ranges> isSufficientFor,
+              TopologyCollector<C, K, T, E> collectors) throws E
     {
         Invariants.requireArgument(minEpoch <= maxEpoch);
         if (maxEpoch < minEpoch())
@@ -412,7 +417,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
 
         ActiveEpoch max = getKnown(maxEpoch);
         if (minEpoch == maxEpoch && isSufficientFor.apply(max).containsAll(select))
-            return collectors.one(max, select, false);
+            return collectors.one(max, select);
 
         int i = (int)(currentEpoch - maxEpoch);
         int maxi = (int)(Math.min(1 + currentEpoch - minEpoch, epochs.length));
@@ -425,7 +430,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         while (i < maxi)
         {
             ActiveEpoch e = epochs[i++];
-            collector = collectors.update(collector, e, select, false);
+            collector = collectors.update(collector, e, select);
             select = (K)select.without(e.addedRanges);
         }
 
@@ -435,7 +440,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         if (i == epochs.length)
         {
             // now we GC epochs, we cannot rely on addedRanges to remove all ranges, so we also remove the ranges found in the earliest epoch we have
-            select = (K)select.without(epochs[epochs.length - 1].global.ranges);
+            select = (K)select.without(collectors.selects(epochs[epochs.length - 1]).ranges);
             if (!select.isEmpty())
                 throw Invariants.illegalArgument("Ranges %s could not be found", select);
             return collectors.multi(collector);
@@ -457,7 +462,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
                 return collectors.multi(collector);
 
             ActiveEpoch next = epochs[i++];
-            collector = collectors.update(collector, next, select, false);
+            collector = collectors.update(collector, next, select);
             prev = next;
         } while (i < epochs.length);
         // need to remove sufficient / added else remaining may not be empty when the final matches are the last epoch
@@ -465,16 +470,16 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         remaining = remaining.without(prev.addedRanges);
         // TODO (desired): propagate addedRanges to the earliest epoch we retain for consistency
         // now we GC epochs, we cannot rely on addedRanges to remove all ranges, so we also remove the ranges found in the earliest epoch we have
-        remaining = remaining.without(epochs[epochs.length - 1].global.ranges);
+        remaining = remaining.without(collectors.selects(epochs[epochs.length - 1]).ranges);
         if (!remaining.isEmpty())
             Invariants.illegalArgument("Ranges %s could not be found", remaining);
 
         return collectors.multi(collector);
     }
 
-    private Topologies withSufficientEpochsAtMost(Routables<?> select, long minEpoch, long maxEpoch, Function<ActiveEpoch, Ranges> isSufficientFor) throws TopologyException
+    private Topologies withSufficientEpochsAtMost(Routables<?> select, long minEpoch, long maxEpoch, SelectShards selectShards, Function<ActiveEpoch, Ranges> isSufficientFor) throws TopologyException
     {
-        return atMost(select, minEpoch, maxEpoch, isSufficientFor, manager.collector);
+        return atMost(select, minEpoch, maxEpoch, isSufficientFor, selectShards == SelectShards.LIVE ? manager.liveCollector : manager.allCollector);
     }
 
     private <C, K extends Routables<?>, T, E extends Exception> T atMost(K select, long minEpoch, long maxEpoch, Function<ActiveEpoch, Ranges> isSufficientFor,
@@ -489,7 +494,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
 
         ActiveEpoch cur = getKnown(maxEpoch);
         if (minEpoch == maxEpoch)
-             return collectors.one(cur, select, true);
+             return collectors.one(cur, select);
 
         int i = (int)(currentEpoch - maxEpoch);
         int maxi = (int)(Math.min(1 + currentEpoch - minEpoch, epochs.length));
@@ -497,7 +502,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
 
         while (!select.isEmpty())
         {
-            collector = collectors.update(collector, cur, select, true);
+            collector = collectors.update(collector, cur, select);
             select = (K)select.without(cur.addedRanges)
                               .without(isSufficientFor.apply(cur));
 
@@ -531,7 +536,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
 
         while (!select.isEmpty())
         {
-            collector = collectors.update(collector, cur, select, true);
+            collector = collectors.updateIfExists(collector, cur, select);
             select = (K)select.without(cur.addedRanges);
 
             if (++i == maxi)
@@ -544,12 +549,12 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return collectors.multi(collector);
     }
 
-    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, Topologies.SelectNodeOwnership selectNodeOwnership) throws TopologyException
+    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards shards) throws TopologyException
     {
-        return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership, Topology::select);
+        return preciseEpochs(select, minEpoch, maxEpoch, shards, Topology::select);
     }
 
-    public Topologies preciseEpochsIfExists(Unseekables<?> select, long minEpoch, long maxEpoch, Topologies.SelectNodeOwnership selectNodeOwnership) throws TopologyException
+    public Topologies preciseEpochsIfExists(Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards selectNodeOwnership) throws TopologyException
     {
         return preciseEpochs(select, minEpoch, maxEpoch, selectNodeOwnership, Topology::selectIfExists);
     }
@@ -565,7 +570,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return Stream.of(epochs);
     }
 
-    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, Topologies.SelectNodeOwnership selectNodeOwnership, SelectTopology selectTopology) throws TopologyException
+    public Topologies preciseEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards shards, SelectTopology selectTopology) throws TopologyException
     {
         // TODO (expected): we should disambiguate minEpoch we can bump (i.e. historical epochs) and those we cannot (i.e. txnId.epoch())
         minEpoch = Math.max(minEpoch(), minEpoch);
@@ -574,14 +579,14 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         else if (maxEpoch < minEpoch) throw new TopologyRetiredException(maxEpoch, minEpoch);
 
         if (minEpoch == maxEpoch)
-            return new Topologies.Single(manager.sorter, selectTopology.apply(get(minEpoch).global, select, selectNodeOwnership));
+            return new Topologies.Single(manager.sorter, selectTopology.apply(get(minEpoch).get(shards), select));
 
         int count = (int)(1 + maxEpoch - minEpoch);
         Topologies.Builder topologies = new Topologies.Builder(count);
         for (int i = count - 1 ; i >= 0 ; --i)
         {
             ActiveEpoch e = get(minEpoch + i);
-            topologies.add(selectTopology.apply(e.global, select, selectNodeOwnership));
+            topologies.add(selectTopology.apply(e.get(shards), select));
             select = select.without(e.addedRanges);
         }
         Invariants.require(!topologies.isEmpty(), "Unable to find an epoch that contained %s", select);
@@ -589,9 +594,9 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return topologies.build(manager.sorter);
     }
 
-    public Topologies forEpoch(Unseekables<?> select, long epoch, Topologies.SelectNodeOwnership selectNodeOwnership) throws TopologyException
+    public Topologies forEpoch(Unseekables<?> select, long epoch, SelectShards shards) throws TopologyException
     {
-        return new Topologies.Single(manager.sorter, get(epoch).global.select(select, selectNodeOwnership));
+        return new Topologies.Single(manager.sorter, get(epoch).get(shards).select(select));
     }
 
     public boolean hasReplicationMaybeChanged(Unseekables<?> select, long sinceEpoch)
@@ -599,7 +604,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return atLeast(select, sinceEpoch, Long.MAX_VALUE, ignore -> Ranges.EMPTY, HasChangedReplication.INSTANCE);
     }
 
-    public Topologies forEpochAtLeast(Unseekables<?> select, long epoch, Topologies.SelectNodeOwnership selectNodeOwnership)
+    public Topologies forEpochAtLeast(Unseekables<?> select, long epoch, SelectShards selectShards) throws TopologyMismatch
     {
         ActiveEpoch e = ifExists(epoch);
         if (e == null)
@@ -607,7 +612,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
             Invariants.require(currentEpoch >= epoch, "current epoch %d < provided max %d", currentEpoch, epoch);
             e = getKnown(minEpoch());
         }
-        return new Topologies.Single(manager.sorter, e.global.select(select, selectNodeOwnership));
+        return new Topologies.Single(manager.sorter, e.get(selectShards).select(select));
     }
 
     @VisibleForImplementation
@@ -616,12 +621,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         ActiveEpoch e = ifExists(epoch);
         if (e == null)
             return null;
-        return e.global().forKeyIfKnown(key);
-    }
-
-    public Shard forEpoch(RoutableKey key, long epoch) throws TopologyException
-    {
-        return get(epoch).global().forKey(key);
+        return e.all().forKeyIfKnown(key);
     }
 
     public boolean hasEpoch(long epoch)
@@ -634,37 +634,10 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return currentEpoch >= epoch;
     }
 
-    public Topology localForEpoch(long epoch) throws TopologyException
-    {
-        return get(epoch).local();
-    }
-
-    public Ranges localRangesForEpoch(long epoch) throws TopologyException
-    {
-        return get(epoch).local().rangesForNode(manager.node.id());
-    }
-
-    public Ranges localRangesForEpochs(long start, long end) throws TopologyException
-    {
-        if (end < start) throw new IllegalArgumentException();
-        Ranges ranges = localRangesForEpoch(start);
-        for (long i = start + 1; i <= end ; ++i)
-            ranges = ranges.with(localRangesForEpoch(i));
-        return ranges;
-    }
-
     public Topology globalForEpoch(long epoch) throws TopologyException
     {
         ActiveEpoch e = get(epoch);
-        return e.global();
-    }
-
-    public Topology maybeGlobalForEpoch(long epoch)
-    {
-        ActiveEpoch e = ifExists(epoch);
-        if (e == null)
-            return null;
-        return e.global();
+        return e.all();
     }
 
     public List<Topology> topologySnapshot()
@@ -675,7 +648,7 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         {
             // This class's state is mutable with regard to: ready, synced, closed, retired
             ActiveEpoch e = epochs[i];
-            builder.add(e.global);
+            builder.add(e.all);
         }
         return builder.build();
     }

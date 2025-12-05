@@ -33,35 +33,48 @@ import static accord.primitives.TxnId.FastPath.Unoptimised;
 abstract class TopologyCollector<C, K, T, E extends Exception>
 {
     abstract C allocate(int size);
-    abstract C update(C collector, ActiveEpoch e, K select, boolean permitMissing);
+    abstract C update(C collector, ActiveEpoch e, K select) throws E;
+    // TODO (expected): do we really need updateIfExists?
+    abstract C updateIfExists(C collector, ActiveEpoch e, K select);
     T none() { throw new UnsupportedOperationException(); }
-    abstract T one(ActiveEpoch e, K select, boolean permitMissing);
+    abstract T one(ActiveEpoch e, K select) throws E;
     abstract T multi(C collector);
     abstract T retired(long requestedEpoch, long minEpoch) throws E;
     abstract T notReady(long requestedEpoch, long maxEpoch) throws E;
+    Topology selects(ActiveEpoch epoch)
+    {
+        return epoch.all;
+    }
 
     static class Simple extends TopologyCollector<Topologies.Builder, Routables<?>, Topologies, TopologyException>
     {
         final TopologySorter.Supplier sorter;
-        final Topologies.SelectNodeOwnership selectNodeOwnership;
+        final SelectShards selectShards;
 
-        Simple(TopologySorter.Supplier sorter, Topologies.SelectNodeOwnership selectNodeOwnership)
+        Simple(TopologySorter.Supplier sorter, SelectShards selectShards)
         {
             this.sorter = sorter;
-            this.selectNodeOwnership = selectNodeOwnership;
+            this.selectShards = selectShards;
         }
 
         @Override
-        public Topologies.Builder update(Topologies.Builder collector, ActiveEpoch e, Routables<?> select, boolean permitMissing)
+        public Topologies.Builder update(Topologies.Builder collector, ActiveEpoch e, Routables<?> select) throws TopologyException
         {
-            collector.add(e.global.select(select, permitMissing, selectNodeOwnership));
+            collector.add(e.get(selectShards).select(select));
             return collector;
         }
 
         @Override
-        public Topologies one(ActiveEpoch e, Routables<?> unseekables, boolean permitMissing)
+        public Topologies.Builder updateIfExists(Topologies.Builder collector, ActiveEpoch e, Routables<?> select)
         {
-            return new Topologies.Single(sorter, e.global.select(unseekables, permitMissing, selectNodeOwnership));
+            collector.add(e.get(selectShards).selectIfExists(select));
+            return collector;
+        }
+
+        @Override
+        public Topologies one(ActiveEpoch e, Routables<?> unseekables) throws TopologyMismatch
+        {
+            return new Topologies.Single(sorter, e.get(selectShards).select(unseekables));
         }
 
         @Override
@@ -83,6 +96,12 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
 
         @Override
+        Topology selects(ActiveEpoch epoch)
+        {
+            return epoch.get(selectShards);
+        }
+
+        @Override
         public Topologies.Builder allocate(int count)
         {
             return new Topologies.Builder(count);
@@ -99,13 +118,19 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
 
         @Override
-        public TxnId.FastPath update(TxnId.FastPath collector, ActiveEpoch e, Routables<?> select, boolean permitMissing)
+        public TxnId.FastPath update(TxnId.FastPath collector, ActiveEpoch e, Routables<?> select)
         {
-            return merge(collector, one(e, select, permitMissing));
+            return merge(collector, one(e, select));
         }
 
         @Override
-        public TxnId.FastPath one(ActiveEpoch e, Routables<?> routables, boolean permitMissing)
+        public TxnId.FastPath updateIfExists(TxnId.FastPath collector, ActiveEpoch e, Routables<?> select)
+        {
+            return update(collector, e, select);
+        }
+
+        @Override
+        public TxnId.FastPath one(ActiveEpoch e, Routables<?> routables)
         {
             if (!e.local.ranges.containsAll(routables) || !e.local.foldl(routables, this, true))
                 return Unoptimised;
@@ -162,13 +187,19 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
 
         @Override
-        public Boolean update(Boolean collector, ActiveEpoch e, Routables<?> select, boolean permitMissing)
+        public Boolean update(Boolean collector, ActiveEpoch e, Routables<?> select)
         {
-            return collector && one(e, select, permitMissing);
+            return collector && one(e, select);
         }
 
         @Override
-        public Boolean one(ActiveEpoch e, Routables<?> routables, boolean permitMissing)
+        public Boolean updateIfExists(Boolean collector, ActiveEpoch e, Routables<?> select)
+        {
+            return update(collector, e, select);
+        }
+
+        @Override
+        public Boolean one(ActiveEpoch e, Routables<?> routables)
         {
             return e.local.ranges.containsAll(routables) && e.local.foldl(routables, this, true);
         }
@@ -239,16 +270,22 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
 
         @Override
-        public K one(ActiveEpoch e, K select, boolean permitMissing)
+        public K one(ActiveEpoch e, K select)
         {
             return (K) select.without(e.quorumReady());
         }
 
         @Override
-        public K update(K collector, ActiveEpoch e, K select, boolean permitMissing)
+        public K update(K collector, ActiveEpoch e, K select)
         {
             select = (K)select.without(e.quorumReady());
             return collector == null ? select : (K)collector.with((Participants) select);
+        }
+
+        @Override
+        public K updateIfExists(K collector, ActiveEpoch e, K select)
+        {
+            return update(collector, e, select);
         }
     }
 
@@ -293,20 +330,26 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
 
         @Override
-        public Boolean one(ActiveEpoch e, Unseekables<?> select, boolean permitMissing)
+        public Boolean one(ActiveEpoch e, Unseekables<?> select)
         {
             return false;
         }
 
         @Override
-        public ReplicationChangeTracker update(ReplicationChangeTracker collector, ActiveEpoch e, Unseekables<?> select, boolean permitMissing)
+        public ReplicationChangeTracker update(ReplicationChangeTracker collector, ActiveEpoch e, Unseekables<?> select)
         {
-            e.global.foldl(select, (shard, c, i1) -> {
+            e.all.foldl(select, (shard, c, i1) -> {
                 if (c.rf < 0) c.rf = shard.rf;
                 else c.hasChanged |= c.rf != shard.rf;
                 return c;
             }, collector);
             return collector;
+        }
+
+        @Override
+        public ReplicationChangeTracker updateIfExists(ReplicationChangeTracker collector, ActiveEpoch e, Unseekables<?> select)
+        {
+            return update(collector, e, select);
         }
     }
 }

@@ -54,7 +54,6 @@ import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 
 import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 class CoordinateSyncPointTest
 {
@@ -109,7 +108,7 @@ class CoordinateSyncPointTest
                                                {
                                                    CommandStore store = node.commandStores().forId(0);
                                                    return store.chain(() -> {
-                                                       Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, SHARE, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
+                                                       Topologies topologies = exclusiveSyncPoint().forExecution(node, syncPoint.route, syncPoint.syncId, syncPoint.syncId, syncPoint.waitFor);
                                                        ExecuteSyncPoint execute = new ExecuteSyncPoint(node, store, topologies, syncPoint, 1, new ExecuteSyncPoint.DurabilityResults());
                                                        execute.start();
                                                        return execute.onDone();

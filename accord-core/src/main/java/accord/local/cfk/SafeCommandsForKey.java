@@ -99,7 +99,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     public void updateRedundantBefore(SafeCommandStore safeStore, RedundantBefore.Bounds redundantBefore)
     {
         CommandsForKey prevCfk = current();
-        update(safeStore, null, prevCfk, prevCfk.withRedundantBeforeAtLeast(redundantBefore, true), false);
+        update(safeStore, null, prevCfk, prevCfk.withBoundsAtLeast(redundantBefore, true), false);
     }
 
     public void initialize()

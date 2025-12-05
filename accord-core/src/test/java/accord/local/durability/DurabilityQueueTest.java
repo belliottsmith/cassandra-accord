@@ -74,7 +74,6 @@ import static accord.impl.PrefixedIntHashKey.ranges;
 import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
 import static accord.local.durability.DurabilityService.SyncLocal.Self;
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
 
 public class DurabilityQueueTest
 {
@@ -206,7 +205,7 @@ public class DurabilityQueueTest
             }
             else
             {
-                Topology topology = this.topology.select(syncPoint.route, SHARE);
+                Topology topology = this.topology.selectIfExists(syncPoint.route);
                 List<Node.Id> candidates = new ArrayList<>(topology.nodes());
                 SortedArrayList<Node.Id> including = select(rnd, candidates, rnd.nextInt(candidates.size()));
 
@@ -372,7 +371,7 @@ public class DurabilityQueueTest
                 txnId = new TxnId(1, hlc, kind, Routable.Domain.Range, node);
             } while (submissions.containsKey(txnId));
 
-            Topology topology = this.topology.select(route, SHARE);
+            Topology topology = this.topology.selectIfExists(route);
             SyncPoint syncPoint = new SyncPoint(txnId, txnId, route, Deps.NONE);
             DurabilityRequest request = null;
             if (rnd.decide(0.1f))

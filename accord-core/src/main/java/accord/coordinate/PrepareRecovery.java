@@ -59,8 +59,7 @@ import static accord.primitives.ProgressToken.INVALIDATED;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.Durability.AllQuorums;
-import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
-import static accord.topology.Topologies.SelectNodeOwnership.SHARE;
+import static accord.topology.SelectShards.ALL;
 import static accord.utils.Invariants.illegalState;
 
 public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
@@ -85,7 +84,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
         PrepareRecovery recover;
         try
         {
-            Topologies topologies = node.topology().active().forEpoch(route, txnId.epoch(), SHARE);
+            Topologies topologies = node.topology().active().forEpoch(route, txnId.epoch(), ALL);
             recover = new PrepareRecovery(node, executor, topologies, txnId, invalidIf, route, witnessedByInvalidation, reportTo, callback);
         }
         catch (Throwable t)
@@ -224,9 +223,9 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
                                         Route<?> haveUnstable = trySendTo.without(haveStable);
                                         Deps stable = haveStable.isEmpty() ? Deps.NONE : full.stableDeps.reconstitutePartial(haveStable).asFullUnsafe();
 
-                                        LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, executor, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, SLICE, query, node.agent(), deps -> {
+                                        LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, executor, txnId, full.executeAt, full.partialTxn, stable, haveUnstable, trySendTo, ALL, query, node.agent(), deps -> {
                                             Deps stableDeps = deps.intersecting(trySendTo);
-                                            node.coordinationAdapter(txnId, Recovery).persist(node, executor, null, trySendTo, trySendTo, SLICE, query, bumpBallot, CoordinationFlags.none(), txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, informDurableOnDone, null);
+                                            node.coordinationAdapter(txnId, Recovery).persist(node, executor, null, trySendTo, trySendTo, query, bumpBallot, CoordinationFlags.none(), txnId, full.partialTxn, full.executeAt, stableDeps, full.writes, full.result, informDurableOnDone, null);
                                         });
                                     }
                                     else
@@ -236,7 +235,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
 
                                         Invariants.require(full.stableDeps.covers(trySendTo));
                                         Invariants.require(txnId.isSystemTxn() || full.partialTxn.covers(trySendTo));
-                                        node.coordinationAdapter(txnId, Recovery).persist(node, executor, null, trySendTo, trySendTo, SLICE, query, bumpBallot, CoordinationFlags.none(), txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, informDurableOnDone, null);
+                                        node.coordinationAdapter(txnId, Recovery).persist(node, executor, null, trySendTo, trySendTo, query, bumpBallot, CoordinationFlags.none(), txnId, full.partialTxn, full.executeAt, full.stableDeps, full.writes, full.result, informDurableOnDone, null);
                                     }
                                 }
                             }
@@ -290,7 +289,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
                             deps = new Deps(full.stableDeps.reconstitutePartial(hasDeps));
                         }
                     }
-                    LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, executor, txnId, full.executeAt, full.partialTxn, deps, missingDeps, missingDeps, SHARE, query, (s, f) -> invokeCallback(null, f), mergedDeps -> {
+                    LatestDeps.withStable(node.coordinationAdapter(txnId, Recovery), node, executor, txnId, full.executeAt, full.partialTxn, deps, missingDeps, missingDeps, ALL, query, (s, f) -> invokeCallback(null, f), mergedDeps -> {
                         node.withEpochAtLeast(full.executeAt.epoch(), executor, node.agent(), t -> Rethrowable.rethrowable(t), () -> {
                             node.coordinationAdapter(txnId, Recovery).persist(node, executor, topologies, query, bumpBallot, CoordinationFlags.none(), txnId, txn, full.executeAt, mergedDeps, full.writes, full.result, (s, f) -> {
                                 invokeCallback(f == null ? APPLIED : null, f);

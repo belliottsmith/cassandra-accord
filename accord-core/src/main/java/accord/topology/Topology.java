@@ -41,8 +41,6 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
-import accord.primitives.Unseekables;
-import accord.topology.Topologies.SelectNodeOwnership;
 import accord.utils.ArrayBuffers;
 import accord.utils.ArrayBuffers.IntBuffers;
 import accord.utils.IndexedBiFunction;
@@ -57,8 +55,8 @@ import accord.utils.Utils;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntArrayList;
 
-import static accord.topology.Topologies.SelectNodeOwnership.SLICE;
 import static accord.utils.Invariants.illegalArgument;
+import static accord.utils.SortedArrays.Search.FAST;
 import static accord.utils.SortedArrays.Search.FLOOR;
 import static accord.utils.SortedArrays.exponentialSearch;
 
@@ -84,7 +82,9 @@ public class Topology
      * {@code NodeInfo.supersetIndexes} to find the shards that intersect a given node without recomputing the NodeInfo.
      */
     final Ranges subsetOfRanges;
+
     final int[] supersetIndexes;
+
     /**
      * When the field is {@code null} use {@code this}, else use the value referenced; in most cases using {@link #global()} is best.
      */
@@ -372,19 +372,24 @@ public class Topology
         return subsetOfRanges.indexOf(range, search);
     }
 
-    public Topology select(Routables<?> select, SelectNodeOwnership selectNodeOwnership)
+    public Topology selectLive()
     {
-        return select(select, false, selectNodeOwnership);
+        return select(shard -> !shard.flags().contains(Shard.Flag.PENDING_REMOVAL));
     }
 
-    public Topology selectIfExists(Routables<?> select, SelectNodeOwnership selectNodeOwnership)
+    public Topology select(Predicate<Shard> include)
     {
-        return select(select, true, selectNodeOwnership);
+        return forSubset(subsetFor(include));
     }
 
-    public Topology select(Routables<?> select, boolean permitMissing, SelectNodeOwnership selectNodeOwnership)
+    public Topology select(Routables<?> select) throws TopologyMismatch
     {
-        return forSubset(subsetFor(select, permitMissing), selectNodeOwnership);
+        return forSubset(subsetFor(select, TopologyMismatch::new));
+    }
+
+    public Topology selectIfExists(Routables<?> select)
+    {
+        return forSubset(subsetFor(select, null));
     }
 
     public Topology select(SortedArrayList<Id> nodes)
@@ -425,15 +430,14 @@ public class Topology
     }
 
     @VisibleForTesting
-    Topology forSubset(int[] newSubset, SelectNodeOwnership selectNodeOwnership)
+    Topology forSubset(int[] newSubset)
     {
         Ranges rangeSubset = ranges.select(newSubset);
         if (rangeSubset == ranges)
             return this;
 
-        boolean reselectNodeOwnership = selectNodeOwnership == SLICE;
         LargeBitSet nodes = new LargeBitSet(this.nodes.size());
-        Int2ObjectHashMap<NodeInfo> nodeLookup = reselectNodeOwnership ? new Int2ObjectHashMap<>(nodes.size(), 0.8f) : this.nodeLookup;
+        Int2ObjectHashMap<NodeInfo> nodeLookup = this.nodeLookup;
         for (int shardIndex : newSubset)
         {
             Shard shard = shards[shardIndex];
@@ -443,8 +447,6 @@ public class Topology
                 i = this.nodes.findNext(i, id);
                 if (i >= 0) nodes.set(i++);
                 else i = -1 - i;
-                if (reselectNodeOwnership)
-                    nodeLookup.putIfAbsent(id.id, this.nodeLookup.get(id.id).forSubset(newSubset));
             }
         }
 
@@ -456,7 +458,7 @@ public class Topology
         return new Topology(global(), epoch, shards, ranges, removed, hardRemoved, stale, new SortedArrayList<>(nodeIds), nodeLookup, rangeSubset, newSubset);
     }
 
-    private int[] subsetFor(Routables<?> select, boolean permitMissing)
+    private <T extends Throwable> int[] subsetFor(Routables<?> select, @Nullable Function<String, T> ifMissing) throws T
     {
         int count = 0;
         IntBuffers cachedInts = ArrayBuffers.cachedInts();
@@ -477,14 +479,14 @@ public class Topology
                     long abi = as.findNextIntersection(ai, bs, bi);
                     if (abi < 0)
                     {
-                        if (ailim < as.size() && !permitMissing)
-                            throw new IllegalArgumentException("Range not found for " + as.get(ailim));
+                        if (ailim < as.size() && ifMissing != null)
+                            throw ifMissing.apply("Range not found for " + as.get(ailim));
                         break;
                     }
 
                     ai = (int)abi;
-                    if (ailim < ai && !permitMissing)
-                        throw new IllegalArgumentException("Range not found for " + as.get(ailim));
+                    if (ailim < ai && ifMissing != null)
+                        throw ifMissing.apply("Range not found for " + as.get(ailim));
 
                     bi = (int)(abi >>> 32);
                     if (count == newSubset.length)
@@ -524,14 +526,30 @@ public class Topology
         return cachedInts.completeAndDiscard(newSubset, count);
     }
 
-    public void visitNodeForKeysOnceOrMore(Unseekables<?> select, Consumer<Id> nodes)
+    private <T extends Throwable> int[] subsetFor(Predicate<Shard> select) throws T
     {
-        for (int shardIndex : subsetFor(select, false))
+        int count = 0;
+        IntBuffers cachedInts = ArrayBuffers.cachedInts();
+        int[] newSubset = cachedInts.getInts(subsetOfRanges.size());
+        try
         {
-            Shard shard = shards[shardIndex];
-            for (Id id : shard.nodes)
-                nodes.accept(id);
+            for (int i : supersetIndexes)
+            {
+                if (!select.test(shards[i]))
+                    continue;
+
+                if (count == newSubset.length)
+                    newSubset = cachedInts.resize(newSubset, count, count * 2);
+                newSubset[count++] = i;
+            }
         }
+        catch (Throwable t)
+        {
+            cachedInts.forceDiscard(newSubset);
+            throw t;
+        }
+
+        return cachedInts.completeAndDiscard(newSubset, count);
     }
 
     public <T> T foldl(Routables<?> select, IndexedBiFunction<Shard, T, T> function, T accumulator)
@@ -560,22 +578,29 @@ public class Topology
     {
         Routables<?> as = select;
         Ranges bs = subsetOfRanges;
-        int ai = 0, amax = 0, bi = 0;
+        int ai = 0, bi = 0;
 
         while (true)
         {
             long abi = as.findNextIntersection(ai, bs, bi);
             if (abi < 0)
+            {
+                if (ai < as.size())
+                    accumulator = function.apply(ifNull, param, accumulator, -1 - bs.size());
                 break;
+            }
 
             int nextai = (int)(abi);
             bi = (int)(abi >>> 32);
 
-            if (nextai > amax + 1)
-                accumulator = function.apply(null, param, accumulator, -1 - bi);
+            if (nextai > ai)
+                accumulator = function.apply(ifNull, param, accumulator, -1 - bi);
             accumulator = function.apply(shards[supersetIndexes[bi]], param, accumulator, bi);
-            amax = nextai + 1;
-            ai = nextai;
+
+            Range r = subsetOfRanges.get(bi);
+            ai = as.findNext(ai, r.end(), FAST);
+            if (ai < 0) ai = -1 - ai;
+            else if (r.endInclusive()) ++ai;
             ++bi;
         }
 

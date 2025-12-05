@@ -45,29 +45,29 @@ abstract class AbstractCoordinatePreAccept<Result, Reply extends accord.messages
     }
 
     abstract void onNewEpochTopologyMismatch(TopologyMismatch mismatch);
-    abstract void onPreAccepted(Topologies topologies);
+    abstract void onPreAccepted();
     abstract long executeAtEpoch();
 
     final void onPreAcceptedOrNewEpoch()
     {
         long latestEpoch = executeAtEpoch();
-        if (latestEpoch > topologies.currentEpoch()) awaitEpochExactToFinish(latestEpoch, () -> onPreAcceptedInNewEpoch(topologies, latestEpoch));
-        else onPreAccepted(topologies);
+        if (latestEpoch > topologies.currentEpoch()) awaitEpochExactToFinish(latestEpoch, () -> onPreAcceptedInNewEpoch(latestEpoch));
+        else onPreAccepted();
     }
 
-    final void onPreAcceptedInNewEpoch(Topologies topologies, long latestEpoch)
+    final void onPreAcceptedInNewEpoch(long latestEpoch)
     {
         TopologyMismatch mismatch;
         try
         {
-            mismatch = TopologyMismatch.checkForMismatch(latestEpoch, scope, node.topology().active(), txnId.kind());
+            mismatch = TopologyMismatch.checkForMismatch(latestEpoch, node.topology().active(), scope, txnId.kind());
         }
         catch (TopologyException t)
         {
             finishWithFailureOverride(t);
             return;
         }
-        if (mismatch == null) onPreAccepted(topologies);
+        if (mismatch == null) onPreAccepted();
         else onNewEpochTopologyMismatch(mismatch);
     }
 

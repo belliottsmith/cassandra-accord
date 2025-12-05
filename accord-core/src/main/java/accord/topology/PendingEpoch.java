@@ -20,14 +20,18 @@ package accord.topology;
 
 import java.util.ArrayDeque;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
+import accord.api.AsyncExecutor;
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
 import accord.coordinate.EpochTimeout;
 import accord.local.Node;
 import accord.primitives.Ranges;
+import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import org.agrona.collections.ObjectHashSet;
@@ -94,13 +98,13 @@ class PendingEpoch implements Timeouts.Timeout
     }
 
     // TODO (expected): pass through request deadline
-    AsyncResult<Void> whenActive()
+    WaitingForEpoch whenActive()
     {
         WaitingForEpoch result, last;
         synchronized (this)
         {
             if (isActive)
-                return AsyncResults.success(null);
+                return WaitingForEpoch.DONE;
 
             long timeoutMicros = manager.node.agent().expireEpochWait(MICROSECONDS);
             long deadlineMicros = manager.time.elapsed(MICROSECONDS) + timeoutMicros;
@@ -124,7 +128,7 @@ class PendingEpoch implements Timeouts.Timeout
             isActive = true;
             WaitingForEpoch next;
             while (null != (next = waiting.poll()))
-                next.trySuccess(null);
+                next.result.trySuccess(null);
         }
         RegisteredTimeout cancel = timeoutUpdater.getAndSet(this, DONE);
         if (cancel != null)
@@ -154,7 +158,9 @@ class PendingEpoch implements Timeouts.Timeout
                     break;
                 }
 
-                waiting.poll().tryFailure(EpochTimeout.timeout(epoch, manager.node.agent()));
+                waiting.poll();
+                if (next.result.tryFailure(EpochTimeout.timeout(epoch, manager.node.agent())))
+                    manager.node.agent().systemEvents().onTimeoutForEpoch(epoch, next.waiting);
             }
         }
         if (nextDeadlineMicros > 0)
@@ -171,12 +177,35 @@ class PendingEpoch implements Timeouts.Timeout
         return (int) epoch;
     }
 
-    static class WaitingForEpoch extends AsyncResults.SettableResult<Void>
+    static class WaitingForEpoch
     {
-        final long deadlineMicros;
+        private static final WaitingForEpoch DONE = new WaitingForEpoch(0);
+        static { DONE.result.setSuccess(null); }
+
+        private final AsyncResults.SettableResult<Void> result = new AsyncResults.SettableResult<>();
+        private final long deadlineMicros;
+
+        private volatile int waiting;
+        private static final AtomicIntegerFieldUpdater<WaitingForEpoch> waitingUpdater = AtomicIntegerFieldUpdater.newUpdater(WaitingForEpoch.class, "waiting");
+
         WaitingForEpoch(long deadlineMicros)
         {
             this.deadlineMicros = deadlineMicros;
+        }
+
+        AsyncChain<Void> chainImmediatelyElse(@Nullable AsyncExecutor executor)
+        {
+            AsyncChain<Void> chain = result.chain();
+            if (result.isDone())
+                return chain;
+
+            waitingUpdater.incrementAndGet(this);
+            return chain.withExecutor(executor);
+        }
+
+        AsyncResult<Void> get()
+        {
+            return result;
         }
     }
 }

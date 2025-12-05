@@ -83,7 +83,8 @@ public class BurnTestTopologyService implements TopologyService, TopologyListene
         @Override
         public void process(Node on, Node.Id from, ReplyContext replyContext)
         {
-            Topology topology = on.topology().active().maybeGlobalForEpoch(epoch);
+            ActiveEpoch e = on.topology().active().ifExists(epoch);
+            Topology topology = e == null ? null : e.all();
             on.reply(from, replyContext, new FetchTopologyReply(topology), null);
         }
 
@@ -180,7 +181,7 @@ public class BurnTestTopologyService implements TopologyService, TopologyListene
     public void onActive(ActiveEpoch active)
     {
         active.epochReady().coordinate.invokeIfSuccess(() -> {
-            topologyUpdates.syncComplete(lookup.apply(self), active.global().nodes(), active.global().epoch());
+            topologyUpdates.syncComplete(lookup.apply(self), active.all().nodes(), active.all().epoch());
         });
     }
 

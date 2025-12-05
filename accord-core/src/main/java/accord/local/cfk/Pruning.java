@@ -534,15 +534,15 @@ public class Pruning
     static TxnInfo[] removeRedundantById(TxnInfo[] byId, boolean hasRedundantLoadingPruned, QuickBounds prevBounds, QuickBounds newBounds, boolean expectUpToDate)
     {
         TxnId newAppliedBefore = appliedBefore(newBounds);
-        TxnId newRedundantBefore = redundantBefore(newBounds);
+        TxnId newGcBefore = redundantBefore(newBounds);
         TxnId newReadyAt = readyAt(newBounds);
-        TxnId prevRedundantBefore = redundantBefore(prevBounds);
+        TxnId prevGcBefore = redundantBefore(prevBounds);
         TxnId prevReadyAt = readyAt(prevBounds);
-        Invariants.requireArgument(newRedundantBefore.compareTo(prevRedundantBefore) >= 0, "Expect new RedundantBefore.Entry locallyAppliedOrInvalidatedBefore to be ahead of existing one");
-        Invariants.requireArgument(prevReadyAt == null || newRedundantBefore.compareTo(prevReadyAt) >= 0 || (newReadyAt != null && newReadyAt.compareTo(prevReadyAt) >= 0), "Expect new RedundantBefore.Entry readyAt to be ahead of existing one");
+        Invariants.requireArgument(newGcBefore.compareTo(prevGcBefore) >= 0, "Expect new RedundantBefore.Entry gcBefore to be ahead of existing one");
+        Invariants.requireArgument(prevReadyAt == null || newGcBefore.compareTo(prevReadyAt) >= 0 || (newReadyAt != null && newReadyAt.compareTo(prevReadyAt) >= 0), "Expect new RedundantBefore.Entry readyAt to be ahead of existing one");
 
         TxnInfo[] newById = byId;
-        int pos = insertPos(byId, newRedundantBefore);
+        int pos = insertPos(byId, newGcBefore);
         int appliedPos = Arrays.binarySearch(byId, pos, byId.length, newAppliedBefore);
         if (appliedPos < 0) appliedPos = -1 - appliedPos;
         if (pos != 0 || appliedPos != 0 || hasRedundantLoadingPruned)
@@ -603,7 +603,7 @@ public class Pruning
                 TxnInfo txn = newById[i];
                 TxnId[] missing = txn.missing();
                 if (missing == NO_TXNIDS) continue;
-                missing = removeRedundantMissing(missing, newRedundantBefore, newAppliedBefore, newAppliedBeforeIndex, newById);
+                missing = removeRedundantMissing(missing, newGcBefore, newAppliedBefore, newAppliedBeforeIndex, newById);
                 newById[i] = txn.withMissing(missing);
             }
         }

@@ -21,7 +21,6 @@ package accord.burn;
 import accord.api.AsyncExecutor;
 import accord.local.Node;
 import accord.primitives.Ranges;
-import accord.primitives.TxnId;
 import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.MessageTask;

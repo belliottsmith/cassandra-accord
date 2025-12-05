@@ -42,7 +42,6 @@ import accord.local.Node.Id;
 import accord.local.TimeService;
 import accord.primitives.Ranges;
 import accord.primitives.TxnId;
-import accord.topology.Topologies.SelectNodeOwnership;
 import accord.topology.TopologyCollector.BestFastPath;
 import accord.topology.TopologyCollector.Simple;
 import accord.topology.TopologyCollector.SupportsPrivilegedFastPath;
@@ -78,7 +77,7 @@ public class TopologyManager
     }
 
     final TopologySorter.Supplier sorter;
-    final Simple collector;
+    final Simple liveCollector, allCollector;
     final BestFastPath bestFastPath;
     final SupportsPrivilegedFastPath supportsPrivilegedFastPath;
     final Node node;
@@ -92,7 +91,8 @@ public class TopologyManager
     public TopologyManager(TopologySorter.Supplier sorter, Node node, TopologyService topologyService, TimeService time, Timeouts timeouts)
     {
         this.sorter = sorter;
-        this.collector = new Simple(sorter, SelectNodeOwnership.SHARE);
+        this.liveCollector = new Simple(sorter, SelectShards.LIVE);
+        this.allCollector = new Simple(sorter, SelectShards.ALL);
         this.bestFastPath = new BestFastPath(node.id());
         this.supportsPrivilegedFastPath = new SupportsPrivilegedFastPath(node.id());
         this.node = node;
@@ -128,26 +128,24 @@ public class TopologyManager
 
     private void onEpochClosed(Ranges ranges, long epoch, @Nullable TxnId txnId)
     {
-        Topology topology;
+        Topology topology = null;
         synchronized (this)
         {
-            if (txnId == null)
+            ActiveEpoch e = active.ifExists(epoch);
+            if (txnId != null)
             {
-                topology = active.maybeGlobalForEpoch(epoch);
-            }
-            else
-            {
-                ActiveEpoch e = active.ifExists(epoch);
                 if (e != null)
                 {
                     ranges = ranges.without(e.addedRanges);
                     if (ranges.isEmpty())
                         return;
                 }
-
-                --epoch;
-                topology = active.maybeGlobalForEpoch(epoch);
+                e = active.ifExists(--epoch);
             }
+
+            if (e != null)
+                topology = e.all();
+
             if (epoch > active.currentEpoch)
                 ranges = pending.closed(ranges, epoch);
             ranges = active.closed(ranges, epoch);
@@ -174,28 +172,24 @@ public class TopologyManager
         Topology topology = null;
         synchronized (this)
         {
-            if (txnId == null)
+            ActiveEpoch e = active.ifExists(epoch);
+            if (txnId != null)
             {
-                topology = active.maybeGlobalForEpoch(epoch);
-            }
-            else
-            {
-                ActiveEpoch e = active.ifExists(epoch);
                 if (e != null)
                 {
                     ranges = ranges.without(e.addedRanges);
                     if (ranges.isEmpty())
                         return;
-
-                    topology = active.maybeGlobalForEpoch(epoch);
                 }
 
-                if (topology == null || notPendingRemoval(ranges, topology))
-                {
-                    --epoch;
-                    topology = active.maybeGlobalForEpoch(epoch);
-                }
+                // if we're retiring only ranges that are no longer live, we can retire the declaration epoch; otherwise we only retire the prior epoch
+                if (e == null || e.live.ranges.intersects(ranges))
+                    e = active.ifExists(--epoch);
             }
+
+            if (e != null)
+                topology = e.all;
+
             if (epoch > active.currentEpoch)
                 ranges = pending.retired(ranges, epoch);
             ranges = active.retired(ranges, epoch);
@@ -205,15 +199,6 @@ public class TopologyManager
             for (TopologyListener listener : listeners)
                 listener.onEpochRetired(ranges, epoch, topology);
         }
-    }
-
-    private boolean notPendingRemoval(Ranges ranges, Topology topology)
-    {
-        return topology.foldlWithDefault(ranges, (shard, p, v, i) -> {
-            if (shard == null || !shard.is(Shard.Flag.PENDING_REMOVAL))
-                return Boolean.TRUE;
-            return v;
-        }, null, null, Boolean.FALSE);
     }
 
     public synchronized void truncateTopologiesUntil(long epoch)
@@ -257,6 +242,12 @@ public class TopologyManager
         return current().epoch;
     }
 
+    @VisibleForImplementation
+    public synchronized long pendingEpoch()
+    {
+        return pending.maxEpoch();
+    }
+
     // TODO (desired): add tests for epoch GC and tracking
     @VisibleForImplementation
     public long firstNonEmpty()
@@ -298,9 +289,11 @@ public class TopologyManager
         synchronized (this)
         {
             long epoch = topology.epoch;
-            if (epoch <= active.currentEpoch)
+            // if active is empty, treat the earliest pending epoch as our low bound to avoid race conditions where we begin updating active but discover an earlier epoch
+            long currentEpoch = !active.isEmpty() ? active.currentEpoch : !pending.isEmpty() ? pending.atIndex(0).epoch - 1 : 0;
+            if (epoch <= currentEpoch)
             {
-                logger.debug("Ignoring topology for epoch {} which is behind our latest epoch {}", epoch, active.currentEpoch);
+                logger.debug("Ignoring topology for epoch {} which is behind our latest epoch {}", epoch, currentEpoch);
                 return;
             }
 
@@ -366,14 +359,14 @@ public class TopologyManager
                     System.arraycopy(prev.epochs, 0, next, 1, prev.epochs.length);
                     next[0] = active;
 
-                    if (!prev.isEmpty() && !prev.epochs[0].global.hardRemoved.containsAll(topology.hardRemoved))
+                    if (!prev.isEmpty() && !prev.epochs[0].all.hardRemoved.containsAll(topology.hardRemoved))
                     {
                         IdentityHashMap<Shard, Shard> cache = new IdentityHashMap<>();
                         for (int i = next.length - 1 ; i >= 0 ; --i)
                         {
                             ActiveEpoch e = next[i];
-                            Topology newGlobal = next[i].global.withHardRemoved(topology.hardRemoved, cache);
-                            if (newGlobal != e.global)
+                            Topology newGlobal = next[i].all.withHardRemoved(topology.hardRemoved, cache);
+                            if (newGlobal != e.all)
                             {
                                 next[i] = new ActiveEpoch(node.id(), newGlobal, e.shardQuorumReady, e.receivedNodeReady, e.quorumReadyTracker,
                                                           e.addedRanges, e.removedRanges, e.epochReady(), e.quorumReady(), e.closed(), e.retired());
@@ -439,6 +432,7 @@ public class TopologyManager
             fetch = pendingEpoch.fetching == null;
         }
 
+        node.agent().systemEvents().onWaitingForEpoch(epoch);
         AsyncChain<Void> result = pendingEpoch.whenActive().chainImmediatelyElse(ifAsync);
         if (fetch)
         {
@@ -492,10 +486,14 @@ public class TopologyManager
         // synchronized for state.ready visibility
         synchronized (this)
         {
-            if (active.hasEpoch(epoch))
+            if (active.hasAtLeastEpoch(epoch))
+            {
+                if (!active.hasEpoch(epoch))
+                    return get.apply(EpochReady.done(epoch));
                 return get.apply(active.getKnown(epoch).epochReady());
+            }
 
-            return pending.getOrCreate(epoch).whenActive().flatMap(r -> get.apply(active.epochReady(epoch)));
+            return pending.getOrCreate(epoch).whenActive().get().flatMap(r -> get.apply(active.epochReady(epoch)));
         }
     }
 
