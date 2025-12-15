@@ -1044,12 +1044,11 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return update.bootstrap;
     }
 
-    public synchronized void shutdown()
+    public void shutdown()
     {
         for (ShardHolder shard : current.shards)
             shard.store.shutdown();
     }
-
 
     @Override
     public AsyncExecutor someExecutor()

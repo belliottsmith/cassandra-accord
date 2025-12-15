@@ -710,7 +710,7 @@ public class Commands
         @Override public String reason() { return "Post Apply"; }
     }
 
-    public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, Command.Executed command)
+    public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, Command command)
     {
         // TODO (required): make sure we are correctly handling (esp. C* side with validation logic) executing a transaction
         //  that was pre-bootstrap for some range (so redundant and we may have gone ahead of), but had to be executed locally
@@ -720,9 +720,17 @@ public class Commands
         //noinspection DataFlowIssue
         safeStore = safeStore; // disable reuse
         Participants<?> executes = command.participants().stillExecutes(); // including any keys we aren't writing
-        return command.writes()
-                      .apply(safeStore, executes, command.partialTxn())
-                      .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, false));
+        if (executes.isEmpty())
+        {
+            postApply(safeStore, txnId, false);
+            return AsyncChains.success(null);
+        }
+        else
+        {
+            return command.writes()
+                          .apply(safeStore, executes, command.partialTxn())
+                          .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, false));
+        }
     }
 
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, boolean alwaysNotifyListeners, boolean notifyWaitingOn)

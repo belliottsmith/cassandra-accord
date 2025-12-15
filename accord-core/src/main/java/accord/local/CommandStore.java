@@ -115,6 +115,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
     }
 
+    // TODO (required): we only REMOVE ranges now, so it should be possible to simplify this
     public static class EpochUpdateHolder extends AtomicReference<EpochUpdate>
     {
         // TODO (desired): can better encapsulate by accepting only the newRangesForEpoch and deriving the add/remove ranges
@@ -371,7 +372,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     protected void unsafeUpsertRedundantBefore(RedundantBefore addRedundantBefore)
     {
-        redundantBefore = RedundantBefore.merge(redundantBefore, addRedundantBefore);
+        unsafeSetRedundantBefore(RedundantBefore.merge(redundantBefore, addRedundantBefore));
     }
 
     @VisibleForTesting
@@ -883,7 +884,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         TxnId clearWaitingBefore = redundantBefore.minShardAndLocallyAppliedBefore();
         TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.quorumBefore);
         progressLog.clearBefore(safeStore, clearWaitingBefore, clearAllBefore);
-        listeners.clearBefore(this, clearWaitingBefore);
+        listeners.clearBefore(clearWaitingBefore);
     }
 
     @VisibleForTesting

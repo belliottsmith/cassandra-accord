@@ -18,11 +18,14 @@
 
 package accord.impl;
 
+import java.util.Objects;
+
+import javax.annotation.Nullable;
+
 import accord.api.Journal;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
-import accord.local.PreLoadContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -42,13 +45,14 @@ import static accord.primitives.Txn.Kind.Write;
 
 public abstract class AbstractReplayer implements Journal.Replayer
 {
-    final RedundantBefore redundantBefore;
-    final TxnId minReplay;
+    public final RedundantBefore redundantBefore;
+    public final TxnId minReplay;
 
-    protected AbstractReplayer(RedundantBefore redundantBefore)
+    protected AbstractReplayer(CommandStore commandStore, @Nullable TxnId minReplay)
     {
-        this.redundantBefore = redundantBefore;
-        this.minReplay = TxnId.noneIfNull(redundantBefore.foldl((b, v) -> TxnId.nonNullOrMin(v, TxnId.min(b.maxBound(LOCALLY_DURABLE_TO_DATA_STORE), b.maxBound(LOCALLY_DURABLE_TO_COMMAND_STORE))), null, ignore -> false));
+        this.redundantBefore = commandStore.unsafeGetRedundantBefore();
+        Invariants.require(redundantBefore.ranges(Objects::nonNull).containsAll(commandStore.unsafeGetRangesForEpoch().all()));
+        this.minReplay = TxnId.noneIfNull(redundantBefore.foldl((b, v) -> TxnId.nonNullOrMin(v, b.maxBoundBoth(LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE)), minReplay, ignore -> false));
     }
 
     protected boolean maybeShouldReplay(TxnId txnId)
@@ -60,7 +64,7 @@ public abstract class AbstractReplayer implements Journal.Replayer
     {
         Participants<?> search = participants.route();
         if (search == null) search = participants.hasTouched();
-        return redundantBefore.foldlWithDefault(search, (b, v, id) -> v || b.maxBoundBoth(LOCALLY_DURABLE_TO_COMMAND_STORE, LOCALLY_DURABLE_TO_DATA_STORE).compareTo(id) <= 0, RedundantBefore.Bounds.NONE, false, txnId, i -> i);
+        return redundantBefore.foldl(search, (b, v, id) -> v || b.maxBoundBoth(LOCALLY_DURABLE_TO_COMMAND_STORE, LOCALLY_DURABLE_TO_DATA_STORE).compareTo(id) <= 0, false, txnId, i -> i);
     }
 
     protected void initialiseState(SafeCommandStore safeStore, TxnId txnId)
@@ -76,16 +80,10 @@ public abstract class AbstractReplayer implements Journal.Replayer
             {
                 if (command.txnId().is(Write))
                 {
-                    CommandStore unsafeStore = safeStore.commandStore();
-                    Participants<?> executes = command.participants().stillExecutes();
-                    command.writes()
-                           .apply(safeStore, executes, command.partialTxn())
-                           .invoke(() -> unsafeStore.chain(PreLoadContext.contextFor(txnId, "Replay"), ss -> {
-                               Commands.postApply(ss, txnId, true);
-                           }))
-                           .begin(safeStore.agent());
+                    Commands.applyChain(safeStore, command)
+                            .begin(safeStore.agent());
                 }
-                else Invariants.expect(command.hasBeen(Applied));
+                else Invariants.expect(command.hasBeen(Applied), "%s is Applying but is not a Write transaction", txnId);
             }
         }
         safeCommand.update(safeStore, safeCommand.current(), true);

@@ -107,6 +107,17 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         return accumulator;
     }
 
+    public <V2> V2 foldlWithDefault(BiFunction<V, V2, V2> reduce, V ifNull, V2 accumulator, Predicate<V2> terminate)
+    {
+        for (V value : values)
+        {
+            accumulator = reduce.apply(value == null ? ifNull : value, accumulator);
+            if (terminate.test(accumulator))
+                break;
+        }
+        return accumulator;
+    }
+
     public <V2> V2 foldlWithBounds(QuadFunction<V, V2, K, K, V2> fold, V2 accumulator, Predicate<V2> terminate)
     {
         for (int i = 0 ; i < values.length ; ++i)

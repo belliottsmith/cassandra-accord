@@ -123,6 +123,9 @@ public class DefaultLocalListeners implements LocalListeners
 
     /*
      * A list that allows duplicates and sorts and removes duplicates on notify and when the list would have to resize
+     * TODO (expected): save time and space by:
+     *      - encoding SaveStatus as byte
+     *      - encoding listeners as any of: single TxnId, array of TxnId (for small size), btree for a large collection
      */
     static class TxnListeners extends TxnId implements PreLoadContext
     {
@@ -158,13 +161,13 @@ public class DefaultLocalListeners implements LocalListeners
             return c;
         }
 
-        void notify(NotifySink notifySink, SafeCommandStore safeStore, SafeCommand safeCommand)
+        void notify(DefaultLocalListeners owner, SafeCommandStore safeStore, SafeCommand safeCommand)
         {
             trim();
             for (int i = 0 ; i < count ; ++i)
             {
                 TxnId listenerId = listeners[i];
-                notifySink.notify(safeStore, safeCommand, listenerId);
+                owner.notifySink.notify(safeStore, safeCommand, listenerId);
             }
         }
 
@@ -173,6 +176,9 @@ public class DefaultLocalListeners implements LocalListeners
          */
         private int trim()
         {
+            if (count == 0)
+                return 0;
+
             Arrays.sort(listeners, 0, count);
             int removedCount = 0;
             for (int i = 1 ; i < count ; ++i)
@@ -487,7 +493,7 @@ public class DefaultLocalListeners implements LocalListeners
         {
             TxnListeners notify = BTree.findByIndex(txnListeners, start);
             Invariants.require(txnId.equals(notify));
-            notify.notify(notifySink, safeStore, safeCommand);
+            notify.notify(this, safeStore, safeCommand);
             if (this.txnListeners != txnListeners)
             {
                 // listener registrations were changed by this listener's notify invocation, so reset our cursor
@@ -519,7 +525,7 @@ public class DefaultLocalListeners implements LocalListeners
     }
 
     @Override
-    public void clearBefore(CommandStore commandStore, TxnId clearBefore)
+    public void clearBefore(TxnId clearBefore)
     {
         while (!BTree.isEmpty(txnListeners))
         {
@@ -532,7 +538,7 @@ public class DefaultLocalListeners implements LocalListeners
                 Command command = safeCommand.current();
                 SaveStatus saveStatus = command.saveStatus();
                 Invariants.require(saveStatus.compareTo(entry.await) >= 0 || command.participants().stillOwns().isEmpty());
-                entry.notify(notifySink, safeStore, safeCommand);
+                entry.notify(this, safeStore, safeCommand);
             }, commandStore.agent());
             txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);
         }
@@ -598,8 +604,8 @@ public class DefaultLocalListeners implements LocalListeners
         return () -> {
             return new Iterator<>()
             {
-                Object[] snapshot = txnListeners;
-                Iterator<TxnListeners> iter = BTree.slice(snapshot, TxnListeners::compareListeners, BTree.Dir.ASC);
+                Object[] snapshot;
+                Iterator<TxnListeners> iter;
                 TxnListeners cur;
                 TxnId[] buffer = TxnId.NO_TXNIDS;
                 int bufferIndex, bufferCount, maxBufferCount;
@@ -630,6 +636,7 @@ public class DefaultLocalListeners implements LocalListeners
 
                         cur = iter.next();
                         bufferIndex = 0;
+                        cur.trim();
                         bufferCount = cur.count;
                         if (bufferCount == 0)
                             continue;
