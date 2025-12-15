@@ -224,6 +224,8 @@ extends SafeCommandStore
     @Override
     public final void upsertRedundantBefore(RedundantBefore addRedundantBefore)
     {
+        // TODO (required): this is potentially unsafe: if the update is not persisted for some reason (due to some later exception)
+        //   we can continue with a stale redundantBefore
         // TODO (expected): fix RedundantBefore sorting issue and switch to upsert mode
         ensureFieldUpdates().newRedundantBefore = RedundantBefore.merge(redundantBefore(), addRedundantBefore);
         unsafeUpsertRedundantBefore(addRedundantBefore);

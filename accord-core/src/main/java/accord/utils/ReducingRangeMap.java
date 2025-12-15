@@ -22,6 +22,8 @@ import accord.primitives.*;
 
 import java.util.Arrays;
 import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.IntFunction;
 import java.util.function.Predicate;
 
 import static accord.utils.SortedArrays.Search.FAST;
@@ -487,5 +489,13 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         if (count < ranges.length)
             ranges = Arrays.copyOf(ranges, count);
         return Ranges.ofSortedAndDeoverlapped(ranges);
+    }
+
+    public <V2> ReducingRangeMap<V2> map(Function<V, V2> map, IntFunction<V2[]> allocator)
+    {
+        V2[] output = allocator.apply(values.length);
+        for (int i = 0 ; i < values.length ; ++i)
+            output[i] = map.apply(values[i]);
+        return new ReducingRangeMap<>(inclusiveEnds, starts, output);
     }
 }

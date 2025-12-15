@@ -1228,7 +1228,8 @@ public abstract class InMemoryCommandStore extends CommandStore
 
         private CommandReplayer(InMemoryCommandStore commandStore)
         {
-            super(commandStore.unsafeGetRedundantBefore());
+            // TODO (required): we shouldn't be providing TxnId.NONE here, we need to standardise on querying journal for data missing from InMemoryCommandStore
+            super(commandStore, TxnId.NONE);
             this.commandStore = commandStore;
         }
 
