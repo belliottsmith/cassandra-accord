@@ -144,11 +144,13 @@ class Bootstrap
             CommandStore commandStore = safeStore.commandStore();
             CoordinateSyncPoint.exclusive(node, globalSyncId, commitRanges)
                                .flatMap(success -> commandStore.chain((PreLoadContext.Empty) () -> "Mark Bootstrapping", safeStore0 -> {
+
                                    // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
-                                   Bootstrap.this.commandStore.markBootstrapping(safeStore0, globalSyncId, commitRanges);
+                                   if (!valid.isEmpty())
+                                       commandStore.markBootstrapping(safeStore0, globalSyncId, valid);
                                    return success;
                                }))
-                               .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> Bootstrap.this.commandStore.chain((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
+                               .flatMap(syncPoint -> node.withEpochAtLeast(epoch, null, () -> commandStore.chain((PreLoadContext.Empty) () -> "Start Bootstrap Fetch", safeStore1 -> {
                                    if (valid.isEmpty()) // we've lost ownership of the range
                                        return AsyncResults.success(Ranges.EMPTY);
                                    return fetch = safeStore1.dataStore().fetch(node, safeStore1, valid, syncPoint, this, Image);

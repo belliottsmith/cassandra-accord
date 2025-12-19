@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.RoutingKey;
+import accord.api.VisibleForImplementation;
 import accord.local.CommandSummaries;
 import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
@@ -48,8 +49,6 @@ import javax.annotation.Nullable;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.local.CommandSummaries.SummaryStatus.INVALIDATED;
-import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
-import static accord.local.CommandSummaries.TestStartedAt.STARTED_AFTER;
 import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
 import static accord.local.durability.DurabilityService.SyncLocal.Self;
 import static accord.local.durability.DurabilityService.SyncRemote.NoRemote;
@@ -63,6 +62,7 @@ import static accord.utils.Invariants.illegalState;
  * Facility for finding existing key transactions that can serve as a barrier transaction,
  * ensuring all reads/writes after some point in the txn log have been executed.
  */
+@VisibleForImplementation
 public class KeyBarriers
 {
     @SuppressWarnings("unused")
@@ -84,7 +84,7 @@ public class KeyBarriers
         }
     }
 
-    public static AsyncResult<Found> find(Node node, Timestamp min, RoutingKey key, SyncLocal syncLocal, SyncRemote syncRemote)
+    public static AsyncResult<Found> find(Node node, TxnId min, RoutingKey key, SyncLocal syncLocal, SyncRemote syncRemote)
     {
         Find find = new Find(min, key, syncLocal, syncRemote);
         node.commandStores().mapReduceConsume(min.epoch(), Long.MAX_VALUE, find);
@@ -98,16 +98,16 @@ public class KeyBarriers
      * For Applied we can return success immediately with the executeAt epoch. For PreApplied we can add
      * a listener for when it transitions to Applied and then return success.
      */
-    static class Find extends MapReduceConsumeCommandStores<RoutingKeys, Found> implements CommandSummaries.AllCommandVisitor
+    static class Find extends MapReduceConsumeCommandStores<RoutingKeys, Found> implements CommandSummaries.SupersedingCommandVisitor
     {
         final AsyncResults.SettableByCallback<Found> result = new AsyncResults.SettableByCallback<>();
-        final Timestamp min;
+        final TxnId min;
         final RoutingKey find;
         final SyncLocal syncLocal;
         final SyncRemote syncRemote;
         Found found;
 
-        Find(Timestamp min, RoutingKey find, SyncLocal syncLocal, SyncRemote syncRemote)
+        Find(TxnId min, RoutingKey find, SyncLocal syncLocal, SyncRemote syncRemote)
         {
             super(RoutingKeys.of(find));
             this.min = min;
@@ -122,7 +122,7 @@ public class KeyBarriers
             // Barriers are trying to establish that committed transactions are applied before the barrier (or in this case just minEpoch)
             // so all existing transaction types should ensure that at this point. An earlier txnid may have an executeAt that is after
             // this barrier or the transaction we listen on and that is fine
-            safeStore.visit(scope, TxnId.NONE, Ws, STARTED_AFTER, min, IGNORE, this);
+            safeStore.visit(scope, min, Ws, this);
             return found;
         }
 

@@ -44,10 +44,12 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
 import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
+import static accord.api.ProtocolModifiers.Toggles.syncPointsTrackUnstableMediumPathDependencies;
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
@@ -63,40 +65,78 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
 {
     public static class SerializerSupport
     {
-        public static Accept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps, boolean isPartialAccept)
+        public static Accept create(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps, int acceptFlags)
         {
-            return new Accept(txnId, scope, waitForEpoch, minEpoch, kind, ballot, executeAt, partialDeps, isPartialAccept);
+            return new Accept(txnId, scope, waitForEpoch, minEpoch, kind, ballot, executeAt, partialDeps, acceptFlags);
         }
     }
 
     public enum Kind { SLOW, MEDIUM }
 
+    public enum AcceptFlags
+    {
+        IS_PARTIAL,
+
+        /**
+         * SyncPoints don't need to compute any deps in the Accept phase,
+         * as any dependencies they did not witness in the preaccept phase cannot reach consensus
+         */
+        NO_CALCULATE_DEPS,
+
+        /**
+         * See {@link accord.api.ProtocolModifiers.Toggles#filterDuplicateDependenciesFromAcceptReply()}.
+         */
+        NO_FILTER_DEPS;
+
+        public static int encode(TxnId txnId, boolean isPartial)
+        {
+            return (isPartial ? TinyEnumSet.encode(IS_PARTIAL) : 0)
+                   | (txnId.isSyncPoint() && !syncPointsTrackUnstableMediumPathDependencies() ? TinyEnumSet.encode(NO_CALCULATE_DEPS) : 0)
+                   | (filterDuplicateDependenciesFromAcceptReply() ? 0 : TinyEnumSet.encode(NO_FILTER_DEPS));
+        }
+
+        public static boolean isPartial(int encoded)
+        {
+            return TinyEnumSet.contains(encoded, IS_PARTIAL);
+        }
+
+        public static boolean filterDeps(int encoded)
+        {
+            return !TinyEnumSet.contains(encoded, NO_FILTER_DEPS);
+        }
+
+        public static boolean calculateDeps(int encoded)
+        {
+            return !TinyEnumSet.contains(encoded, NO_CALCULATE_DEPS);
+        }
+    }
+
     public final Kind kind;
     public final Ballot ballot;
     public final Timestamp executeAt;
     private PartialDeps partialDeps;
-    public final boolean isPartialAccept;
+    public final int acceptFlags;
 
     public PartialDeps partialDeps() { return partialDeps; }
 
-    public Accept(Id to, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Deps deps, boolean isPartialAccept)
+    public Accept(Id to, Topologies topologies, Kind kind, Ballot ballot, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Deps deps, int acceptFlags)
     {
         super(to, topologies, txnId, route);
         this.kind = kind;
         this.ballot = ballot;
         this.executeAt = executeAt;
         this.partialDeps = deps.intersecting(scope);
-        this.isPartialAccept = isPartialAccept;
+        this.acceptFlags = acceptFlags;
     }
 
-    private Accept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps, boolean isPartialAccept)
+    private Accept(TxnId txnId, Route<?> scope, long waitForEpoch, long minEpoch, Kind kind, Ballot ballot, Timestamp executeAt, PartialDeps partialDeps, int acceptFlags)
     {
         super(txnId, scope, waitForEpoch, minEpoch);
         this.kind = kind;
         this.ballot = ballot;
         this.executeAt = executeAt;
         this.partialDeps = partialDeps;
-        this.isPartialAccept = isPartialAccept;
+        this.acceptFlags = acceptFlags;
     }
 
     @Override
@@ -121,7 +161,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
                 Participants<?> hasDeps = null;
                 Deps deps = null;
 
-                if (command.known().is(DepsKnown) && (isPartialAccept || notOwner))
+                if (command.known().is(DepsKnown) && (isPartialAccept() || notOwner))
                 {
                     deps = command.partialDeps().asFullUnsafe();
                     hasDeps = command.participants().stillTouches();
@@ -131,12 +171,12 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
                 if (superseding.compareTo(ballot) <= 0)
                     superseding = null;
 
-                boolean calculateDeps = isPartialAccept;
+                boolean calculateDeps = isPartialAccept() && calculateDeps();
                 if (command.saveStatus() == SaveStatus.Vestigial)
                 {
                     superseding = null;
                     outcome = Success;
-                    calculateDeps = true;
+                    calculateDeps = calculateDeps();
                 }
 
                 if (calculateDeps)
@@ -156,9 +196,12 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
                     hasDeps = participants.touches();
                 }
 
-                Participants<?> successful = isPartialAccept ? hasDeps : null;
+                Participants<?> successful = isPartialAccept() ? hasDeps : null;
                 if (notOwner && (outcome == Redundant || (hasDeps != null && hasDeps.containsAll(participants.touches()))))
                     outcome = Success;
+
+                if (deps != null && filterDeps())
+                    deps = deps.without(partialDeps);
                 return new AcceptReply(outcome, superseding, successful, deps, command.executeAtIfKnown());
             }
 
@@ -171,21 +214,44 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
             case Success:
                 ExecuteFlags flags;
                 Deps deps;
-                try (DepsCalculator calculator = new DepsCalculator())
+                if (calculateDeps())
                 {
-                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, executeAt, true);
-                    if (deps == null)
-                        return AcceptReply.inThePast(ballot, participants, safeCommand.current());
-                    flags = calculator.executeFlags(txnId);
+                    try (DepsCalculator calculator = new DepsCalculator())
+                    {
+                        deps = calculator.calculate(safeStore, txnId, participants, minEpoch, executeAt, true);
+                        if (deps == null)
+                            return AcceptReply.inThePast(ballot, participants, safeCommand.current());
+                        flags = calculator.executeFlags(txnId);
+                    }
+
+                    Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
+                    if (filterDeps())
+                        deps = deps.without(partialDeps);
+                }
+                else
+                {
+                    flags = ExecuteFlags.none();
+                    deps = Deps.NONE;
                 }
 
-                Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
-                if (filterDuplicateDependenciesFromAcceptReply())
-                    deps = deps.without(partialDeps);
-
-                Participants<?> successful = isPartialAccept ? participants.touches() : null;
+                Participants<?> successful = isPartialAccept() ? participants.touches() : null;
                 return new AcceptReply(successful, deps, flags);
         }
+    }
+
+    private boolean isPartialAccept()
+    {
+        return AcceptFlags.isPartial(acceptFlags);
+    }
+
+    private boolean calculateDeps()
+    {
+        return AcceptFlags.calculateDeps(acceptFlags);
+    }
+
+    private boolean filterDeps()
+    {
+        return AcceptFlags.filterDeps(acceptFlags);
     }
 
     @Override
@@ -218,7 +284,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
     @Override
     public LoadKeysFor loadKeysFor()
     {
-        return LoadKeysFor.READ_WRITE;
+        return calculateDeps() ? LoadKeysFor.READ_WRITE : LoadKeysFor.WRITE;
     }
 
     @Override
@@ -374,6 +440,12 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
         }
     }
 
+    @Override
+    public Timestamp executeAt()
+    {
+        return executeAt;
+    }
+
     public static class NotAccept extends ParticipantsRequest<Participants<?>, AcceptReply>
     {
         public final Status status;
@@ -436,7 +508,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
         @Override
         public String reason()
         {
-            return status + "{" + txnId + '}';
+            return status.toString();
         }
     }
 }

@@ -848,7 +848,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Txn.Kind.Kinds testKind, TestStartedAt testStartedAt, Timestamp testStartAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit)
+        public boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Txn.Kind.Kinds testKind, SupersedingCommandVisitor visit)
         {
             return false;
         }

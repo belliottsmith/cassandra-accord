@@ -60,9 +60,9 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
     public static class SerializerSupport
     {
-        public static LatestDeps create(boolean inclusiveEnds, RoutingKey[] starts, LatestEntry[] values)
+        public static LatestDeps create(RoutingKey[] starts, LatestEntry[] values)
         {
-            return new LatestDeps(inclusiveEnds, starts, values);
+            return new LatestDeps(starts, values);
         }
     }
 
@@ -287,12 +287,12 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
     private LatestDeps()
     {
-        super(false, RoutingKeys.EMPTY_KEYS_ARRAY, new LatestEntry[0]);
+        super(RoutingKeys.EMPTY_KEYS_ARRAY, new LatestEntry[0]);
     }
 
-    private LatestDeps(boolean inclusiveEnds, RoutingKey[] starts, LatestEntry[] values)
+    private LatestDeps(RoutingKey[] starts, LatestEntry[] values)
     {
-        super(inclusiveEnds, starts, values);
+        super(starts, values);
     }
 
     public Deps merge()
@@ -310,7 +310,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         if (participants.isEmpty())
             return new LatestDeps();
 
-        Builder builder = new Builder(participants.get(0).asRange().endInclusive(), participants.size() * 2);
+        Builder builder = new Builder(participants.size() * 2);
         for (int i = 0 ; i < participants.size() ; ++i)
         {
             Range cur = participants.get(i).asRange();
@@ -330,9 +330,9 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
     static class Builder extends AbstractIntervalBuilder<RoutingKey, LatestEntry, LatestDeps>
     {
-        protected Builder(boolean inclusiveEnds, int capacity)
+        protected Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
@@ -350,7 +350,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
         @Override
         protected LatestDeps buildInternal()
         {
-            return new LatestDeps(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new LatestEntry[0]));
+            return new LatestDeps(starts.toArray(new RoutingKey[0]), values.toArray(new LatestEntry[0]));
         }
     }
 
@@ -409,12 +409,12 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
         private Merge(LatestDeps convert)
         {
-            super(convert.inclusiveEnds(), convert.starts, convert(convert.values));
+            super(convert.starts, convert(convert.values));
         }
 
-        private Merge(boolean inclusiveEnds, RoutingKey[] starts, MergeEntry[] values)
+        private Merge(RoutingKey[] starts, MergeEntry[] values)
         {
-            super(inclusiveEnds, starts, values);
+            super(starts, values);
         }
 
         static Merge merge(Merge a, Merge b)
@@ -588,9 +588,9 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
         static class MergeBuilder extends AbstractIntervalBuilder<RoutingKey, MergeEntry, Merge>
         {
-            protected MergeBuilder(boolean inclusiveEnds, int capacity)
+            protected MergeBuilder(int capacity)
             {
-                super(inclusiveEnds, capacity);
+                super(capacity);
             }
 
             @Override
@@ -629,7 +629,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             @Override
             protected Merge buildInternal()
             {
-                return new Merge(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new MergeEntry[0]));
+                return new Merge(starts.toArray(new RoutingKey[0]), values.toArray(new MergeEntry[0]));
             }
         }
     }

@@ -399,20 +399,23 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         }
         else
         {
-            stable.informStableOnceQuorum();
-            if (sendOnlyReadStableMessages())
+            if (!isPrivilegedVoteCommitting)
             {
-                // send additional stable messages to record the transaction outcome
-                Commit.Kind kind = commitKind();
-                if (!candidates.isEmpty())
+                stable.informStableOnceQuorum();
+                if (sendOnlyReadStableMessages())
                 {
-                    for (int i = 0, size = candidates.size() ; i < size ; ++i)
-                        sendStableOnly(candidates.get(i), kind);
-                }
-                if (unstableFastReads != null)
-                {
-                    for (Node.Id to : unstableFastReads)
-                        sendStableOnly(to, kind);
+                    // send additional stable messages to record the transaction outcome
+                    Commit.Kind kind = commitKind();
+                    if (!candidates.isEmpty())
+                    {
+                        for (int i = 0, size = candidates.size() ; i < size ; ++i)
+                            sendStableOnly(candidates.get(i), kind);
+                    }
+                    if (unstableFastReads != null)
+                    {
+                        for (Node.Id to : unstableFastReads)
+                            sendStableOnly(to, kind);
+                    }
                 }
             }
             invokeCallback(null, failure);
@@ -430,9 +433,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     public void onFailure(Id from, Throwable failure)
     {
-        super.onFailure(from, failure);
-        if (isPrivilegedVoteCommitting && from.id == node.id().id)
-            tryFinishOnFailure();
+        if (isPrivilegedVoteCommitting && from.id == node.id().id) finishWithFailure(failure);
+        else super.onFailure(from, failure);
     }
 
     protected CoordinationAdapter<Result> adapter()

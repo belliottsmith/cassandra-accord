@@ -39,6 +39,7 @@ import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableResult;
 
+import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
 
@@ -55,13 +56,52 @@ public class Catchup
             this.durableBefore = durableBefore;
         }
 
-        void register(SafeCommandStore safeStore)
+        boolean register(SafeCommandStore safeStore)
         {
             waitingOn = safeStore.ranges().all().slice(durableBefore.ranges(Objects::nonNull), Minimal);
             updateWaitingOn(safeStore);
 
-            if (waitingOn.isEmpty()) setSuccess(null);
-            else safeStore.register(this);
+            if (!waitingOn.isEmpty())
+            {
+                logger.info("{}: catching-up {}", safeStore.commandStore(), durableBefore.foldlWithBounds(waitingOn, (entry, sb, start, end) -> {
+                    if (sb.length() > 0)
+                        sb.append(", ");
+                    if (start == null || end == null || entry == null)
+                    {
+                        sb.append("??(").append(start).append(',').append(end).append(',').append(entry).append(')');
+                    }
+                    else
+                    {
+                        TxnId txnId = entry.quorumBefore.withoutNonIdentityFlags();
+                        Range range = start.rangeFactory().newRange(start, end);
+                        markWaiting(safeStore, txnId, range);
+                        sb.append(range).append(": ").append(entry.quorumBefore);
+                    }
+                    return sb;
+                }, new StringBuilder(), ignore -> false));
+                safeStore.register(this);
+                return true;
+            }
+            else
+            {
+                done(safeStore);
+                return false;
+            }
+        }
+
+        private static void markWaiting(SafeCommandStore safeStore, TxnId txnId, Range range)
+        {
+            //noinspection DataFlowIssue
+            safeStore = safeStore;
+            PreLoadContext ctx = PreLoadContext.contextFor(txnId, "Catchup");
+            if (safeStore.canExecuteWith(ctx)) safeStore.progressLog().waiting(CanApply, safeStore, safeStore.get(txnId), null, Ranges.of(range), null);
+            else safeStore.commandStore().execute(ctx, safeStore0 -> safeStore0.progressLog().waiting(CanApply, safeStore0, safeStore0.get(txnId), null, Ranges.of(range), null));
+        }
+
+        private void done(SafeCommandStore safeStore)
+        {
+            setSuccess(null);
+            logger.info("{}: fully caught-up with quorums", safeStore.commandStore());
         }
 
         private void updateWaitingOn(SafeCommandStore safeStore)
@@ -106,13 +146,11 @@ public class Catchup
                 return;
 
             updateWaitingOn(safeStore);
-
-            if (!waitingOn.isEmpty())
-                return;
-
-            logger.info("{}: fully caught-up with quorums", safeStore.commandStore());
-            setSuccess(null);
-            safeStore.unregister(this);
+            if (waitingOn.isEmpty())
+            {
+                done(safeStore);
+                safeStore.unregister(this);
+            }
         }
     }
 
@@ -121,9 +159,9 @@ public class Catchup
         return FetchDurableBefore.catchup(node).flatMap(durableBefore -> {
             List<AsyncResult<Void>> results = new CopyOnWriteArrayList<>();
             return node.commandStores().forAll("Catchup", safeStore -> {
-                CommandStoreListener commandStoreListener = new CommandStoreListener(durableBefore);
-                commandStoreListener.register(safeStore);
-                results.add(commandStoreListener);
+                CommandStoreListener listener = new CommandStoreListener(durableBefore);
+                if (listener.register(safeStore))
+                    results.add(listener);
             }).flatMap(ignore -> {
                 List<AsyncResult<Void>> list = new ArrayList<>(results);
                 if (list.isEmpty())

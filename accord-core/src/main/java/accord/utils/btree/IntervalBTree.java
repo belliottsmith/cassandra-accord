@@ -98,12 +98,12 @@ public class IntervalBTree
     /**
      * Apply the accumulation function over all intersecting intervals in the tree
      */
-    public static <Find, Interval, P1, P2, V> V accumulate(Object[] btree, WithIntervalComparators<Find, Interval> comparators, Find find, QuadFunction<P1, P2, Interval, V, V> function, P1 p1, P2 p2, V accumulate)
+    public static <Find, Interval, P1, P2, V> V accumulate(Object[] btree, WithIntervalComparators<? super Find, ? super Interval> comparators, Find find, QuadFunction<P1, P2, Interval, V, V> function, P1 p1, P2 p2, V accumulate)
     {
         if (isLeaf(btree))
         {
-            AsymmetricComparator<Find, Interval> startWithEnd = comparators.startWithEndSeeker();
-            AsymmetricComparator<Find, Interval> endWithStart = comparators.endWithStartSeeker();
+            AsymmetricComparator<? super Find, ? super Interval> startWithEnd = comparators.startWithEndSeeker();
+            AsymmetricComparator<? super Find, ? super Interval> endWithStart = comparators.endWithStartSeeker();
             int keyEnd = getLeafKeyEnd(btree);
             for (int i = 0; i < keyEnd; ++i)
             {
@@ -171,10 +171,10 @@ public class IntervalBTree
         return accumulate;
     }
 
-    private static <Find, Interval, P1, P2, V> V accumulateMaxOnly(int ifChildBefore, int ifKeyBefore, Object[] btree, WithIntervalComparators<Find, Interval> comparators, Find find, QuadFunction<P1, P2, Interval, V, V> function, P1 p1, P2 p2, V accumulate)
+    private static <Find, Interval, P1, P2, V> V accumulateMaxOnly(int ifChildBefore, int ifKeyBefore, Object[] btree, WithIntervalComparators<? super Find, ? super Interval> comparators, Find find, QuadFunction<P1, P2, Interval, V, V> function, P1 p1, P2 p2, V accumulate)
     {
-        AsymmetricComparator<Find, Interval> startWithEnd = comparators.startWithEndSeeker();
-        AsymmetricComparator<Find, Interval> endWithStart = comparators.endWithStartSeeker();
+        AsymmetricComparator<? super Find, ? super Interval> startWithEnd = comparators.startWithEndSeeker();
+        AsymmetricComparator<? super Find, ? super Interval> endWithStart = comparators.endWithStartSeeker();
         if (isLeaf(btree))
         {
             Invariants.require(ifChildBefore == Integer.MAX_VALUE);
@@ -607,7 +607,7 @@ public class IntervalBTree
     /**
      * Build a tree of unknown size, in order.
      */
-    public static <V> FastIntervalTreeBuilder<V> fastBuilder(IntervalComparators<V> comparators)
+    public static <V> FastIntervalTreeBuilder<V> fastBuilder(IntervalComparators<? super V> comparators)
     {
         TinyThreadLocalPool.TinyPool<FastIntervalTreeBuilder<?>> pool = FastIntervalTreeBuilder.POOL.get();
         FastIntervalTreeBuilder<V> builder = (FastIntervalTreeBuilder<V>) pool.poll();

@@ -27,6 +27,8 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.utils.ReducingRangeMap;
 
+import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.api.ProtocolModifiers.RangeSpec.isStartInclusive;
 import static accord.primitives.Known.Definition.DefinitionErased;
 import static accord.primitives.Known.Definition.DefinitionKnown;
 import static accord.primitives.Known.KnownDeps.DepsErased;
@@ -126,9 +128,9 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
 
     public static class SerializerSupport
     {
-        public static KnownMap create(boolean inclusiveEnds, RoutingKey[] ends, MinAndMaxKnown[] values)
+        public static KnownMap create(RoutingKey[] ends, MinAndMaxKnown[] values)
         {
-            return new KnownMap(inclusiveEnds, ends, values);
+            return new KnownMap(ends, values);
         }
     }
 
@@ -141,14 +143,14 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
         this.validForAll = Known.Nothing;
     }
 
-    public KnownMap(boolean inclusiveEnds, RoutingKey[] starts, MinAndMaxKnown[] values)
+    public KnownMap(RoutingKey[] starts, MinAndMaxKnown[] values)
     {
-        this(inclusiveEnds, starts, values, Known.Nothing);
+        this(starts, values, Known.Nothing);
     }
 
-    private KnownMap(boolean inclusiveEnds, RoutingKey[] starts, MinAndMaxKnown[] values, Known validForAll)
+    private KnownMap(RoutingKey[] starts, MinAndMaxKnown[] values, Known validForAll)
     {
-        super(inclusiveEnds, starts, values);
+        super(starts, values);
         this.validForAll = validForAll;
     }
 
@@ -199,7 +201,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
         }
 
         if (i == size())
-            return new KnownMap(inclusiveEnds(), starts, values, validForAll);
+            return new KnownMap(starts, values, validForAll);
 
         RoutingKey[] newStarts = new RoutingKey[size() + 1];
         MinAndMaxKnown[] newValues = new MinAndMaxKnown[size()];
@@ -222,7 +224,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
             newValues = Arrays.copyOf(newValues, count);
             newStarts = Arrays.copyOf(newStarts, count + 1);
         }
-        return new KnownMap(inclusiveEnds(), newStarts, newValues, validForAll);
+        return new KnownMap(newStarts, newValues, validForAll);
     }
 
     public boolean hasAnyFullyTruncated(Routables<?> routables)
@@ -303,7 +305,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
                         return prev.slice(-1 - i, prev.size());
 
                     if (prev.domain() == Routable.Domain.Key)
-                        return prev.slice(i + (inclusiveEnds() ? 1 : 0), prev.size());
+                        return prev.slice(i + (isEndInclusive() ? 1 : 0), prev.size());
 
                     Range r = prev.get(i).asRange();
                     prev = prev.slice(i, prev.size());
@@ -317,7 +319,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
                         return prev.slice(0, -1 - i);
 
                     if (prev.domain() == Routable.Domain.Key)
-                        return prev.slice(0, i + (inclusiveStarts() ? 0 : 1));
+                        return prev.slice(0, i + (isStartInclusive() ? 0 : 1));
 
                     Range r = prev.get(i).asRange();
                     prev = prev.slice(0, i);
@@ -331,15 +333,15 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
 
     public static class Builder extends AbstractBoundariesBuilder<RoutingKey, MinAndMaxKnown, KnownMap>
     {
-        public Builder(boolean inclusiveEnds, int capacity)
+        public Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
         protected KnownMap buildInternal()
         {
-            return new KnownMap(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new MinAndMaxKnown[0]));
+            return new KnownMap(starts.toArray(new RoutingKey[0]), values.toArray(new MinAndMaxKnown[0]));
         }
     }
 }

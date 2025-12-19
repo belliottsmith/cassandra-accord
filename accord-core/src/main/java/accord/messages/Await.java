@@ -471,19 +471,6 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
             return node.commandStores().mapReduceConsume(txnId.epoch(), Long.MAX_VALUE, this);
         }
 
-        @Nullable
-        @Override
-        public TxnId primaryTxnId()
-        {
-            return txnId;
-        }
-
-        @Override
-        public String reason()
-        {
-            return "AwaitComplete{" + newStatus + ',' + txnId + '}';
-        }
-
         @Override
         protected void acceptInternal(Reply reply, Throwable failure)
         {

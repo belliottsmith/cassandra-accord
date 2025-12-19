@@ -363,21 +363,9 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
         }
 
         @Override
-        public TxnId primaryTxnId()
-        {
-            return txnId;
-        }
-
-        @Override
         public String reason()
         {
-            return "Commit Invalidate";
-        }
-
-        @Override
-        public long waitForEpoch()
-        {
-            return waitForEpoch;
+            return "CommitInvalidate";
         }
 
         @Override

@@ -324,7 +324,7 @@ public class DurabilityQueueTest
         private ReducingRangeMap<DurabilityLevel> result(SortedArrayList<Node.Id> including, Topology topology, MinimalSyncPoint syncPoint)
         {
             SyncLocal syncLocal = including.contains(self) ? Self : NoLocal;
-            ReducingRangeMap.Builder<DurabilityLevel> builder = new ReducingRangeMap.Builder<>(syncPoint.route.get(0).endInclusive(), topology.size());
+            ReducingRangeMap.Builder<DurabilityLevel> builder = new ReducingRangeMap.Builder<>(topology.size());
             for (Shard shard : topology.shards())
             {
                 SortedArrayList<Node.Id> shardIncluding = shard.nodes.intersecting(including);

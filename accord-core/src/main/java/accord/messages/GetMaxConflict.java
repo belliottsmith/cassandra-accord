@@ -96,12 +96,6 @@ public class GetMaxConflict extends RouteRequest.WithUnsynced<GetMaxConflict.Get
         return null;
     }
 
-    @Override
-    public String reason()
-    {
-        return toString();
-    }
-
     public static class GetMaxConflictOk implements Reply
     {
         public final Timestamp maxConflict;

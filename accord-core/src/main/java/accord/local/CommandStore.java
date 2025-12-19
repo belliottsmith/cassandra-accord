@@ -77,6 +77,8 @@ import accord.utils.async.Cancellable;
 import accord.utils.async.AsyncResults.SettableResult;
 import org.agrona.collections.LongHashSet;
 
+import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Image;
@@ -527,9 +529,19 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         unsafeSetMaxDecidedRX(maxDecidedRX.update(ranges, txnId));
     }
 
-    final void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
+    final void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges, SaveStatus prevStatus)
     {
         // TODO (desired): narrow ranges to those that are owned
+        if (prevStatus.compareTo(SaveStatus.Applied) < 0)
+        {
+            String alreadyApplied = redundantBefore.foldl(ranges, (b, m) -> {
+                if (b.maxBound(LOCALLY_APPLIED).compareTo(txnId) > 0 && b.maxBound(UNREADY).compareTo(txnId) <= 0 && !b.isLocallyRetired())
+                    return m + (m.isEmpty() ? "" : ", ") + b.range + ": " + b;
+                return m;
+            }, "");
+            Invariants.expect(alreadyApplied.isEmpty(), "%s should already have been applied: %s", txnId, alreadyApplied);
+        }
+
         Invariants.requireArgument(txnId.isSyncPoint());
         RedundantBefore addNow = RedundantBefore.create(ranges, txnId, LOCALLY_APPLIED_ONLY);
         safeStore.upsertRedundantBefore(addNow);

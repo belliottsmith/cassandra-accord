@@ -52,8 +52,10 @@ public class FetchDurableBefore extends AbstractCoordination<Ranges, DurableBefo
     {
         super.start();
         contact(ignore -> new GetDurableBefore(), id -> !node.id().equals(id));
-        markSelfContacted();
-        onSuccess(node.id(), new DurableBeforeReply(node.durableBefore()));
+        executor.executeMaybeImmediately(() -> {
+            markSelfContacted();
+            onSuccess(node.id(), new DurableBeforeReply(node.durableBefore()));
+        });
     }
 
     public static AsyncChain<DurableBefore> catchup(Node node)

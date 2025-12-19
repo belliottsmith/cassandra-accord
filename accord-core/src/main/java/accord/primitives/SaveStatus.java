@@ -30,8 +30,10 @@ import accord.primitives.Known.KnownExecuteAt;
 import accord.primitives.Known.KnownRoute;
 import accord.primitives.Known.Outcome;
 import accord.primitives.Status.Phase;
+import accord.utils.BitUtils;
 
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
+import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.primitives.Known.PrivilegedVote.NoVote;
 import static accord.primitives.Known.PrivilegedVote.VotePreAccept;
 import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
@@ -107,8 +109,8 @@ public enum SaveStatus
     Applied                         (Status.Applied,                                                                                                 LocalExecution.Applied),
     // TruncatedApplyWithOutcomeAndDeps exists to support re-populating CommandsForKey on replay with any dependencies needed for computing recovery superseding-rejects decisions
     // TODO (expected): test replay
-    TruncatedApplyWithOutcome       (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         Apply,   CleaningUp),
-    TruncatedApply                  (Status.Truncated,              FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
+    TruncatedApplyWithOutcome       (Status.Truncated,   APPLIED,   FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         Apply,   CleaningUp),
+    TruncatedApply                  (Status.Truncated,   APPLIED,   FullRoute,  DefinitionErased,   ApplyAtKnown,       DepsErased,         WasApply,CleaningUp),
     TruncatedUnapplied              (Status.Truncated,              MaybeRoute, DefinitionErased,   ExecuteAtKnown,     DepsErased,         WasApply,CleaningUp),
     // Vestigial means the command cannot be completed and is either pre-bootstrap, did not commit, or did not participate in this shard's epoch
     // TODO (expected): should Vestigial NOT be a Truncated status? We should really only use Known or KnownMap to make decisions, so we don't interpret Truncated as implying a decision, e.g. in Invalidate (as of this commit)
@@ -167,6 +169,8 @@ public enum SaveStatus
     }
 
     private static final SaveStatus[] lookup = values();
+    public static final int ENCODING_BITS = BitUtils.numberOfBitsToRepresent(lookup.length);
+    public static final int ENCODING_MASK = (1 << ENCODING_BITS) - 1;
 
     public final Status status;
     public final Phase phase;

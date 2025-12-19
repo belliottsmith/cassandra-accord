@@ -109,21 +109,9 @@ public class BeginInvalidation extends ParticipantsRequest<Participants<?>, Begi
     }
 
     @Override
-    public long waitForEpoch()
-    {
-        return txnId.epoch();
-    }
-
-    @Override
     public MessageType type()
     {
         return BEGIN_INVALIDATE_REQ;
-    }
-
-    @Override
-    public String reason()
-    {
-        return "Invalidate{" + txnId + '}';
     }
 
     @Override

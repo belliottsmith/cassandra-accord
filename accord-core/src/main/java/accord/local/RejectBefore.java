@@ -33,9 +33,9 @@ public class RejectBefore extends ReducingRangeMap<Timestamp>
 {
     public static class SerializerSupport
     {
-        public static RejectBefore create(boolean inclusiveEnds, RoutingKey[] ends, Timestamp[] values)
+        public static RejectBefore create(RoutingKey[] ends, Timestamp[] values)
         {
-            return new RejectBefore(inclusiveEnds, ends, values);
+            return new RejectBefore(ends, values);
         }
     }
 
@@ -44,9 +44,9 @@ public class RejectBefore extends ReducingRangeMap<Timestamp>
         super();
     }
 
-    protected RejectBefore(boolean inclusiveEnds, RoutingKey[] starts, Timestamp[] values)
+    protected RejectBefore(RoutingKey[] starts, Timestamp[] values)
     {
-        super(inclusiveEnds, starts, values);
+        super(starts, values);
     }
 
     public static RejectBefore add(RejectBefore existing, Ranges ranges, TxnId value)
@@ -83,15 +83,15 @@ public class RejectBefore extends ReducingRangeMap<Timestamp>
 
     static class Builder extends AbstractBoundariesBuilder<RoutingKey, Timestamp, RejectBefore>
     {
-        protected Builder(boolean inclusiveEnds, int capacity)
+        protected Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
         protected RejectBefore buildInternal()
         {
-            return new RejectBefore(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new Timestamp[0]));
+            return new RejectBefore(starts.toArray(new RoutingKey[0]), values.toArray(new Timestamp[0]));
         }
     }
 }

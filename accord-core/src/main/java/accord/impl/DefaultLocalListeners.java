@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Enumeration;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
 
@@ -659,7 +660,10 @@ public class DefaultLocalListeners implements LocalListeners
                 @Override
                 public TxnListener next()
                 {
-                    return new TxnListener(buffer[0], new TxnId(cur), cur.await);
+                    if (!hasNext())
+                        throw new NoSuchElementException();
+
+                    return new TxnListener(buffer[bufferIndex++], new TxnId(cur), cur.await);
                 }
             };
         };
@@ -726,7 +730,9 @@ public class DefaultLocalListeners implements LocalListeners
                 @Override
                 public Registered next()
                 {
-                    return (Registered) buffer[0];
+                    if (!hasNext())
+                        throw new NoSuchElementException();
+                    return (Registered) buffer[bufferIndex++];
                 }
             };
         };

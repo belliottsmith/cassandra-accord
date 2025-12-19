@@ -126,9 +126,9 @@ public class MaxDecidedRX extends ReducingRangeMap<MaxDecidedRX.DecidedRX>
         super();
     }
 
-    private MaxDecidedRX(boolean inclusiveEnds, RoutingKey[] starts, DecidedRX[] values)
+    private MaxDecidedRX(RoutingKey[] starts, DecidedRX[] values)
     {
-        super(inclusiveEnds, starts, values);
+        super(starts, values);
     }
 
     DecidedRX min(Routables<?> keysOrRanges)
@@ -196,15 +196,15 @@ public class MaxDecidedRX extends ReducingRangeMap<MaxDecidedRX.DecidedRX>
 
     static class Builder extends AbstractBoundariesBuilder<RoutingKey, DecidedRX, MaxDecidedRX>
     {
-        protected Builder(boolean inclusiveEnds, int capacity)
+        protected Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
         protected MaxDecidedRX buildInternal()
         {
-            return new MaxDecidedRX(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new DecidedRX[0]));
+            return new MaxDecidedRX(starts.toArray(new RoutingKey[0]), values.toArray(new DecidedRX[0]));
         }
     }
 

@@ -637,7 +637,7 @@ public class AccordGens
         return rs -> {
             Ranges ranges = rangesGen.next(rs);
             if (ranges.isEmpty()) return RedundantBefore.EMPTY;
-            RedundantBefore.Builder builder = new RedundantBefore.Builder(ranges.get(0).endInclusive(), ranges.size());
+            RedundantBefore.Builder builder = new RedundantBefore.Builder(ranges.size());
             ranges.forEach(r -> builder.append(r.start(), r.end(), entryGen.apply(rs, r)));
             return builder.build();
         };
