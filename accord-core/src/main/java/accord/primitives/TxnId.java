@@ -319,6 +319,11 @@ public class TxnId extends Timestamp
         return Kind.isVisible(kindOrdinal(flagsUnmasked()));
     }
 
+    public final boolean hasFastPath()
+    {
+        return !isSyncPoint();
+    }
+
     public final boolean isSyncPoint()
     {
         return Kind.isSyncPoint(kindOrdinal(flagsUnmasked()));
@@ -497,12 +502,12 @@ public class TxnId extends Timestamp
 
     public static TxnId maxForEpoch(long epoch)
     {
-        return new TxnId(epochMsb(epoch) | 0x7fff, Long.MAX_VALUE, Id.MAX);
+        return maxForEpoch(epoch, TxnId::fromBits);
     }
 
     public static TxnId minForEpoch(long epoch)
     {
-        return new TxnId(epochMsb(epoch), 0, Id.NONE);
+        return minForEpoch(epoch, TxnId::fromBits);
     }
 
     public static TxnId noneIfNull(TxnId id)
@@ -515,13 +520,20 @@ public class TxnId extends Timestamp
         return id == null ? MAX : id;
     }
 
+    public static TxnId atLeast(Timestamp timestamp)
+    {
+        if (timestamp.flags() != 0)
+            timestamp = timestamp.next();
+        return new TxnId(timestamp, 0, Read, Domain.Key, Any);
+    }
+
     private static final Pattern PARSE = Pattern.compile("\\[(?<epoch>[0-9]+),(?<hlc>[0-9]+),(?<flags>[0-9]+)\\([KR][REWXV]\\),(?<node>[0-9]+)]");
     public static TxnId parse(String txnIdString)
     {
         Matcher m = PARSE.matcher(txnIdString);
         if (!m.matches())
             throw illegalArgument("Invalid TxnId string: " + txnIdString);
-        return fromValues(Long.parseLong(m.group("epoch")), Long.parseLong(m.group("hlc")), Integer.parseInt(m.group("flags")), new Id(Integer.parseInt(m.group("node"))));
+        return fromMatcher(txnIdString, m, true);
     }
 
     public static TxnId tryParse(String txnIdString)
@@ -529,7 +541,27 @@ public class TxnId extends Timestamp
         Matcher m = PARSE.matcher(txnIdString);
         if (!m.matches())
             return null;
-        return fromValues(Long.parseLong(m.group("epoch")), Long.parseLong(m.group("hlc")), Integer.parseInt(m.group("flags")), new Id(Integer.parseInt(m.group("node"))));
+        return fromMatcher(txnIdString, m, false);
+    }
+
+    private static TxnId fromMatcher(String txnIdString, Matcher m, boolean failIfInvalid)
+    {
+        long epoch = Long.parseLong(m.group("epoch"));
+        long hlc = Long.parseLong(m.group("hlc"));
+        int flags = Integer.parseInt(m.group("flags"));
+        if (flags > 0xffff)
+            return failOrNull(txnIdString, failIfInvalid);
+
+        Id node = new Id(Integer.parseInt(m.group("node")));
+        // TODO (expected): validate kind vs flags
+        return TxnId.fromValues(epoch, hlc, flags, node);
+    }
+
+    private static <T extends Timestamp> T failOrNull(String timestampString, boolean fail)
+    {
+        if (fail)
+            throw illegalArgument("Invalid TxnId string: " + timestampString);
+        return null;
     }
 
     public static boolean equalsStrict(TxnId[] a, TxnId[] b)

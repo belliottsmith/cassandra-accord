@@ -16,24 +16,32 @@
  * limitations under the License.
  */
 
-package accord.primitives;
+package accord.impl.cfr;
 
-import org.junit.jupiter.api.Test;
+import accord.primitives.Ranges;
+import accord.primitives.TxnId;
 
-import accord.utils.AccordGens;
-import org.assertj.core.api.Assertions;
-
-import static accord.utils.Property.qt;
-
-class TxnIdTest
+public class IdMultiEntry extends IdEntry
 {
-    @Test
-    void stringSerde()
-    {
-        qt().forAll(AccordGens.txnIds()).check(id -> {
-            Assertions.assertThat(TxnId.parse(id.toString())).isEqualTo(id);
+    final Ranges ranges;
 
-            Assertions.assertThat(Timestamp.parse(id.toStandardString())).isEqualTo(new Timestamp(id));
-        });
+    public IdMultiEntry(TxnId txnId, Ranges ranges)
+    {
+        super(txnId);
+        this.ranges = ranges;
+    }
+
+    @Override
+    IdEntry copy()
+    {
+        IdMultiEntry copy = new IdMultiEntry(this, ranges);
+        copy.encoded = encoded;
+        return copy;
+    }
+
+    @Override
+    Ranges ranges()
+    {
+        return ranges;
     }
 }

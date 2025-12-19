@@ -31,6 +31,9 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
+import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.api.ProtocolModifiers.RangeSpec.isStartExclusive;
+import static accord.api.ProtocolModifiers.RangeSpec.isStartInclusive;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -51,30 +54,21 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     @SuppressWarnings("rawtypes")
     public static final Comparable[] NO_OBJECTS = new Comparable[0];
 
-    // for simplicity at construction, we permit this to be overridden by the first insertion
-    protected final boolean inclusiveEnds;
     // starts is 1 longer than values, so that starts[0] == start of values[0]
     protected final K[] starts;
     protected final V[] values;
 
+    @SuppressWarnings("unchecked")
     public ReducingIntervalMap()
     {
-        this(false);
-    }
-
-    @SuppressWarnings("unchecked")
-    public ReducingIntervalMap(boolean inclusiveEnds)
-    {
-        this.inclusiveEnds = inclusiveEnds;
         this.starts = (K[]) NO_OBJECTS;
         this.values = (V[]) NO_OBJECTS;
     }
 
     @VisibleForTesting
-    ReducingIntervalMap(boolean inclusiveEnds, K[] starts, V[] values)
+    ReducingIntervalMap(K[] starts, V[] values)
     {
         Invariants.requireArgument(starts.length == values.length + 1 || (starts.length + values.length) == 0);
-        this.inclusiveEnds = inclusiveEnds;
         this.starts = starts;
         this.values = values;
     }
@@ -142,7 +136,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         return IntStream.range(0, values.length)
                         .filter(i -> include.test(values[i]))
-                        .mapToObj(i -> (inclusiveStarts() ? "[" : "(") + starts[i] + "," + starts[i + 1] + (inclusiveEnds ? "]" : ")") + "=" + values[i])
+                        .mapToObj(i -> (isStartInclusive() ? "[" : "(") + starts[i] + "," + starts[i + 1] + (isEndInclusive() ? "]" : ")") + "=" + values[i])
                         .collect(Collectors.joining(", ", "{", "}"));
     }
 
@@ -152,17 +146,12 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ReducingIntervalMap that = (ReducingIntervalMap) o;
-        return inclusiveEnds == that.inclusiveEnds && Arrays.equals(starts, that.starts) && Arrays.equals(values, that.values);
+        return Arrays.equals(starts, that.starts) && Arrays.equals(values, that.values);
     }
 
     public int hashCode()
     {
         return Arrays.hashCode(values);
-    }
-
-    public boolean inclusiveEnds()
-    {
-        return inclusiveEnds;
     }
 
     public V get(K key)
@@ -200,13 +189,8 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         int idx = Arrays.binarySearch(starts, key);
         if (idx < 0) idx = -2 - idx;
-        else if (inclusiveEnds) --idx;
+        else if (isEndInclusive()) --idx;
         return idx;
-    }
-
-    protected final boolean inclusiveStarts()
-    {
-        return !inclusiveEnds;
     }
 
     public int size()
@@ -234,8 +218,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         if (historyRight == null || historyRight.values.length == 0)
             return historyLeft;
 
-        boolean inclusiveEnds = inclusiveEnds(historyLeft.inclusiveEnds, historyLeft.size() > 0, historyRight.inclusiveEnds, historyRight.size() > 0);
-        IntervalBuilder<K, V, M> builder = factory.create(inclusiveEnds, historyLeft.size() + historyRight.size());
+        IntervalBuilder<K, V, M> builder = factory.create(historyLeft.size() + historyRight.size());
 
         ReducingIntervalMap<K, V>.RangeIterator left = historyLeft.rangeIterator();
         ReducingIntervalMap<K, V>.RangeIterator right = historyRight.rangeIterator();
@@ -307,8 +290,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         if (historyRight == null || historyRight.values.length == 0)
             return historyLeft;
 
-        boolean inclusiveEnds = inclusiveEnds(historyLeft.inclusiveEnds, historyLeft.size() > 0, historyRight.inclusiveEnds, historyRight.size() > 0);
-        AbstractBoundariesBuilder<K, V, M> builder = factory.create(inclusiveEnds, historyLeft.size() + historyRight.size());
+        AbstractBoundariesBuilder<K, V, M> builder = factory.create(historyLeft.size() + historyRight.size());
 
         ReducingIntervalMap<K, V>.RangeIterator left = historyLeft.rangeIterator();
         ReducingIntervalMap<K, V>.RangeIterator right = historyRight.rangeIterator();
@@ -396,11 +378,11 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         int from = Arrays.binarySearch(starts, start);
         if (from < 0) from = Math.max(0, -2 - from);
-        else if (!inclusiveStarts()) ++from;
+        else if (isStartExclusive()) ++from;
 
         int to = Arrays.binarySearch(starts, end);
         if (to < 0) to = -1 - to;
-        else if (inclusiveStarts()) ++to;
+        else if (isStartInclusive()) ++to;
         return new RangeIterator(from, to);
     }
 
@@ -448,18 +430,16 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
 
     protected interface BuilderFactory<K extends Comparable<? super K>, V, M extends ReducingIntervalMap<K, V>>
     {
-        AbstractBoundariesBuilder<K, V, M> create(boolean inclusiveEnds, int capacity);
+        AbstractBoundariesBuilder<K, V, M> create(int capacity);
     }
 
     protected static abstract class AbstractBoundariesBuilder<K extends Comparable<? super K>, V, M extends ReducingIntervalMap<K, V>>
     {
-        protected final boolean inclusiveEnds;
         protected final List<K> starts;
         protected final List<V> values;
         private K safeToAdd;
-        protected AbstractBoundariesBuilder(boolean inclusiveEnds, int estimatedCapacity)
+        protected AbstractBoundariesBuilder(int estimatedCapacity)
         {
-            this.inclusiveEnds = inclusiveEnds;
             this.starts = new ArrayList<>(estimatedCapacity);
             this.values = new ArrayList<>(estimatedCapacity + 1);
         }
@@ -564,7 +544,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
 
     protected interface IntervalBuilderFactory<K extends Comparable<? super K>, V, M extends ReducingIntervalMap<K, V>>
     {
-        IntervalBuilder<K, V, M> create(boolean inclusiveEnds, int capacity);
+        IntervalBuilder<K, V, M> create(int capacity);
     }
 
     protected static abstract class IntervalBuilder<K extends Comparable<? super K>, V, M>
@@ -581,14 +561,12 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
 
     protected static abstract class AbstractIntervalBuilder<K extends Comparable<? super K>, V, M> extends IntervalBuilder<K, V, M>
     {
-        protected final boolean inclusiveEnds;
         protected final List<K> starts;
         protected final List<V> values;
 
         private K prevEnd;
-        protected AbstractIntervalBuilder(boolean inclusiveEnds, int capacity)
+        protected AbstractIntervalBuilder(int capacity)
         {
-            this.inclusiveEnds = inclusiveEnds;
             this.starts = new ArrayList<>(capacity);
             this.values = new ArrayList<>(capacity + 1);
         }

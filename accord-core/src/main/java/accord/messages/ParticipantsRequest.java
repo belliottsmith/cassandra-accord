@@ -64,7 +64,7 @@ public abstract class ParticipantsRequest<P extends Participants<?>, R extends R
      * safe to do so.
      */
     @Override
-    public long waitForEpoch()
+    public final long waitForEpoch()
     {
         return waitForEpoch;
     }

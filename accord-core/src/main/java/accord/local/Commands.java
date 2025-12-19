@@ -1303,9 +1303,9 @@ public class Commands
                     {
                         // TODO (desired): slightly costly to invert a large partialDeps collection
                         participants = waiting.partialDeps().participants(dep.txnId());
-                        Participants<?> stillExecutes = participants.intersecting(waiting.participants().stillExecutes(), Minimal);
+                        Participants<?> waitsOn = participants.intersecting(waiting.participants().stillWaitsOn(), Minimal);
 
-                        depSafe = maybeCleanupRedundantDependency(safeStore, waitingSafe, depSafe, stillExecutes);
+                        depSafe = maybeCleanupRedundantDependency(safeStore, waitingSafe, depSafe, waitsOn);
                         if (depSafe == null)
                             continue;
                     }

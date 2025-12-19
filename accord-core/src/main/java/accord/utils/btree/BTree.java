@@ -3378,6 +3378,7 @@ public class BTree
             {
                 branch.count = 0;
                 branch.hasRightChild = false;
+                branch.clearSourceNode();
                 clearBranchBuffer(branch.buffer);
                 if (branch.savedBuffer != null && branch.savedBuffer[0] != null)
                     Arrays.fill(branch.savedBuffer, null); // by definition full, if non-empty
@@ -3385,6 +3386,15 @@ public class BTree
                 branch = branch.parent;
             }
             Invariants.require(branch == null || (branch.count == 0 && !branch.hasRightChild));
+            if (Invariants.isParanoid() && branch != null)
+            {
+                while (branch != null)
+                {
+                    Invariants.require(!branch.inUse);
+                    Invariants.require(branch.sourceNode == null);
+                    branch = branch.parent;
+                }
+            }
         }
 
         /**

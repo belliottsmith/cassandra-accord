@@ -48,18 +48,16 @@ import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
-import static accord.local.CommandSummaries.ComputeIsDep.EITHER;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
-import static accord.local.CommandSummaries.TestStartedAt.ANY;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Retired;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Truncated;
-import static accord.messages.BeginRecovery.RecoveryFlags.FAST_PATH_DECIDED;
-import static accord.messages.BeginRecovery.RecoveryFlags.FORCE_RECOVER_FAST_PATH;
+import static accord.messages.BeginRecovery.RecoveryFlags.forceRecoverFastPath;
+import static accord.messages.BeginRecovery.RecoveryFlags.isFastPathDecided;
 import static accord.messages.MessageType.StandardMessage.BEGIN_RECOVER_REQ;
 import static accord.messages.MessageType.StandardMessage.BEGIN_RECOVER_RSP;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
@@ -82,7 +80,24 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
 
     public enum RecoveryFlags
     {
-        FAST_PATH_DECIDED, FORCE_RECOVER_FAST_PATH
+        FAST_PATH_DECIDED,
+        FORCE_RECOVER_FAST_PATH,
+        NO_CALCULATE_DEPS;
+
+        public static boolean isFastPathDecided(int encoded)
+        {
+            return TinyEnumSet.contains(encoded, FAST_PATH_DECIDED);
+        }
+
+        public static boolean forceRecoverFastPath(int encoded)
+        {
+            return TinyEnumSet.contains(encoded, FORCE_RECOVER_FAST_PATH);
+        }
+
+        public static boolean calculateDeps(int encoded)
+        {
+            return !TinyEnumSet.contains(encoded, NO_CALCULATE_DEPS);
+        }
     }
 
     public final PartialTxn partialTxn;
@@ -139,7 +154,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         LatestDeps deps; {
             PartialDeps coordinatedDeps = command.partialDeps();
             Deps localDeps = null;
-            if (!command.known().deps().hasCommittedOrDecidedDeps())
+            if (!command.known().deps().hasCommittedOrDecidedDeps() && calculateDeps())
             {
                 localDeps = DepsCalculator.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, false);
             }
@@ -168,11 +183,11 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         {
             try (Visitor visitor = new Visitor())
             {
-                safeStore.visit(participants.owns(), txnId, txnId.witnessedBy(), ANY, txnId, EITHER, visitor);
+                safeStore.visit(participants.owns(), txnId, txnId.witnessedBy(), visitor);
                 supersedingRejects = visitor.supersedingRejects;
-                earlierNoWait = visitor.earlierNoWait == null ? Deps.NONE : visitor.earlierNoWait.build();
-                earlierWait = visitor.earlierWait == null ? Deps.NONE : visitor.earlierWait.build();
-                laterCoordRejects = visitor.laterCoordRejects == null ? Deps.NONE : visitor.laterCoordRejects.build();
+                earlierNoWait = visitor.simpleNoWait == null ? Deps.NONE : visitor.simpleNoWait.build();
+                earlierWait = visitor.simpleWait == null ? Deps.NONE : visitor.simpleWait.build();
+                laterCoordRejects = visitor.supersedingCoordRejects == null ? Deps.NONE : visitor.supersedingCoordRejects.build();
             }
         }
 
@@ -188,9 +203,14 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
 
     private boolean recoverFastPath()
     {
-        if (TinyEnumSet.contains(flags, FORCE_RECOVER_FAST_PATH))
+        if (forceRecoverFastPath(flags))
             return true;
-        return !txnId.isSyncPoint() && !TinyEnumSet.contains(flags, FAST_PATH_DECIDED);
+        return txnId.hasFastPath() && !isFastPathDecided(flags);
+    }
+
+    private boolean calculateDeps()
+    {
+        return RecoveryFlags.calculateDeps(flags);
     }
 
     static boolean acceptsFastPath(TxnId txnId, StoreParticipants participants, SaveStatus saveStatus, @Nullable Timestamp executeAt)
@@ -224,10 +244,10 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         if (!ok1.status.hasBeen(PreAccepted)) throw new IllegalStateException();
 
         LatestDeps deps = LatestDeps.merge(ok1.deps, ok2.deps);
-        Deps earlierNoWait = ok1.earlierNoWait.with(ok2.earlierNoWait);
-        Deps earlierWait = ok1.earlierWait.with(ok2.earlierWait)
-                                          .without(earlierNoWait);
-        Deps laterNoVote = ok1.laterCoordRejects.with(ok2.laterCoordRejects);
+        Deps earlierNoWait = ok1.simpleNoWait.with(ok2.simpleNoWait);
+        Deps earlierWait = ok1.simpleWait.with(ok2.simpleWait)
+                                         .without(earlierNoWait);
+        Deps laterNoVote = ok1.supersedingCoordRejects.with(ok2.supersedingCoordRejects);
         Timestamp timestamp = ok1.status == PreAccepted ? Timestamp.max(ok1.executeAt, ok2.executeAt) : ok1.executeAt;
 
         return new RecoverOk(
@@ -251,19 +271,15 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
     {
         if (recoverFastPath())
             return LoadKeysFor.RECOVERY;
-        return LoadKeysFor.READ_WRITE;
+        if (calculateDeps())
+            return LoadKeysFor.READ_WRITE;
+        return LoadKeysFor.WRITE;
     }
 
     @Override
     public MessageType type()
     {
         return BEGIN_RECOVER_REQ;
-    }
-
-    @Override
-    public String reason()
-    {
-        return "Recover{" + txnId + '}';
     }
 
     @Override
@@ -276,10 +292,10 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                '}';
     }
 
-    class Visitor implements CommandSummaries.AllCommandVisitor, AutoCloseable
+    class Visitor implements CommandSummaries.SupersedingCommandVisitor, AutoCloseable
     {
-        Deps.Builder earlierWait, earlierNoWait;
-        Deps.Builder laterCoordRejects;
+        Deps.Builder simpleWait, simpleNoWait;
+        Deps.Builder supersedingCoordRejects;
         boolean supersedingRejects;
 
         @Override
@@ -315,7 +331,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                             if (status != ACCEPTED)
                                 break;
                         case PREACCEPTED:
-                            ensureEarlierWait().add(keyOrRange, testTxnId);
+                            ensureSimpleWait().add(keyOrRange, testTxnId);
                         case NOTACCEPTED:
                         case INVALIDATED:
                     }
@@ -326,7 +342,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                     default: throw new UnhandledEnum(dep);
                     case IS_PROPOSED_OR_STABLE_DEP:
                         if (status == STABLE || status == APPLIED)
-                            ensureEarlierNoWait().add(keyOrRange, testTxnId);
+                            ensureSimpleNoWait().add(keyOrRange, testTxnId);
                         break;
 
                     case IS_NOT_PROPOSED_OR_STABLE_DEP:
@@ -344,12 +360,12 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                         {
                             case INVALIDATED:
                                 // TODO (desired): optionally exclude these and other normally-unnecessary entries on e.g. first recovery attempt
-                                ensureEarlierNoWait().add(keyOrRange, testTxnId);
+                                ensureSimpleNoWait().add(keyOrRange, testTxnId);
                                 break;
 
                             case ACCEPTED:
                                 if (testExecuteAt.compareTo(txnId) > 0)
-                                    ensureEarlierWait().add(keyOrRange, testTxnId);
+                                    ensureSimpleWait().add(keyOrRange, testTxnId);
                                 break;
 
                             case PREACCEPTED:
@@ -359,7 +375,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                                 // (that is, if either transaction use the optimisation, we must wait for the earlier transaction)
                                 // TODO (desired): compute against shard whether this is a necessary wait condition - for many quorum configurations it isn't
                                 if (testTxnId.hasPrivilegedCoordinator() || txnId.hasPrivilegedCoordinator())
-                                    ensureEarlierWait().add(keyOrRange, testTxnId);
+                                    ensureSimpleWait().add(keyOrRange, testTxnId);
                         }
                 }
             }
@@ -389,7 +405,12 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                     case IS_NOT_COORD_DEP:
                         Invariants.requireArgument(testTxnId.is(PrivilegedCoordinatorWithDeps));
                         // TODO (expected): if we are the original coordinator and we know we cannot fast path commit then we should not include this in the reply
-                        ensureLaterCoordRejects().add(keyOrRange, testTxnId);
+                        ensureSupersedingCoordRejects().add(keyOrRange, testTxnId);
+                }
+                if (testTxnId.isSyncPoint())
+                {
+                    if (status.compareTo(ACCEPTED) < 0) ensureSimpleWait().add(keyOrRange, testTxnId);
+                    else ensureSimpleNoWait().add(keyOrRange, testTxnId);
                 }
             }
 
@@ -402,44 +423,44 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
             return false;
         }
 
-        private Deps.Builder ensureEarlierNoWait()
+        private Deps.Builder ensureSimpleNoWait()
         {
-            if (earlierNoWait == null)
-                earlierNoWait = new Deps.Builder(true);
-            return earlierNoWait;
+            if (simpleNoWait == null)
+                simpleNoWait = new Deps.Builder(true);
+            return simpleNoWait;
         }
 
-        private Deps.Builder ensureEarlierWait()
+        private Deps.Builder ensureSimpleWait()
         {
-            if (earlierWait == null)
-                earlierWait = new Deps.Builder(true);
-            return earlierWait;
+            if (simpleWait == null)
+                simpleWait = new Deps.Builder(true);
+            return simpleWait;
         }
 
-        private Deps.Builder ensureLaterCoordRejects()
+        private Deps.Builder ensureSupersedingCoordRejects()
         {
-            if (laterCoordRejects == null)
-                laterCoordRejects = new Deps.Builder(true);
-            return laterCoordRejects;
+            if (supersedingCoordRejects == null)
+                supersedingCoordRejects = new Deps.Builder(true);
+            return supersedingCoordRejects;
         }
 
         @Override
         public void close()
         {
-            if (earlierNoWait != null)
+            if (simpleNoWait != null)
             {
-                earlierNoWait.close();
-                earlierNoWait = null;
+                simpleNoWait.close();
+                simpleNoWait = null;
             }
-            if (earlierWait != null)
+            if (simpleWait != null)
             {
-                earlierWait.close();
-                earlierWait = null;
+                simpleWait.close();
+                simpleWait = null;
             }
-            if (laterCoordRejects != null)
+            if (supersedingCoordRejects != null)
             {
-                laterCoordRejects.close();
-                laterCoordRejects = null;
+                supersedingCoordRejects.close();
+                supersedingCoordRejects = null;
             }
         }
     }
@@ -465,8 +486,13 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         public final Ballot accepted;
         public final Timestamp executeAt;
         public final LatestDeps deps;
-        public final Deps earlierWait, earlierNoWait;
-        public final Deps laterCoordRejects;
+        // either preceding transactions or a potentially-superseding sync point (with no intervening decided sync point);
+        // these transactions cannot be blocked by our decision, so we can simply wait for their decision,
+        // and if they execute after us determine if they reject our execution
+        public final Deps simpleWait, simpleNoWait;
+        // superseding transactions where the coordinator had not witnessed us, and so they may reject our execution;
+        // these transactions may await our decision, so we must treat them differently to ensure there is no deadlock
+        public final Deps supersedingCoordRejects;
         public final boolean selfAcceptsFastPath;
         public final @Nullable Participants<?> coordinatorAcceptsFastPath;
         public final boolean supersedingRejects;
@@ -474,7 +500,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         public final Result result;
 
         public RecoverOk(TxnId txnId, Status status, Ballot accepted, Timestamp executeAt, LatestDeps deps,
-                         Deps earlierWait, Deps earlierNoWait, Deps laterCoordRejects,
+                         Deps simpleWait, Deps simpleNoWait, Deps supersedingCoordRejects,
                          boolean selfAcceptsFastPath, Participants<?> coordinatorAcceptsFastPath, boolean supersedingRejects, Writes writes, Result result)
         {
             this.txnId = txnId;
@@ -482,9 +508,9 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
             this.executeAt = executeAt;
             this.status = status;
             this.deps = deps;
-            this.earlierWait = earlierWait;
-            this.earlierNoWait = earlierNoWait;
-            this.laterCoordRejects = laterCoordRejects;
+            this.simpleWait = simpleWait;
+            this.simpleNoWait = simpleNoWait;
+            this.supersedingCoordRejects = supersedingCoordRejects;
             this.selfAcceptsFastPath = selfAcceptsFastPath;
             this.coordinatorAcceptsFastPath = coordinatorAcceptsFastPath;
             this.supersedingRejects = supersedingRejects;
@@ -512,9 +538,9 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                    ", accepted:" + accepted +
                    ", executeAt:" + executeAt +
                    ", deps:" + deps +
-                   ", earlierWait:" + earlierWait +
-                   ", earlierNoWait:" + earlierNoWait +
-                   ", laterCoordRejects:" + laterCoordRejects +
+                   ", simpleWait:" + simpleWait +
+                   ", simpleNoWait:" + simpleNoWait +
+                   ", laterCoordRejects:" + supersedingCoordRejects +
                    ", selfAcceptsFastPath:" + selfAcceptsFastPath +
                    (txnId.hasPrivilegedCoordinator() ? ", coordinatorFastPath:" + selfAcceptsFastPath : "") +
                    ", supersedingRejects:" + supersedingRejects +

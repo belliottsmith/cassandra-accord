@@ -31,6 +31,8 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import javax.annotation.Nullable;
+
 import com.google.common.collect.ImmutableSortedMap;
 
 import accord.api.Agent;
@@ -40,10 +42,10 @@ import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.InMemoryCommandStore;
+import accord.impl.InMemoryCommandStore.CommandsForRangeLoad;
 import accord.impl.InMemoryCommandStores;
 import accord.impl.InMemorySafeCommand;
 import accord.impl.InMemorySafeCommandsForKey;
-import accord.impl.PrefixedIntHashKey;
 import accord.impl.basic.TaskExecutorService.Task;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -54,12 +56,10 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.local.ShardDistributor;
 import accord.local.cfk.CommandsForKey;
-import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
@@ -144,17 +144,6 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         super.loadSnapshot(nextSnapshot);
     }
 
-    private static boolean contains(Topology previous, int searchPrefix)
-    {
-        for (Range range : previous.ranges())
-        {
-            int prefix = ((PrefixedIntHashKey) range.start()).prefix;
-            if (prefix == searchPrefix)
-                return true;
-        }
-        return false;
-    }
-
     public static class DelayedCommandStore extends InMemoryCommandStore
     {
         public class DelayedTask<T> extends Task<T>
@@ -167,6 +156,16 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             private DelayedTask(Callable<T> call, Pending origin)
             {
                 super(call, origin);
+            }
+
+            private DelayedTask(Callable<T> fn, @Nullable Cancellable ifCancelled)
+            {
+                super(fn, ifCancelled);
+            }
+
+            private DelayedTask(Callable<T> fn, Pending origin, @Nullable Cancellable ifCancelled)
+            {
+                super(fn, origin, ifCancelled);
             }
 
             public DelayedCommandStore owner()
@@ -305,13 +304,13 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         @Override
         public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
         {
-            return submit(newTask(context, i -> { consumer.accept(i); return null; }));
+            return chain(context, i -> { consumer.accept(i); return null; });
         }
 
         @Override
         public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
         {
-            return submit(newTask(context, function));
+            return submit(newTask(context, cfrLoad(context), function));
         }
 
         @Override
@@ -338,12 +337,12 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
                 runNextTask();
         }
 
-        private <T> DelayedTask<T> newTask(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        private <T> DelayedTask<T> newTask(PreLoadContext context, @Nullable CommandsForRangeLoad cfrLoad, Function<? super SafeCommandStore, T> function)
         {
             Pending origin = Pending.Global.activeOrigin();
             if (RecurringPendingRunnable.isRecurring(origin) && context.primaryTxnId() != null && !context.primaryTxnId().isSystemTxn())
                 origin = null;
-            return new DelayedTask<>(() -> executeInContext(this, context, function), origin);
+            return new DelayedTask<>(() -> executeInContext(this, context, cfrLoad, function), origin, cfrLoad);
         }
 
         private <T> AsyncChain<T> submit(DelayedTask<T> task)
@@ -403,9 +402,9 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         @Override
-        protected InMemorySafeStore createSafeStore(PreLoadContext context, RangesForEpoch ranges, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
+        protected InMemorySafeStore createSafeStore(PreLoadContext context, CommandsForRangeLoad cfrLoad, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
         {
-            return new DelayedSafeStore(this, ranges, context, commands, commandsForKeys, cacheLoading);
+            return new DelayedSafeStore(this, context, cfrLoad, commands, commandsForKeys, cacheLoading);
         }
     }
 
@@ -416,13 +415,13 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         private final CacheLoading cacheLoading;
 
         public DelayedSafeStore(DelayedCommandStore commandStore,
-                                RangesForEpoch ranges,
                                 PreLoadContext context,
+                                CommandsForRangeLoad cfrLoad,
                                 Map<TxnId, InMemorySafeCommand> commands,
                                 Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey,
                                 CacheLoading cacheLoading)
         {
-            super(commandStore, ranges, context, commands, commandsForKey);
+            super(commandStore, context, cfrLoad, commands, commandsForKey);
             this.commandStore = commandStore;
             this.cacheLoading = cacheLoading;
             ++counter;

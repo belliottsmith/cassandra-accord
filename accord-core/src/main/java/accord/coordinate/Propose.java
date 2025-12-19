@@ -31,6 +31,7 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Accept;
+import accord.messages.Accept.AcceptFlags;
 import accord.messages.Accept.AcceptReply;
 import accord.messages.Callback;
 import accord.primitives.Ballot;
@@ -47,9 +48,9 @@ import accord.utils.Invariants;
 import accord.utils.SortedListMap;
 import accord.utils.Rethrowable;
 
-import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
+import static accord.messages.Accept.AcceptFlags.filterDeps;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedInvalidate;
@@ -66,6 +67,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
 
     final Timestamp executeAt;
     final QuorumTracker tracker;
+    final int acceptFlags;
 
     Propose(Node node, SequentialAsyncExecutor executor, Topologies topologies, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
     {
@@ -77,6 +79,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         this.deps = deps;
         this.executeAt = executeAt;
         this.tracker = new QuorumTracker(topologies);
+        this.acceptFlags = AcceptFlags.encode(txnId, require != scope);
         Invariants.require(txnId.isSyncPoint() || deps.maxTxnId(txnId).compareTo(executeAt) <= 0,
                            "Attempted to propose %s with an earlier executeAt than a conflicting transaction it witnessed: %s vs executeAt: %s", txnId, deps, executeAt);
         Invariants.require(topologies.currentEpoch() == executeAt.epoch());
@@ -86,7 +89,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
     void start()
     {
         super.start();
-        contact(to -> new Accept(to, tracker.topologies(), kind, ballot, txnId, scope, executeAt, deps, require != scope));
+        contact(to -> new Accept(to, tracker.topologies(), kind, ballot, txnId, scope, executeAt, deps, acceptFlags));
     }
 
     @Override
@@ -163,6 +166,9 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
     Deps mergeNewDeps()
     {
         SortedListMap<Node.Id, AcceptReply> oks = finishOks();
+        if (!AcceptFlags.calculateDeps(acceptFlags))
+            return Deps.NONE;
+
         Deps deps = Deps.merge(oks, oks.domainSize(), SortedListMap::getValue, ok -> ok.deps);
         if (Faults.discardPreAcceptDeps(txnId))
             return deps;
@@ -170,8 +176,12 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         if (txnId.is(TrackStable))
         {
             // we must not propose as stable any dep < txnId that we did not propose as part of this phase
-            if (filterDuplicateDependenciesFromAcceptReply())
+            if (!filterDeps(acceptFlags))
+            {
+                // if the replicas haven't filtered their responses, we need to remove
+                // anything we sent to ensure we don't mark them as unstable
                 deps = deps.without(this.deps);
+            }
 
             deps = deps.markUnstableBefore(txnId);
         }
@@ -180,7 +190,6 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
     }
 
     abstract CoordinationAdapter<R> adapter();
-
 
     @Override
     public CoordinationKind kind()

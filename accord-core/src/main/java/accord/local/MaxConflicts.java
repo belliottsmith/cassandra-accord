@@ -33,9 +33,9 @@ public class MaxConflicts extends BTreeReducingRangeMap<Timestamp>
         super();
     }
 
-    private MaxConflicts(boolean inclusiveEnds, Object[] tree)
+    private MaxConflicts(Object[] tree)
     {
-        super(inclusiveEnds, tree);
+        super(tree);
     }
 
     Timestamp get(Routables<?> keysOrRanges)
@@ -53,15 +53,15 @@ public class MaxConflicts extends BTreeReducingRangeMap<Timestamp>
 
     private static class Builder extends AbstractBoundariesBuilder<RoutingKey, Timestamp, MaxConflicts>
     {
-        protected Builder(boolean inclusiveEnds, int capacity)
+        protected Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
         protected MaxConflicts buildInternal(Object[] tree)
         {
-            return new MaxConflicts(inclusiveEnds, tree);
+            return new MaxConflicts(tree);
         }
     }
 }

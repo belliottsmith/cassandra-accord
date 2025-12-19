@@ -31,6 +31,7 @@ import accord.utils.LargeBitSet;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SymmetricComparator;
 import accord.utils.TriFunction;
+import accord.utils.UnhandledEnum;
 
 import java.util.*;
 import java.util.function.BiConsumer;
@@ -42,6 +43,8 @@ import java.util.stream.Stream;
 
 import javax.annotation.Nullable;
 
+import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.api.ProtocolModifiers.RangeSpec.isStartExclusive;
 import static accord.primitives.RoutingKeys.toRoutingKeys;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -562,11 +565,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         keysToTxnIds();
         int startKeyIndex = keys.indexOf(range.start());
         if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
-        else if (!range.startInclusive()) ++startKeyIndex;
+        else if (isStartExclusive()) ++startKeyIndex;
 
         int endKeyIndex = keys.indexOf(range.end());
         if (endKeyIndex < 0) endKeyIndex = -1 - startKeyIndex;
-        else if (range.endInclusive()) ++endKeyIndex;
+        else if (isEndInclusive()) ++endKeyIndex;
 
         if (endKeyIndex <= startKeyIndex)
             return orElse;
@@ -592,11 +595,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         keysToTxnIds();
         int startKeyIndex = keys.indexOf(range.start());
         if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
-        else if (!range.startInclusive()) ++startKeyIndex;
+        else if (isStartExclusive()) ++startKeyIndex;
 
         int endKeyIndex = keys.indexOf(range.end());
         if (endKeyIndex < 0) endKeyIndex = -1 - startKeyIndex;
-        else if (range.endInclusive()) ++endKeyIndex;
+        else if (isEndInclusive()) ++endKeyIndex;
 
         if (endKeyIndex <= startKeyIndex)
             return orElse;
@@ -630,46 +633,75 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         }
     }
 
-    public <P1, P2> void forEach(Ranges ranges, int inclIdx, int exclIdx, P1 p1, P2 p2, IndexedBiConsumer<P1, P2> forEach)
+    public <P1, P2> void forEach(Unseekables<?> unseekables, P1 p1, P2 p2, IndexedBiConsumer<P1, P2> forEach)
+    {
+        Routable.Domain domain = unseekables.domain();
+        switch (domain)
+        {
+            default: throw new UnhandledEnum(domain);
+            case Key: forEach((AbstractUnseekableKeys) unseekables, p1, p2, forEach); break;
+            case Range: forEach((AbstractRanges) unseekables, p1, p2, forEach); break;
+        }
+    }
+    public <P1, P2> void forEach(AbstractUnseekableKeys keys, P1 p1, P2 p2, IndexedBiConsumer<P1, P2> forEach)
+    {
+        if (keys.isEmpty())
+            return;
+
+        int[] keysToTxnIds = keysToTxnIds();
+        int searchFromIndex = -1;
+
+        for (int i = 0; i < keys.size() ; ++i)
+        {
+            int keyIndex = searchFromIndex < 0 ? this.keys.indexOf(keys.get(i))
+                                               : this.keys.findNext(searchFromIndex, keys.get(i), FAST);
+
+            if (keyIndex < 0) searchFromIndex = -1 - keyIndex;
+            else
+            {
+                int index = startOffset(keyIndex);
+                int end = endOffset(keyIndex);
+                while (index < end)
+                {
+                    int txnIdx = keysToTxnIds[index++];
+                    forEach.accept(p1, p2, txnIdx);
+                }
+                searchFromIndex = keyIndex + 1;
+            }
+        }
+    }
+
+    public <P1, P2> void forEach(AbstractRanges ranges, P1 p1, P2 p2, IndexedBiConsumer<P1, P2> forEach)
     {
         for (int i = 0; i < ranges.size(); ++i)
-            forEach(ranges.get(i), inclIdx, exclIdx, p1, p2, forEach);
+            forEach(ranges.get(i), p1, p2, forEach);
     }
 
-    public <P1, P2> void forEach(Range range, P1 p1, P2 p2, IndexedBiConsumer<P1, P2> forEach)
+    public <P1, P2> int forEach(Range range, P1 p1, P2 p2, IndexedBiConsumer<P1, P2> forEach)
     {
-        forEach(range, 0, keys.size(), p1, p2, forEach);
+        return forEach(range, forEach, p1, p2, IndexedBiConsumer::accept);
     }
 
-    public <P1, P2> void forEach(Range range, int inclKeyIdx, int exclKeyIdx, P1 p1, P2 p2, IndexedBiConsumer<P1, P2> forEach)
-    {
-        forEach(range, inclKeyIdx, exclKeyIdx, forEach, p1, p2, IndexedBiConsumer::accept);
-    }
-
-    public <P1, P2, P3> void forEach(Range range, P1 p1, P2 p2, P3 p3, IndexedTriConsumer<P1, P2, P3> forEach)
-    {
-        forEach(range, 0, keys.size(), p1, p2, p3, forEach);
-    }
-
-    public <P1, P2, P3> void forEach(Range range, int inclKeyIdx, int exclKeyIdx, P1 p1, P2 p2, P3 p3, IndexedTriConsumer<P1, P2, P3> forEach)
+    public <P1, P2, P3> int forEach(Range range, P1 p1, P2 p2, P3 p3, IndexedTriConsumer<P1, P2, P3> forEach)
     {
         int[] keysToTxnIds = keysToTxnIds();
         int start = keys.indexOf(range.start());
         if (start < 0) start = -1 - start;
-        else if (!range.startInclusive()) ++start;
+        else if (isStartExclusive()) ++start;
         start = startOffset(start);
 
         int end = keys.indexOf(range.end());
         if (end < 0) end = -1 - end;
-        else if (range.endInclusive()) ++end;
+        else if (isEndInclusive()) ++end;
         end = startOffset(end);
 
         while (start < end)
         {
             int txnIdx = keysToTxnIds[start++];
-            if (txnIdx >= inclKeyIdx && txnIdx < exclKeyIdx)
-                forEach.accept(p1, p2, p3, txnIdx);
+            forEach.accept(p1, p2, p3, txnIdx);
         }
+
+        return end;
     }
 
     public <P1, V> V foldEachKey(int txnIdx, P1 p1, V accumulate, TriFunction<P1, RoutingKey, V, V> fold)
@@ -741,11 +773,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
     {
         int startIndex = keys.indexOf(range.start());
         if (startIndex < 0) startIndex = -1 - startIndex;
-        else if (!range.startInclusive()) ++startIndex;
+        else if (isStartExclusive()) ++startIndex;
 
         int endIndex = keys.indexOf(range.end());
         if (endIndex < 0) endIndex = -1 - endIndex;
-        else if (range.endInclusive()) ++endIndex;
+        else if (isEndInclusive()) ++endIndex;
 
         if (startIndex == endIndex)
             return DepRelationList.EMPTY;

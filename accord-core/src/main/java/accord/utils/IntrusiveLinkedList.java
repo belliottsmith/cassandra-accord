@@ -29,10 +29,10 @@ import static java.util.Spliterators.spliteratorUnknownSize;
  * A simple intrusive double-linked list for maintaining a list of tasks,
  * useful for invalidating queued ordered tasks
  *
- * TODO (low priority): COPIED FROM CASSANDRA
+ * TODO (low priority): COPIED FROM CASSANDRA (TEST CLASSES). NOW USED IN CASSANDRA IMPL VIA HERE... SHOULD CLEANUP.
  */
 
-@SuppressWarnings("unchecked")
+@SuppressWarnings({"unchecked", "unused"})
 public class IntrusiveLinkedList<O extends IntrusiveLinkedListNode> extends IntrusiveLinkedListNode implements Iterable<O>
 {
     public IntrusiveLinkedList()

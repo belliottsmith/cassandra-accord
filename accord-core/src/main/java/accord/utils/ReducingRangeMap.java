@@ -26,6 +26,7 @@ import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
 
+import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
 import static accord.utils.SortedArrays.Search.FAST;
 import static accord.utils.SortedArrays.exponentialSearch;
 
@@ -38,20 +39,20 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public static class SerializerSupport
     {
-        public static <V> ReducingRangeMap<V> create(boolean inclusiveEnds, RoutingKey[] starts, V[] values)
+        public static <V> ReducingRangeMap<V> create(RoutingKey[] starts, V[] values)
         {
-            return new ReducingRangeMap<>(inclusiveEnds, starts, values);
+            return new ReducingRangeMap<>(starts, values);
         }
     }
 
     public ReducingRangeMap()
     {
-        super(false, RoutingKeys.EMPTY_KEYS_ARRAY, (V[])NO_OBJECTS);
+        super(RoutingKeys.EMPTY_KEYS_ARRAY, (V[])NO_OBJECTS);
     }
 
-    protected ReducingRangeMap(boolean inclusiveEnds, RoutingKey[] starts, V[] values)
+    protected ReducingRangeMap(RoutingKey[] starts, V[] values)
     {
-        super(inclusiveEnds, starts, values);
+        super(starts, values);
     }
 
     public <V2> V2 foldl(Routables<?> routables, BiFunction<V, V2, V2> fold, V2 accumulator)
@@ -136,21 +137,21 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
         int i = 0, j = keys.find(starts[0], FAST);
         if (j < 0) j = -1 - j;
-        else if (inclusiveEnds) ++j;
+        else if (isEndInclusive()) ++j;
 
         while (j < keys.size())
         {
             // TODO (desired): first search should be binarySearch
             i = exponentialSearch(starts, i, starts.length, keys.get(j));
             if (i < 0) i = -2 - i;
-            else if (inclusiveEnds) --i;
+            else if (isEndInclusive()) --i;
 
             if (i >= values.length)
                 return accumulator;
 
             int nextj = keys.findNext(j, starts[i + 1], FAST);
             if (nextj < 0) nextj = -1 -nextj;
-            else if (inclusiveEnds) ++nextj;
+            else if (isEndInclusive()) ++nextj;
 
             if (j != nextj && values[i] != null)
             {
@@ -187,7 +188,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
         int j = ranges.find(starts[0], FAST);
         if (j < 0) j = -1 - j;
-        else if (inclusiveEnds && ranges.get(j).end().equals(starts[0])) ++j;
+        else if (isEndInclusive() && ranges.get(j).end().equals(starts[0])) ++j;
 
         int i = 0;
         while (j < ranges.size())
@@ -195,7 +196,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             // TODO (desired): first search should be binarySearch
             int nexti = exponentialSearch(starts, i, starts.length, ranges.get(j).start());
             if (nexti < 0) i = Math.max(i, -2 - nexti);
-            else if (nexti > i && inclusiveEnds) i = nexti - 1;
+            else if (nexti > i && isEndInclusive()) i = nexti - 1;
             else i = nexti;
 
             if (i >= values.length)
@@ -209,7 +210,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             else
             {
                 toj = nextj + 1;
-                if (inclusiveEnds && ranges.get(nextj).end().equals(starts[i + 1]))
+                if (isEndInclusive() && ranges.get(nextj).end().equals(starts[i + 1]))
                     ++nextj;
             }
 
@@ -243,7 +244,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
         int i = 0, j = keys.find(starts[0], FAST);
         if (j < 0) j = -1 - j;
-        else if (inclusiveEnds) ++j;
+        else if (isEndInclusive()) ++j;
 
         if (j > 0)
             accumulator = fold.apply(defaultValue, accumulator, p1, p2, 0, j, 0);
@@ -253,14 +254,14 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             // TODO (desired): first search should be binarySearch
             i = exponentialSearch(starts, i, starts.length, keys.get(j));
             if (i < 0) i = -2 - i;
-            else if (inclusiveEnds) --i;
+            else if (isEndInclusive()) --i;
 
             if (i >= values.length)
                 return fold.apply(defaultValue, accumulator, p1, p2, j, keys.size(), i);
 
             int nextj = keys.findNext(j, starts[i + 1], FAST);
             if (nextj < 0) nextj = -1 -nextj;
-            else if (inclusiveEnds) ++nextj;
+            else if (isEndInclusive()) ++nextj;
 
             if (j != nextj)
             {
@@ -288,7 +289,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
         int j = ranges.find(starts[0], FAST);
         if (j < 0) j = -1 - j;
-        else if (inclusiveEnds && ranges.get(j).end().equals(starts[0])) ++j;
+        else if (isEndInclusive() && ranges.get(j).end().equals(starts[0])) ++j;
 
         if (j > 0 || starts[0].compareTo(ranges.get(0).start()) > 0)
             accumulator = fold.apply(defaultValue, accumulator, p1, p2, 0, j, 0);
@@ -299,7 +300,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             // TODO (desired): first search should be binarySearch
             int nexti = exponentialSearch(starts, i, starts.length, ranges.get(j).start());
             if (nexti < 0) i = Math.max(i, -2 - nexti);
-            else if (nexti > i && inclusiveEnds) i = nexti - 1;
+            else if (nexti > i && isEndInclusive()) i = nexti - 1;
             else i = nexti;
 
             if (i >= values.length)
@@ -313,7 +314,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             else
             {
                 toj = nextj + 1;
-                if (inclusiveEnds && ranges.get(nextj).end().equals(starts[i + 1]))
+                if (isEndInclusive() && ranges.get(nextj).end().equals(starts[i + 1]))
                     ++nextj;
             }
 
@@ -338,7 +339,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
     {
         int idx = Arrays.binarySearch(starts, key);
         if (idx < 0) idx = -2 - idx;
-        else if (inclusiveEnds) --idx;
+        else if (isEndInclusive()) --idx;
         return idx;
     }
 
@@ -363,7 +364,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public static <V> ReducingRangeMap<V> create(Range range, V value)
     {
-        return new ReducingRangeMap<>(range.endInclusive(), new RoutingKey[] { range.start(), range.end() }, (V[])new Object[] { value });
+        return new ReducingRangeMap<>(new RoutingKey[] { range.start(), range.end() }, (V[])new Object[] { value });
     }
 
     protected static <V, M extends ReducingRangeMap<V>> M create(Unseekables<?> keysOrRanges, V value, BuilderFactory<RoutingKey, V, M> builder)
@@ -391,7 +392,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         if (value == null)
             throw new IllegalArgumentException("value is null");
 
-        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(ranges.get(0).endInclusive(), ranges.size() * 2);
+        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(ranges.size() * 2);
         for (Range cur : ranges)
         {
             builder.appendNoOverlap(cur.start(), value);
@@ -406,7 +407,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         if (value == null)
             throw new IllegalArgumentException("value is null");
 
-        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(keys.get(0).asRange().endInclusive(), keys.size() * 2);
+        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(keys.size() * 2);
         for (int i = 0 ; i < keys.size() ; ++i)
         {
             Range range = keys.get(i).asRange();
@@ -426,7 +427,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         AbstractBoundariesBuilder<RoutingKey, V, M> builder;
         {
             Range range = prev.asRange();
-            builder = factory.create(prev.asRange().endInclusive(), keys.size() * 2);
+            builder = factory.create(keys.size() * 2);
             builder.appendNoOverlap(range.start(), value);
             builder.appendNoOverlap(range.end(), null);
         }
@@ -464,16 +465,16 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public static class Builder<V> extends AbstractBoundariesBuilder<RoutingKey, V, ReducingRangeMap<V>>
     {
-        public Builder(boolean inclusiveEnds, int capacity)
+        public Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @SuppressWarnings("unchecked")
         @Override
         protected ReducingRangeMap<V> buildInternal()
         {
-            return new ReducingRangeMap<>(inclusiveEnds, starts.toArray(new RoutingKey[0]), (V[])values.toArray(new Object[0]));
+            return new ReducingRangeMap<>(starts.toArray(new RoutingKey[0]), (V[])values.toArray(new Object[0]));
         }
     }
 
@@ -496,6 +497,6 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         V2[] output = allocator.apply(values.length);
         for (int i = 0 ; i < values.length ; ++i)
             output[i] = map.apply(values[i]);
-        return new ReducingRangeMap<>(inclusiveEnds, starts, output);
+        return new ReducingRangeMap<>(starts, output);
     }
 }

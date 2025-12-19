@@ -28,23 +28,38 @@ import java.util.concurrent.RunnableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import javax.annotation.Nullable;
+
 import accord.api.AsyncExecutor;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 
 public abstract class TaskExecutorService extends AbstractExecutorService implements AsyncExecutor
 {
     static abstract class Task<T> extends AsyncResults.RunnableResult<T> implements Pending, RunnableFuture<T>
     {
         final Pending origin;
+        final @Nullable Cancellable ifCancelled;
+
         public Task(Callable<T> fn)
         {
-            this(fn, Pending.Global.activeOrigin());
+            this(fn, (Cancellable) null);
+        }
+        public Task(Callable<T> fn, @Nullable Cancellable ifCancelled)
+        {
+            this(fn, Pending.Global.activeOrigin(), ifCancelled);
         }
 
         public Task(Callable<T> fn, Pending origin)
         {
+            this(fn, origin, null);
+        }
+
+        public Task(Callable<T> fn, Pending origin, @Nullable Cancellable ifCancelled)
+        {
             super(fn);
             this.origin = origin == null ? this : origin;
+            this.ifCancelled = ifCancelled;
         }
 
         public Pending origin()
