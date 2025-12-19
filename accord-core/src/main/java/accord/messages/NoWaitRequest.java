@@ -221,6 +221,6 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
     @Override
     public String reason()
     {
-        return getClass().getSimpleName() + (txnId == null ? "" : "{" + txnId + '}');
+        return getClass().getSimpleName();
     }
 }

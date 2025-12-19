@@ -733,6 +733,15 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return Arrays.equals(this.ranges, ((AbstractRanges) that).ranges);
     }
 
+    public boolean hasSameRanges(Object that)
+    {
+        if (this == that)
+            return true;
+        if (!(that instanceof AbstractRanges))
+            return false;
+        return Arrays.equals(this.ranges, ((AbstractRanges) that).ranges);
+    }
+
     @Override
     public Iterator<Range> iterator()
     {

@@ -42,14 +42,14 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 {
     public static class SerializerSupport
     {
-        public static DurableBefore create(boolean inclusiveEnds, RoutingKey[] ends, Entry[] values)
+        public static DurableBefore create(RoutingKey[] ends, Entry[] values)
         {
             if (values.length == 0)
             {
                 Invariants.require(ends.length == 1 && ends[0] == null);
                 return DurableBefore.EMPTY;
             }
-            return new DurableBefore(inclusiveEnds, ends, values);
+            return new DurableBefore(ends, values);
         }
     }
 
@@ -135,9 +135,9 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         this.min = new Entry(TxnId.NONE, TxnId.NONE);
     }
 
-    DurableBefore(boolean inclusiveEnds, RoutingKey[] starts, Entry[] values)
+    DurableBefore(RoutingKey[] starts, Entry[] values)
     {
-        super(inclusiveEnds, starts, values);
+        super(starts, values);
         if (values.length == 0)
         {
             min = new Entry(TxnId.NONE, TxnId.NONE);
@@ -218,15 +218,15 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 
     static class Builder extends AbstractBoundariesBuilder<RoutingKey, Entry, DurableBefore>
     {
-        protected Builder(boolean inclusiveEnds, int capacity)
+        protected Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
         protected DurableBefore buildInternal()
         {
-            return new DurableBefore(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new Entry[0]));
+            return new DurableBefore(starts.toArray(new RoutingKey[0]), values.toArray(new Entry[0]));
         }
     }
 

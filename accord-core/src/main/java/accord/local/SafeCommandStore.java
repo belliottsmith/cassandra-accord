@@ -281,9 +281,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     protected void update(Command prev, Command updated, boolean force)
     {
-        updateMaxConflicts(prev, updated, force);
-        updateCommandsForKey(prev, updated, force);
         updateExclusiveSyncPoint(prev, updated, force);
+        updateMaxConflicts(prev, updated, force);
+        if (updated.txnId().is(Range))
+            updateCommandsForRanges(prev, updated, force);
+        updateCommandsForKey(prev, updated, force);
     }
 
     public void updateExclusiveSyncPoint(Command prev, Command updated, boolean force)
@@ -298,26 +300,26 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 listener.update(this, updated);
         }
 
-        SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
+        SaveStatus prevSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
 
-        if (newSaveStatus.known.isDefinitionKnown() && (force || !oldSaveStatus.known.isDefinitionKnown()))
+        if (newSaveStatus.known.isDefinitionKnown() && (force || !prevSaveStatus.known.isDefinitionKnown()))
         {
             Ranges ranges = updated.participants().touches().toRanges();
             commandStore().markExclusiveSyncPoint(this, updated.txnId(), ranges);
         }
 
-        if (newSaveStatus.compareTo(Committed) >= 0 && newSaveStatus.compareTo(TruncatedApply) <= 0 && (force || oldSaveStatus.compareTo(Committed) < 0))
+        if (newSaveStatus.compareTo(Committed) >= 0 && newSaveStatus.compareTo(TruncatedApply) <= 0 && (force || prevSaveStatus.compareTo(Committed) < 0))
         {
             Ranges ranges = updated.participants().owns().toRanges();
             commandStore().markExclusiveSyncPointDecided(this, updated.txnId(), ranges);
         }
 
-        if (newSaveStatus == Applied && (force || oldSaveStatus != Applied))
+        if (newSaveStatus == Applied && (force || prevSaveStatus != Applied))
         {
             Ranges ranges = updated.participants().touches().toRanges();
             TxnId txnIdWithFlags = (TxnId)updated.executeAt();
-            commandStore().markExclusiveSyncPointLocallyApplied(this, txnIdWithFlags, ranges);
+            commandStore().markExclusiveSyncPointLocallyApplied(this, txnIdWithFlags, ranges, prevSaveStatus);
         }
 
         if (updated.partialDeps() != null)
@@ -357,36 +359,8 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         commandStore().updateMaxConflicts(prev, updated, force);
     }
 
-    /**
-     * Methods that implementors can use to capture changes to auxiliary collections:
-     */
-
-    public abstract void upsertRedundantBefore(RedundantBefore addRedundantBefore);
-
-    protected void unsafeSetRedundantBefore(RedundantBefore newRedundantBefore)
+    public void updateCommandsForRanges(Command prev, Command updated, boolean force)
     {
-        commandStore().unsafeSetRedundantBefore(newRedundantBefore);
-    }
-
-    protected void unsafeUpsertRedundantBefore(RedundantBefore addRedundantBefore)
-    {
-        commandStore().unsafeUpsertRedundantBefore(addRedundantBefore);
-        commandStore().updatedRedundantBefore(this, addRedundantBefore);
-    }
-
-    public void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
-    {
-        commandStore().unsafeSetBootstrapBeganAt(newBootstrapBeganAt);
-    }
-
-    public void setSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
-    {
-        commandStore().unsafeSetSafeToRead(newSafeToRead);
-    }
-
-    public void setRangesForEpoch(CommandStores.RangesForEpoch rangesForEpoch)
-    {
-        commandStore().unsafeSetRangesForEpoch(rangesForEpoch);
     }
 
     public void updateCommandsForKey(Command prev, Command next, boolean force)
@@ -402,8 +376,6 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 //        else if (txnId.is(Range) && next.known().deps.hasProposedOrDecidedDeps())
 //            updateUnmanagedCommandsForKey(this, next, REGISTER_DEPS_ONLY);
     }
-
-    abstract protected void persistFieldUpdates();
 
     private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Command prev, Command next, boolean forceNotify)
     {
@@ -516,15 +488,6 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
     }
 
-    private static TxnId maxTxnId(KeyDeps keyDeps, RoutingKey key)
-    {
-        int i = keyDeps.keys().indexOf(key);
-        if (i < 0)
-            return TxnId.NONE;
-        SortedList<TxnId> txnIdsForKey = keyDeps.txnIdsForKeyIndex(i);
-        return txnIdsForKey.get(txnIdsForKey.size() - 1);
-    }
-
     private static void updateUnmanagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId, UpdateUnmanagedMode mode)
     {
         SafeCommand safeCommand = safeStore.get(txnId);
@@ -583,6 +546,40 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
         safeCommand.updateParticipants(safeStore, safeCommand.current().participants().supplement(null, witnessedBy));
     }
+
+    /**
+     * Methods that implementors can use to capture changes to auxiliary collections:
+     */
+
+    public abstract void upsertRedundantBefore(RedundantBefore addRedundantBefore);
+
+    protected void unsafeSetRedundantBefore(RedundantBefore newRedundantBefore)
+    {
+        commandStore().unsafeSetRedundantBefore(newRedundantBefore);
+    }
+
+    protected void unsafeUpsertRedundantBefore(RedundantBefore addRedundantBefore)
+    {
+        commandStore().unsafeUpsertRedundantBefore(addRedundantBefore);
+        commandStore().updatedRedundantBefore(this, addRedundantBefore);
+    }
+
+    public void setBootstrapBeganAt(NavigableMap<TxnId, Ranges> newBootstrapBeganAt)
+    {
+        commandStore().unsafeSetBootstrapBeganAt(newBootstrapBeganAt);
+    }
+
+    public void setSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
+    {
+        commandStore().unsafeSetSafeToRead(newSafeToRead);
+    }
+
+    public void setRangesForEpoch(CommandStores.RangesForEpoch rangesForEpoch)
+    {
+        commandStore().unsafeSetRangesForEpoch(rangesForEpoch);
+    }
+
+    protected abstract void persistFieldUpdates();
 
     public abstract CommandStore commandStore();
     public abstract DataStore dataStore();

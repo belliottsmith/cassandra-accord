@@ -26,7 +26,6 @@ import accord.local.durability.DurabilityService.SyncLocal;
 import accord.local.durability.DurabilityService.SyncRemote;
 import accord.topology.Shard;
 import accord.topology.Topologies;
-import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.ReducingRangeMap;
 import accord.utils.SortedArrays.SortedArrayList;
@@ -186,22 +185,6 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
         return all(DurabilityShardTracker::hasSucceeded);
     }
 
-    public SyncRemote achievedRemote()
-    {
-        if (hasSucceeded())
-            return SyncRemote.All;
-        if (hasQuorumSuccess())
-            return SyncRemote.Quorum;
-        if (hasMinorityQuorumSuccess())
-            return SyncRemote.MinorityQuorum;
-        return SyncRemote.NoRemote;
-    }
-
-    public SyncLocal achievedLocal(Node.Id self)
-    {
-        return successes.contains(self) ? SyncLocal.Self : SyncLocal.NoLocal;
-    }
-
     public Set<Node.Id> including()
     {
         return successes;
@@ -214,19 +197,8 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
 
     public ReducingRangeMap<DurabilityLevel> results(Node.Id self)
     {
-        boolean endInclusive = false;
-        for (int i = 0 ; i < topologies.size() ; ++i)
-        {
-            Topology topology = topologies.get(i);
-            if (topology.ranges().isEmpty())
-                continue;
-
-            endInclusive = topology.ranges().get(0).endInclusive();
-            break;
-        }
-
         ReducingRangeMap<DurabilityLevel> result = null;
-        ReducingRangeMap.Builder<DurabilityLevel> builder = new ReducingRangeMap.Builder<>(endInclusive, trackers.length);
+        ReducingRangeMap.Builder<DurabilityLevel> builder = new ReducingRangeMap.Builder<>(trackers.length);
         for (int topologyIndex = 0 ; topologyIndex < topologies.size() ; ++topologyIndex)
         {
             for (int i = topologyOffset(topologyIndex), max = topologyOffset(topologyIndex + 1); i < max ; ++i)

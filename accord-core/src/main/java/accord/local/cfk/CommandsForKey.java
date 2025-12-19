@@ -21,7 +21,6 @@ package accord.local.cfk;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.Objects;
-import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -38,11 +37,9 @@ import accord.local.Command;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.CommandSummaries.ActiveCommandVisitor;
-import accord.local.CommandSummaries.AllCommandVisitor;
+import accord.local.CommandSummaries.SupersedingCommandVisitor;
 import accord.local.CommandSummaries.IsDep;
 import accord.local.CommandSummaries.SummaryStatus;
-import accord.local.CommandSummaries.ComputeIsDep;
-import accord.local.CommandSummaries.TestStartedAt;
 import accord.primitives.Deps;
 import accord.primitives.Deps.DepRelationList;
 import accord.primitives.RoutingKeys;
@@ -58,7 +55,6 @@ import accord.primitives.Txn.Kind.Kinds;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
-import accord.utils.UnhandledEnum;
 import accord.utils.btree.BTree;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
@@ -97,7 +93,6 @@ import static accord.local.cfk.Pruning.removeRedundantById;
 import static accord.local.cfk.Pruning.prunedBeforeId;
 import static accord.local.cfk.UpdateUnmanagedMode.UPDATE;
 import static accord.local.cfk.Updating.insertOrUpdate;
-import static accord.local.CommandSummaries.ComputeIsDep.IGNORE;
 import static accord.local.cfk.Updating.maybeUpdateMaxAppliedUnreadyWriteById;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Routable.Domain.Key;
@@ -1285,7 +1280,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         TxnInfo result = committedByExecuteAt[i];
         if (untilExecuteAt != null && result.executeAt.compareTo(untilExecuteAt) >= 0)
             return null;
-        return result;
+        return result.plainTxnId();
     }
 
     @VisibleForTesting
@@ -1316,88 +1311,66 @@ public class CommandsForKey extends CommandsForKeyUpdate
      * (either executeAt is before, or txnId is before and command is not committed so deps do not extend to executeAt)
      * <p>
      */
-    public boolean visit(TxnId testTxnId,
-                         Kinds testKind,
-                         TestStartedAt testStartedAt,
-                         Timestamp testStartedAtTimestamp,
-                         ComputeIsDep computeIsDep,
-                         Predicate<SummaryStatus> testStatus,
-                         AllCommandVisitor visitor)
+    public boolean visit(TxnId testTxnId, Kinds testKind, SupersedingCommandVisitor visitor)
     {
-        int start, end, loadingIndex = 0;
+        int loadingIndex = 0;
         // if this is null the TxnId is known in byId
         // otherwise, it must be non-null and represents the transactions (if any) that have requested it be loaded due to being pruned
         TxnId prunedBefore = prunedBefore();
         TxnId[] loadingFor = null;
+        if (Arrays.binarySearch(byId, testTxnId) < 0)
         {
-            int insertPos = Arrays.binarySearch(byId, testStartedAtTimestamp);
-            if (insertPos < 0)
-            {
-                loadingFor = NOT_LOADING_PRUNED;
-                insertPos = -1 - insertPos;
-                if (computeIsDep != IGNORE && testTxnId.compareTo(prunedBefore) < 0)
-                    loadingFor = loadingPrunedFor(loadingPruned, testTxnId, NOT_LOADING_PRUNED);
-            }
-
-            switch (testStartedAt)
-            {
-                default: throw new UnhandledEnum(testStartedAt);
-                case STARTED_BEFORE: start = 0; end = insertPos; break;
-                case STARTED_AFTER: start = insertPos; end = byId.length; break;
-                case ANY: start = 0; end = byId.length;
-            }
+            loadingFor = NOT_LOADING_PRUNED;
+            if (testTxnId.compareTo(prunedBefore) < 0)
+                loadingFor = loadingPrunedFor(loadingPruned, testTxnId, NOT_LOADING_PRUNED);
         }
 
-        for (int i = start; i < end ; ++i)
+        for (int i = 0; i < byId.length ; ++i)
         {
             TxnInfo txn = byId[i];
             if (!txn.is(testKind)) continue;
             SummaryStatus summaryStatus = txn.summaryStatus();
-            if (summaryStatus == null || (testStatus != null && !testStatus.test(summaryStatus))) continue;
+            if (summaryStatus == null) continue;
 
             Timestamp executeAt = txn.executeAt;
-            IsDep dep = null;
-            if (computeIsDep != IGNORE)
+            IsDep dep;
+            if (!txn.hasDeps() || (txn.depsKnownUntilExecuteAt() ? executeAt : txn).compareTo(testTxnId) <= 0)
             {
-                if (!txn.hasDeps() || (summaryStatus == SummaryStatus.ACCEPTED ? txn : executeAt).compareTo(testTxnId) <= 0)
+                dep = NOT_ELIGIBLE;
+            }
+            else
+            {
+                boolean hasAsDep;
+                if (loadingFor == null)
                 {
-                    dep = NOT_ELIGIBLE;
+                    TxnId[] missing = txn.missing();
+                    hasAsDep = missing == NO_TXNIDS || Arrays.binarySearch(txn.missing(), testTxnId) < 0;
+                }
+                else if (loadingFor == NOT_LOADING_PRUNED)
+                {
+                    hasAsDep = false;
                 }
                 else
                 {
-                    boolean hasAsDep;
-                    if (loadingFor == null)
+                    // we could use expontentialSearch and moving index for improved algorithmic complexity,
+                    // but since should be rarely taken path probably not worth code complexity
+                    loadingIndex = SortedArrays.exponentialSearch(loadingFor, loadingIndex, loadingFor.length, txn);
+                    if (loadingIndex >= 0)
                     {
-                        TxnId[] missing = txn.missing();
-                        hasAsDep = missing == NO_TXNIDS || Arrays.binarySearch(txn.missing(), testTxnId) < 0;
-                    }
-                    else if (loadingFor == NOT_LOADING_PRUNED)
-                    {
-                        hasAsDep = false;
+                        hasAsDep = !loadingFor[loadingIndex].is(UNSTABLE);
+                        ++loadingIndex;
                     }
                     else
                     {
-                        // we could use expontentialSearch and moving index for improved algorithmic complexity,
-                        // but since should be rarely taken path probably not worth code complexity
-                        loadingIndex = SortedArrays.exponentialSearch(loadingFor, loadingIndex, loadingFor.length, txn);
-                        if (loadingIndex >= 0)
-                        {
-                            hasAsDep = !loadingFor[loadingIndex].is(UNSTABLE);
-                            ++loadingIndex;
-                        }
-                        else
-                        {
-                            hasAsDep = false;
-                            loadingIndex = -1 - loadingIndex;
-                        }
+                        hasAsDep = false;
+                        loadingIndex = -1 - loadingIndex;
                     }
-
-                    if (txn.compareTo(ACCEPTED) >= 0) dep = hasAsDep ? IS_PROPOSED_OR_STABLE_DEP : IS_NOT_PROPOSED_OR_STABLE_DEP;
-                    else if (txn.is(PrivilegedCoordinatorWithDeps)) dep = hasAsDep ? IS_COORD_DEP : IS_NOT_COORD_DEP;
-                    else dep = NOT_ELIGIBLE;
                 }
-            }
 
+                if (txn.compareTo(ACCEPTED) >= 0) dep = hasAsDep ? IS_PROPOSED_OR_STABLE_DEP : IS_NOT_PROPOSED_OR_STABLE_DEP;
+                else if (txn.is(PrivilegedCoordinatorWithDeps)) dep = hasAsDep ? IS_COORD_DEP : IS_NOT_COORD_DEP;
+                else dep = NOT_ELIGIBLE;
+            }
             if (!visitor.visit(key, txn.plainTxnId(), executeAt, summaryStatus, dep, txn.durability()))
                 return false;
         }

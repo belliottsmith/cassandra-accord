@@ -55,7 +55,9 @@ import accord.utils.SymmetricComparator;
 import accord.utils.async.Cancellable;
 import accord.utils.btree.BTree;
 import accord.utils.btree.IntervalBTree;
+import accord.utils.btree.IntervalBTree.IntervalComparators;
 
+import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
 import static accord.coordinate.ExecuteSyncPoint.coordinateIncluding;
 import static accord.local.durability.DurabilityQueue.Status.ABANDONED;
 import static accord.local.durability.DurabilityQueue.Status.ACTIVE;
@@ -146,7 +148,7 @@ public class DurabilityQueue
         }
     }
 
-    private static final PendingComparators BY_RANGE = new PendingComparators();
+    private static final IntervalComparators<PendingRange> BY_RANGE = new InclusiveEndPendingComparators();
     private static final Comparator<Pending> BY_PRIORITY = (a, b) -> {
         if ((a.status == ACTIVE) != (b.status == ACTIVE))
             return a.status == ACTIVE ? -1 : 1;
@@ -159,7 +161,7 @@ public class DurabilityQueue
         return a.syncPoint.syncId.compareTo(b.syncPoint.syncId);
     };
 
-    private static class PendingComparators implements IntervalBTree.IntervalComparators<PendingRange>
+    private static class InclusiveEndPendingComparators implements IntervalComparators<PendingRange>
     {
         @Override public Comparator<PendingRange> totalOrder()
         {
@@ -310,12 +312,13 @@ public class DurabilityQueue
 
     public DurabilityQueue(Node node)
     {
-        this.adapter = new NodeAdapter(node);
+        this(new NodeAdapter(node));
     }
 
     public DurabilityQueue(Adapter adapter)
     {
         this.adapter = adapter;
+        Invariants.require(isEndInclusive(), "Need to implement range-exclusive IntervalComparators");
     }
 
     void submit(SyncPoint syncPoint, @Nullable DurabilityRequest request)

@@ -137,7 +137,8 @@ public enum Status
         private static final int SHARDS_SHIFT = 3;
         private static final int PHASE_SHIFT = 1;
         private static final int PHASE_MASK = 0x3;
-        public static final int TOTAL_ENCODING_BITS = 6;
+        public static final int ENCODING_BITS = 6;
+        public static final int ENCODING_MASK = (1 << ENCODING_BITS) - 1;
         private static final Durability[] lookup = values();
 
         public static final Durability NotDurable = get(HasDecision.None, HasOutcome.None, HasOutcome.None, false);

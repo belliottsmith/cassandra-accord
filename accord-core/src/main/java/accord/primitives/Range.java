@@ -28,6 +28,7 @@ import java.util.Objects;
 
 import javax.annotation.Nullable;
 
+import static accord.api.ProtocolModifiers.RangeSpec.END_INCLUSIVE;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FAST;
 
@@ -41,11 +42,13 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         public EndInclusive(RoutingKey start, RoutingKey end)
         {
             super(start, end);
+            Invariants.require(END_INCLUSIVE);
         }
 
         public EndInclusive(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
         {
             super(start, end, antiRange);
+            Invariants.require(END_INCLUSIVE);
         }
 
         @Override
@@ -96,11 +99,13 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         public StartInclusive(RoutingKey start, RoutingKey end)
         {
             super(start, end);
+            Invariants.require(!END_INCLUSIVE);
         }
 
         public StartInclusive(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
         {
             super(start, end, antiRange);
+            Invariants.require(!END_INCLUSIVE);
         }
 
         @Override
@@ -148,68 +153,8 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
 
     public static Range range(RoutingKey start, RoutingKey end, boolean startInclusive, boolean endInclusive)
     {
-        return new Range(start, end) {
-
-            @Override
-            public boolean startInclusive()
-            {
-                return startInclusive;
-            }
-
-            @Override
-            public boolean endInclusive()
-            {
-                return endInclusive;
-            }
-
-            @Override
-            public Range newRange(RoutingKey start, RoutingKey end)
-            {
-                throw new UnsupportedOperationException("subRange");
-            }
-
-            @Override
-            public int compareTo(RoutableKey key)
-            {
-                if (startInclusive)
-                {
-                    if (key.compareTo(start()) < 0)
-                        return 1;
-                }
-                else
-                {
-                    if (key.compareTo(start()) <= 0)
-                        return 1;
-                }
-                if (endInclusive)
-                {
-                    if (key.compareTo(end()) > 0)
-                        return -1;
-                }
-                else
-                {
-                    if (key.compareTo(end()) >= 0)
-                        return -1;
-                }
-                return 0;
-            }
-
-            @Override
-            public int compareStartTo(RoutableKey key)
-            {
-                int c = start().compareTo(key);
-                if (c == 0 && !startInclusive) c = 1;
-                return c;
-            }
-
-            @Override
-            public int compareEndTo(RoutableKey key)
-            {
-                int c = end().compareTo(key);
-                if (c == 0 && !endInclusive) c = -1;
-                return c;
-            }
-        };
+        Invariants.require(startInclusive != endInclusive);
+        return startInclusive ? new StartInclusive(start, end) : new EndInclusive(start, end);
     }
 
     // used to construct an unsafe Range used only for representing an absence of information. Imposes weaker invariants.
@@ -223,16 +168,13 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         // TODO (expected): should we at least relax to permit an empty Range?
         Invariants.requireArgument(start.compareTo(end) < 0, "%s >= %s", start, end);
         Invariants.requireArgument(Objects.equals(start.prefix(), end.prefix()), "Range bounds must share their prefix: %s vs %s", start, end);
-        Invariants.require(startInclusive() != endInclusive(), "Range must have one side inclusive, and the other exclusive. Range of different types should not be mixed.");
         this.start = start;
         this.end = end;
     }
 
     private Range(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
     {
-        // TODO (expected): should we at least relax to permit an empty Range?
         Invariants.requireArgument(start.compareTo(end) < 0, "%s >= %s", start, end);
-        Invariants.require(startInclusive() != endInclusive(), "Range must have one side inclusive, and the other exclusive. Range of different types should not be mixed.");
         this.start = start;
         this.end = end;
     }

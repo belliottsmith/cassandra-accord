@@ -134,7 +134,7 @@ public class ImmutableCommandTest
         }
 
         commands.execute(() -> {
-            SafeCommandStore safeStore = commands.beginOperation(PreLoadContext.contextFor(txnId, "Test"));
+            SafeCommandStore safeStore = commands.beginOperation(PreLoadContext.contextFor(txnId, "Test"), null);
             try
             {
                 StoreParticipants participants = StoreParticipants.update(safeStore, ROUTE, txnId.epoch(), txnId, txnId.epoch());

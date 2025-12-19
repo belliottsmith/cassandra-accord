@@ -386,6 +386,11 @@ public class Invariants
         return input;
     }
 
+    public static void refuseArgument(String msg)
+    {
+        throw illegalArgument(msg);
+    }
+
     public static void requireArgument(boolean condition)
     {
         if (!condition)

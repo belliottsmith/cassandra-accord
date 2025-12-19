@@ -120,7 +120,7 @@ public class BTreeReducingRangeMapTest
         for (int i = 1 ; i < length ; ++i)
             builder.append(points[i - 1].left, points[i].right);
         builder.append(points[length - 1].left);
-        return builder.build(BTreeReducingRangeMap::new);
+        return builder.build((inclusiveEnds, tree) -> new BTreeReducingRangeMap<Timestamp>(tree));
     }
 
     static
@@ -314,9 +314,9 @@ public class BTreeReducingRangeMapTest
 
         static class IntervalBuilder extends BTreeReducingIntervalMap.AbstractIntervalBuilder<RoutingKey, Timestamp, BTreeReducingRangeMap<Timestamp>>
         {
-            protected IntervalBuilder(boolean inclusiveEnds, int capacity)
+            protected IntervalBuilder(int capacity)
             {
-                super(inclusiveEnds, capacity);
+                super(capacity);
             }
 
             @Override
@@ -340,7 +340,7 @@ public class BTreeReducingRangeMapTest
             @Override
             protected BTreeReducingRangeMap<Timestamp> buildInternal(Object[] tree)
             {
-                return new BTreeReducingRangeMap<>(inclusiveEnds, tree);
+                return new BTreeReducingRangeMap<>(tree);
             }
         }
 
