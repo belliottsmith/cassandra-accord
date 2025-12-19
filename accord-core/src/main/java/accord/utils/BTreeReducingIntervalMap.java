@@ -31,6 +31,8 @@ import java.util.function.Predicate;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.api.ProtocolModifiers.RangeSpec.isStartInclusive;
 import static accord.utils.Invariants.*;
 import static com.google.common.collect.Iterators.filter;
 import static com.google.common.collect.Iterators.transform;
@@ -49,33 +51,16 @@ import static com.google.common.collect.Iterators.transform;
  */
 public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
 {
-    protected final boolean inclusiveEnds;
     protected final Object[] tree;
 
     public BTreeReducingIntervalMap()
     {
-        this(false);
+        this(BTree.empty());
     }
 
-    public BTreeReducingIntervalMap(boolean inclusiveEnds)
+    protected BTreeReducingIntervalMap(Object[] tree)
     {
-        this(inclusiveEnds, BTree.empty());
-    }
-
-    protected BTreeReducingIntervalMap(boolean inclusiveEnds, Object[] tree)
-    {
-        this.inclusiveEnds = inclusiveEnds;
         this.tree = tree;
-    }
-
-    public boolean inclusiveEnds()
-    {
-        return inclusiveEnds;
-    }
-
-    public final boolean inclusiveStarts()
-    {
-        return !inclusiveEnds;
     }
 
     public boolean isEmpty()
@@ -94,7 +79,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
         int idx = BTree.findIndex(tree, EntryComparator.instance(), key);
 
         if (idx < 0) idx = -2 - idx;
-        else if (inclusiveEnds) --idx;
+        else if (isEndInclusive()) --idx;
 
         return idx < 0 || idx >= size()
              ? null
@@ -164,11 +149,11 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
             if (!isFirst)
                 builder.append(", ");
 
-            builder.append(inclusiveStarts() ? '[' : '(')
+            builder.append(isStartInclusive() ? '[' : '(')
                    .append(iter.start())
                    .append(',')
                    .append(iter.end())
-                   .append(inclusiveEnds() ? ']' : ')')
+                   .append(isEndInclusive() ? ']' : ')')
                    .append('=')
                    .append(iter.value());
 
@@ -184,13 +169,13 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
         if (o == null || getClass() != o.getClass()) return false;
         @SuppressWarnings("unchecked")
         BTreeReducingIntervalMap<K, V> that = (BTreeReducingIntervalMap<K, V>) o;
-        return this.inclusiveEnds == that.inclusiveEnds && BTree.equals(this.tree, that.tree);
+        return BTree.equals(this.tree, that.tree);
     }
 
     @Override
     public int hashCode()
     {
-        return Boolean.hashCode(inclusiveEnds) + 31 * BTree.hashCode(tree);
+        return 31 * BTree.hashCode(tree);
     }
 
     public static class EntryComparator<K extends Comparable<? super K>, V> implements AsymmetricComparator<K, Entry<K, V>>
@@ -281,8 +266,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
         if (historyRight == null || historyRight.isEmpty())
             return historyLeft;
 
-        boolean inclusiveEnds = inclusiveEnds(historyLeft.inclusiveEnds, !historyLeft.isEmpty(), historyRight.inclusiveEnds, !historyRight.isEmpty());
-        AbstractIntervalBuilder<K, V, M> builder = factory.create(inclusiveEnds, historyLeft.size() + historyRight.size());
+        AbstractIntervalBuilder<K, V, M> builder = factory.create(historyLeft.size() + historyRight.size());
 
         WithBoundsIterator<K, V> left = historyLeft.withBoundsIterator();
         WithBoundsIterator<K, V> right = historyRight.withBoundsIterator();
@@ -359,8 +343,7 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
         if (historyRight == null || historyRight.isEmpty())
             return historyLeft;
 
-        boolean inclusiveEnds = inclusiveEnds(historyLeft.inclusiveEnds, !historyLeft.isEmpty(), historyRight.inclusiveEnds, !historyRight.isEmpty());
-        AbstractBoundariesBuilder<K, V, M> builder = factory.create(inclusiveEnds, historyLeft.size() + historyRight.size());
+        AbstractBoundariesBuilder<K, V, M> builder = factory.create(historyLeft.size() + historyRight.size());
 
         WithBoundsIterator<K, V> left = historyLeft.withBoundsIterator();
         WithBoundsIterator<K, V> right = historyRight.withBoundsIterator();
@@ -463,19 +446,16 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
 
     public interface BoundariesBuilderFactory<K extends Comparable<? super K>, V, M extends BTreeReducingIntervalMap<K, V>>
     {
-        AbstractBoundariesBuilder<K, V, M> create(boolean inclusiveEnds, int capacity);
+        AbstractBoundariesBuilder<K, V, M> create(int capacity);
     }
 
     public static abstract class AbstractBoundariesBuilder<K extends Comparable<? super K>, V, M extends BTreeReducingIntervalMap<K, V>>
     {
-        protected final boolean inclusiveEnds;
-
         private final BTree.Builder<Entry<K, V>> treeBuilder;
         private final TinyKVBuffer<K, V> buffer;
 
-        protected AbstractBoundariesBuilder(boolean inclusiveEnds, int capacity)
+        protected AbstractBoundariesBuilder(int capacity)
         {
-            this.inclusiveEnds = inclusiveEnds;
             this.treeBuilder = BTree.builder(Comparator.naturalOrder(), capacity);
             this.buffer = new TinyKVBuffer<>();
         }
@@ -550,20 +530,18 @@ public class BTreeReducingIntervalMap<K extends Comparable<? super K>, V>
 
     public interface IntervalBuilderFactory<K extends Comparable<? super K>, V, M extends BTreeReducingIntervalMap<K, V>>
     {
-        AbstractIntervalBuilder<K, V, M> create(boolean inclusiveEnds, int capacity);
+        AbstractIntervalBuilder<K, V, M> create(int capacity);
     }
 
     public static abstract class AbstractIntervalBuilder<K extends Comparable<? super K>, V, M>
     {
-        protected final boolean inclusiveEnds;
         private final BTree.Builder<Entry<K, V>> treeBuilder;
         private final TinyKVBuffer<K, V> buffer;
 
         private K prevEnd;
 
-        protected AbstractIntervalBuilder(boolean inclusiveEnds, int capacity)
+        protected AbstractIntervalBuilder(int capacity)
         {
-            this.inclusiveEnds = inclusiveEnds;
             this.treeBuilder = BTree.builder(Comparator.naturalOrder(), capacity);
             this.buffer = new TinyKVBuffer<>();
         }

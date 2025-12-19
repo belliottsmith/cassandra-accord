@@ -54,7 +54,6 @@ import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
-import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.primitives.Status.Phase.Execute;

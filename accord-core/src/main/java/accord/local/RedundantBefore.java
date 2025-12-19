@@ -93,9 +93,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
     public static class SerializerSupport
     {
-        public static RedundantBefore create(boolean inclusiveEnds, RoutingKey[] ends, Bounds[] values)
+        public static RedundantBefore create(RoutingKey[] ends, Bounds[] values)
         {
-            return new RedundantBefore(inclusiveEnds, ends, values);
+            return new RedundantBefore(ends, values);
         }
     }
 
@@ -820,9 +820,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         minEndEpoch = Long.MAX_VALUE;
     }
 
-    RedundantBefore(boolean inclusiveEnds, RoutingKey[] starts, Bounds[] values)
+    RedundantBefore(RoutingKey[] starts, Bounds[] values)
     {
-        super(inclusiveEnds, starts, values);
+        super(starts, values);
         staleRanges = extractRanges(values, b -> b.staleUntilAtLeast != null);
         lostRanges = extractRanges(values, Bounds::hasLostOwnership);
         TxnId maxUnready = TxnId.NONE, maxGcBefore = TxnId.NONE, maxShardAppliedBefore = TxnId.NONE;
@@ -914,7 +914,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return EMPTY;
 
         Bounds bounds = new Bounds(null, startEpoch, endEpoch, new TxnId[] { bound }, new int[] { (int) (status.encoded & ONLY_LE_MASK), (int)status.encoded }, staleUntilAtLeast);
-        Builder builder = new Builder(ranges.get(0).endInclusive(), ranges.size() * 2);
+        Builder builder = new Builder(ranges.size() * 2);
         for (int i = 0 ; i < ranges.size() ; ++i)
         {
             Range cur = ranges.get(i);
@@ -1114,9 +1114,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
     public static class Builder extends AbstractIntervalBuilder<RoutingKey, Bounds, RedundantBefore>
     {
-        public Builder(boolean inclusiveEnds, int capacity)
+        public Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
@@ -1158,7 +1158,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         @Override
         protected RedundantBefore buildInternal()
         {
-            return new RedundantBefore(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new Bounds[0]));
+            return new RedundantBefore(starts.toArray(new RoutingKey[0]), values.toArray(new Bounds[0]));
         }
     }
 

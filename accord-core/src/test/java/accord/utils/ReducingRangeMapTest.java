@@ -126,7 +126,7 @@ public class ReducingRangeMapTest
             timestamps[i - 1] = points[i].right;
         }
         routingKeys[length - 1] = points[length - 1].left;
-        return new ReducingRangeMap<>(true, routingKeys, timestamps);
+        return new ReducingRangeMap<>(routingKeys, timestamps);
     }
 
     static
@@ -319,9 +319,9 @@ public class ReducingRangeMapTest
 
         static class IntervalBuilder extends ReducingIntervalMap.AbstractIntervalBuilder<RoutingKey, Timestamp, ReducingRangeMap<Timestamp>>
         {
-            protected IntervalBuilder(boolean inclusiveEnds, int capacity)
+            protected IntervalBuilder(int capacity)
             {
-                super(inclusiveEnds, capacity);
+                super(capacity);
             }
 
             @Override
@@ -345,7 +345,7 @@ public class ReducingRangeMapTest
             @Override
             protected ReducingRangeMap<Timestamp> buildInternal()
             {
-                return new ReducingRangeMap<>(inclusiveEnds, starts.toArray(new RoutingKey[0]), values.toArray(new Timestamp[0]));
+                return new ReducingRangeMap<>(starts.toArray(new RoutingKey[0]), values.toArray(new Timestamp[0]));
             }
         }
 

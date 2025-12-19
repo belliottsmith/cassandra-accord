@@ -28,8 +28,10 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Predicate;
 
+import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
 import static accord.utils.SortedArrays.Search.FAST;
 
 public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKey, V>
@@ -39,9 +41,9 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
         super();
     }
 
-    protected BTreeReducingRangeMap(boolean inclusiveEnds, Object[] tree)
+    protected BTreeReducingRangeMap(Object[] tree)
     {
-        super(inclusiveEnds, tree);
+        super(tree);
     }
 
     public V foldl(Routables<?> routables, BiFunction<V, V, V> fold, V accumulator)
@@ -74,20 +76,20 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
         int i = keys.find(startAt(0), FAST);
         if (i < 0) i = -1 - i;
-        else if (inclusiveEnds) ++i;
+        else if (isEndInclusive()) ++i;
 
         while (i < keysSize)
         {
             int idx = findIndex(keys.get(i));
             if (idx < 0) idx = -2 - idx;
-            else if (inclusiveEnds) --idx;
+            else if (isEndInclusive()) --idx;
 
             if (idx >= treeSize - 1)
                 return accumulator;
 
             int nexti = keys.findNext(i, startAt(idx + 1), FAST);
             if (nexti < 0) nexti = -1 -nexti;
-            else if (inclusiveEnds) ++nexti;
+            else if (isEndInclusive()) ++nexti;
 
             Entry<RoutingKey, V> entry = entryAt(idx);
             if (i != nexti && entry.hasValue() && entry.value() != null)
@@ -112,7 +114,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
         RoutingKey start = startAt(0);
         int i = ranges.find(start, FAST);
         if (i < 0) i = -1 - i;
-        else if (inclusiveEnds && ranges.get(i).end().equals(start)) ++i;
+        else if (isEndInclusive() && ranges.get(i).end().equals(start)) ++i;
 
         while (i < rangesSize)
         {
@@ -150,7 +152,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
             RoutingKey nextStart = startAt(endPos + 1);
             i = ranges.findNext(i, nextStart, FAST);
             if (i < 0) i = -1 - i;
-            else if (inclusiveEnds && ranges.get(i).end().equals(nextStart)) ++i;
+            else if (isEndInclusive() && ranges.get(i).end().equals(nextStart)) ++i;
         }
 
         return accumulator;
@@ -195,7 +197,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
     {
         Invariants.requireArgument(value != null, "value is null");
 
-        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(ranges.get(0).endInclusive(), ranges.size() * 2);
+        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(ranges.size() * 2);
         for (Range cur : ranges)
         {
             builder.append(cur.start(), value, (a, b) -> { throw new IllegalStateException(); });
@@ -209,7 +211,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
     {
         Invariants.requireArgument(value != null, "value is null");
 
-        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(keys.get(0).asRange().endInclusive(), keys.size() * 2);
+        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(keys.size() * 2);
         for (int i = 0 ; i < keys.size() ; ++i)
         {
             Range range = keys.get(i).asRange();
@@ -228,7 +230,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
         AbstractBoundariesBuilder<RoutingKey, V, M> builder;
         {
             Range range = prev.asRange();
-            builder = factory.create(prev.asRange().endInclusive(), keys.size() * 2);
+            builder = factory.create(keys.size() * 2);
             builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });
             builder.append(range.end(), null, (a, b) -> { throw new IllegalStateException(); });
         }
@@ -268,7 +270,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
      */
     public static <M extends BTreeReducingRangeMap<V>, V> M update(
         M map, Unseekables<?> keysOrRanges, V value, BiFunction<V, V, V> valueResolver,
-        BiFunction<Boolean, Object[], M> factory, BoundariesBuilderFactory<RoutingKey, V, M> builderFactory)
+        Function<Object[], M> factory, BoundariesBuilderFactory<RoutingKey, V, M> builderFactory)
     {
         if (keysOrRanges.isEmpty())
             return map;
@@ -276,14 +278,11 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
         if (map.isEmpty())
             return create(keysOrRanges, value, builderFactory);
 
-        if (map.inclusiveEnds() != keysOrRanges.get(0).toUnseekable().asRange().endInclusive())
-            throw new IllegalStateException("Mismatching bound inclusivity/exclusivity - can't be updated");
-
         return update(map, keysOrRanges, value, valueResolver, factory);
     }
 
     private static <M extends BTreeReducingRangeMap<V>, V> M update(
-            M map, Unseekables<?> keysOrRanges, V value, BiFunction<V, V, V> valueResolver, BiFunction<Boolean, Object[], M> factory)
+            M map, Unseekables<?> keysOrRanges, V value, BiFunction<V, V, V> valueResolver, Function<Object[], M> factory)
     {
         Accumulator<V> acc = accumulator();
 
@@ -382,7 +381,7 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
         Object[] updated = acc.apply(map.tree); acc.reuse();
         return map.tree == updated
              ? map
-             : factory.apply(map.inclusiveEnds(), updated);
+             : factory.apply(updated);
     }
 
     private static final ThreadLocal<Accumulator<?>> accumulator = ThreadLocal.withInitial(Accumulator::new);
@@ -482,15 +481,15 @@ public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKe
 
     static class Builder<V> extends AbstractBoundariesBuilder<RoutingKey, V, BTreeReducingRangeMap<V>>
     {
-        protected Builder(boolean inclusiveEnds, int capacity)
+        protected Builder(int capacity)
         {
-            super(inclusiveEnds, capacity);
+            super(capacity);
         }
 
         @Override
         protected BTreeReducingRangeMap<V> buildInternal(Object[] tree)
         {
-            return new BTreeReducingRangeMap<>(inclusiveEnds, tree);
+            return new BTreeReducingRangeMap<>(tree);
         }
     }
 

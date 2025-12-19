@@ -18,6 +18,9 @@
 
 package accord.primitives;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import accord.local.Node.Id;
 import accord.utils.Invariants;
 import javax.annotation.Nonnull;
@@ -26,6 +29,7 @@ import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
+import static accord.utils.Invariants.illegalArgument;
 
 /**
  * TxnId flag bits:
@@ -102,7 +106,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000000F;
     public static final long MAX_EPOCH = (1L << 48) - 1;
     private static final long HLC_INCR = 1L << 16;
-    static final long MAX_FLAGS = HLC_INCR - 1;
+    static final int MAX_FLAGS = (int) (HLC_INCR - 1);
 
     public static Timestamp fromBits(long msb, long lsb, Id node)
     {
@@ -121,12 +125,22 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public static Timestamp maxForEpoch(long epoch)
     {
-        return new Timestamp(epochMsb(epoch) | 0x7fff, Long.MAX_VALUE, Id.MAX);
+        return maxForEpoch(epoch, Timestamp::fromBits);
+    }
+
+    public static <T extends Timestamp> T maxForEpoch(long epoch, RawFactory<T> factory)
+    {
+        return factory.create(epochMsb(epoch) | 0x7fff, Long.MAX_VALUE, Id.MAX);
     }
 
     public static Timestamp minForEpoch(long epoch)
     {
-        return new Timestamp(epochMsb(epoch), 0, Id.NONE);
+        return minForEpoch(epoch, Timestamp::fromBits);
+    }
+
+    public static <T extends Timestamp> T minForEpoch(long epoch, RawFactory<T> factory)
+    {
+        return factory.create(epochMsb(epoch), 0, Id.NONE);
     }
 
     public final long msb;
@@ -295,11 +309,27 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return new Timestamp(msb, lsb, node);
     }
 
+    public Timestamp logicalPrev(Id node)
+    {
+        long lsb = this.lsb - HLC_INCR;
+        long msb = this.msb;
+        if (lowHlc(this.lsb) == 0)
+            --msb; // overflow of lsb
+        return new Timestamp(msb, lsb, node);
+    }
+
     public Timestamp next()
     {
-        if (node.id < Long.MAX_VALUE)
+        if (node.id < Integer.MAX_VALUE)
             return new Timestamp(msb, lsb, new Id(node.id + 1));
         return logicalNext(Id.NONE);
+    }
+
+    public Timestamp prev()
+    {
+        if (node.id > 0)
+            return new Timestamp(msb, lsb, new Id(node.id - 1));
+        return logicalPrev(Id.MAX);
     }
 
     @Override
@@ -430,6 +460,17 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     }
 
     /**
+     * The resulting timestamp will have max(a.hlc,b.hlc) and max(a.epoch, b.epoch)
+     */
+    public static <T extends Timestamp> T mergeMax(T a, T b, ValueFactory<T> factory)
+    {
+        // Note: it is not safe to take the highest HLC while retaining the current node;
+        //       however, it is safe to take the highest epoch, as the originating node will always advance the hlc()
+        return a.compareToWithoutEpoch(b) >= 0 ? withEpochAtLeast(b.epoch(), a, factory)
+                                               : withEpochAtLeast(a.epoch(), b, factory);
+    }
+
+    /**
      * The resulting timestamp will have min(a.hlc,b.hlc) and min(a.epoch, b.epoch)
      */
     public static <T extends Timestamp> T mergeMin(T a, T b, ValueFactory<T> factory)
@@ -526,18 +567,53 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return "[" + epoch() + ',' + hlc + (hlc == uniqueHlc ? "" : "+" + (uniqueHlc - hlc)) + ',' + flags() + ',' + node + ']';
     }
 
-    public static Timestamp fromString(String string)
+    private static final Pattern PARSE = Pattern.compile("\\[(?<epoch>[0-9]+),(?<hlc>[0-9]+)(\\+(?<uniqueHlc>[0-9]+>))?,(?<flags>[0-9]+)(?<kind>\\([KR][REWXV]\\))?,(?<node>[0-9]+)]");
+    public static Timestamp parse(String timestampString)
     {
-        String[] split = string.replaceFirst("\\[", "").replaceFirst("\\]", "").split(",");
-        assert split.length == 4;
-        int indexOfUniqueHlc = split[2].indexOf('+');
-        int flags = Integer.parseInt(indexOfUniqueHlc < 0 ? split[2] : split[2].substring(0, indexOfUniqueHlc));
-        Timestamp result = Timestamp.fromValues(Long.parseLong(split[0]),
-                                                Long.parseLong(split[1]),
-                                                flags,
-                                                new Id(Integer.parseInt(split[3])));
-        if (indexOfUniqueHlc < 0)
-            return result;
-        return new TimestampWithUniqueHlc(result, Integer.parseInt(split[2].substring(indexOfUniqueHlc + 1)));
+        Matcher m = PARSE.matcher(timestampString);
+        if (!m.matches())
+            throw illegalArgument("Invalid Timestamp string: " + timestampString);
+        return fromMatcher(timestampString, m, true);
+    }
+
+    public static Timestamp tryParse(String timestampString)
+    {
+        Matcher m = PARSE.matcher(timestampString);
+        if (!m.matches())
+            return null;
+        return fromMatcher(timestampString, m, false);
+    }
+
+    private static Timestamp fromMatcher(String timestampString, Matcher m, boolean failIfInvalid)
+    {
+        String uniqueHlc = m.group("uniqueHlc");
+        String kind = m.group("kind");
+        if (uniqueHlc != null && kind != null)
+            return failOrNull(timestampString, failIfInvalid);
+
+        long epoch = Long.parseLong(m.group("epoch"));
+        long hlc = Long.parseLong(m.group("hlc"));
+        int flags = Integer.parseInt(m.group("flags"));
+        if (flags > 0xffff)
+            return failOrNull(timestampString, failIfInvalid);
+
+        Id node = new Id(Integer.parseInt(m.group("node")));
+        if (uniqueHlc != null)
+            return new TimestampWithUniqueHlc(epoch, hlc, Long.parseLong(uniqueHlc), flags, node);
+
+        if (kind != null)
+        {
+            // TODO (expected): validate kind vs flags
+            return TxnId.fromValues(epoch, hlc, flags, node);
+        }
+
+        return fromValues(epoch, hlc, flags, node);
+    }
+
+    private static <T extends Timestamp> T failOrNull(String timestampString, boolean fail)
+    {
+        if (fail)
+            throw illegalArgument("Invalid Timestamp string: " + timestampString);
+        return null;
     }
 }

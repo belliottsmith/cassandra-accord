@@ -127,7 +127,7 @@ public class ProtocolModifiers
                         case "accept": accept = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for accept"); break;
                         case "commit": commit = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for commit"); break;
                         case "stable": stable = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
-                        case "recover": recover = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for stable"); break;
+                        case "recover": recover = include; Invariants.require(cfp == DoNotChase, "Invalid to specify ChaseFixedPoint.Chase for recover"); break;
                     }
                 }
 
@@ -194,6 +194,32 @@ public class ProtocolModifiers
         }
     }
 
+    public static class RangeSpecParam
+    {
+        // Implementations may set this prior to creating any Range object to specify whether the start or end bound of its ranges are inclusive.
+        public static boolean END_INCLUSIVE = true;
+    }
+    public static class RangeSpec
+    {
+        public static final boolean END_INCLUSIVE = RangeSpecParam.END_INCLUSIVE;
+        public static boolean isEndInclusive()
+        {
+            return END_INCLUSIVE;
+        }
+        public static boolean isEndExclusive()
+        {
+            return !END_INCLUSIVE;
+        }
+        public static boolean isStartInclusive()
+        {
+            return !END_INCLUSIVE;
+        }
+        public static boolean isStartExclusive()
+        {
+            return END_INCLUSIVE;
+        }
+    }
+
     public static class Toggles
     {
         private static FastPaths permittedFastPaths = new FastPaths(FastPath.values());
@@ -205,9 +231,24 @@ public class ProtocolModifiers
         public static MediumPath defaultMediumPath() { return defaultMediumPath; }
         public static void setDefaultMediumPath(MediumPath newDefaultMediumPath) { defaultMediumPath = newDefaultMediumPath; }
 
+        private static boolean recoveryAwaitsSupersedingSyncPoints = true;
+        public static boolean recoveryAwaitsSupersedingSyncPoints() { return recoveryAwaitsSupersedingSyncPoints; }
+        public static void setRecoveryAwaitsSupersedingSyncPoints(boolean newRecoveryAwaitsSupersedingSyncPoints) { recoveryAwaitsSupersedingSyncPoints = newRecoveryAwaitsSupersedingSyncPoints; }
+
+        // TODO (required): default this to false once released support via recoveryAwaitsSupersedingSyncPoints
+        private static boolean syncPointsTrackUnstableMediumPathDependencies = true;
+        public static boolean syncPointsTrackUnstableMediumPathDependencies() { return syncPointsTrackUnstableMediumPathDependencies; }
+        public static void setSyncPointsTrackUnstableMediumPathDependencies(boolean newSyncPointsTrackUnstableMediumPathDependencies) { syncPointsTrackUnstableMediumPathDependencies = newSyncPointsTrackUnstableMediumPathDependencies; }
+
+        private static boolean recoverPartialAcceptPhaseIfNoFastPath = false;
+        public static boolean recoverPartialAcceptPhaseIfNoFastPath() { return recoverPartialAcceptPhaseIfNoFastPath; }
+        public static void setRecoverPartialAcceptPhaseIfNoFastPath(boolean newSyncPointsRecoverPartialAcceptPhase) {recoverPartialAcceptPhaseIfNoFastPath = newSyncPointsRecoverPartialAcceptPhase; }
+
         private static boolean filterDuplicateDependenciesFromAcceptReply = true;
         public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
         public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
+
+
 
         public enum SendStableMessages { TO_ALL, FOR_READS, FOR_READS_OR_NONE_IF_FASTEXEC}
         private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;

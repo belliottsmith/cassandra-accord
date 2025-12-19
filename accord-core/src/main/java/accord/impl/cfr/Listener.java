@@ -16,24 +16,19 @@
  * limitations under the License.
  */
 
-package accord.primitives;
+package accord.impl.cfr;
 
-import org.junit.jupiter.api.Test;
+import java.util.concurrent.atomic.AtomicLong;
 
-import accord.utils.AccordGens;
-import org.assertj.core.api.Assertions;
+import accord.local.Command;
+import accord.primitives.Unseekables;
 
-import static accord.utils.Property.qt;
-
-class TxnIdTest
+public abstract class Listener
 {
-    @Test
-    void stringSerde()
-    {
-        qt().forAll(AccordGens.txnIds()).check(id -> {
-            Assertions.assertThat(TxnId.parse(id.toString())).isEqualTo(id);
+    private static final AtomicLong nextId = new AtomicLong();
 
-            Assertions.assertThat(Timestamp.parse(id.toStandardString())).isEqualTo(new Timestamp(id));
-        });
-    }
+    final long id = nextId.incrementAndGet();
+
+    protected abstract Unseekables<?> participants();
+    protected abstract void accept(Command command);
 }

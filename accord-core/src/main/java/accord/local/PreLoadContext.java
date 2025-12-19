@@ -23,6 +23,7 @@ import accord.local.cfk.CommandsForKey;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Routable;
 import accord.primitives.RoutingKeys;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
 import accord.primitives.Unseekables;
@@ -41,6 +42,8 @@ import static accord.local.LoadKeysFor.WRITE;
 /**
  * Lists txnids and keys of commands and commands for key that will be needed for an operation. Used
  * to ensure the necessary state is in memory for an operation before it executes.
+ *
+ * TODO (desired): rename to simply Context, or LoadContext
  */
 public interface PreLoadContext
 {
@@ -95,7 +98,10 @@ public interface PreLoadContext
     default Unseekables<?> keys() { return RoutingKeys.EMPTY; }
 
     default LoadKeys loadKeys() { return NONE; }
+
     default LoadKeysFor loadKeysFor() { return WRITE; }
+
+    default Timestamp executeAt() { return primaryTxnId(); }
 
     default boolean isEmpty()
     {

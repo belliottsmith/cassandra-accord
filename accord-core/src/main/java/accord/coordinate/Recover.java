@@ -70,6 +70,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
+import static accord.api.ProtocolModifiers.Toggles.recoverPartialAcceptPhaseIfNoFastPath;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
@@ -86,6 +87,10 @@ import static accord.messages.BeginRecovery.RecoverOk.maxAccepted;
 import static accord.messages.BeginRecovery.RecoverOk.maxAcceptedNotTruncated;
 import static accord.messages.BeginRecovery.RecoveryFlags.FAST_PATH_DECIDED;
 import static accord.messages.BeginRecovery.RecoveryFlags.FORCE_RECOVER_FAST_PATH;
+import static accord.messages.BeginRecovery.RecoveryFlags.NO_CALCULATE_DEPS;
+import static accord.messages.BeginRecovery.RecoveryFlags.calculateDeps;
+import static accord.messages.BeginRecovery.RecoveryFlags.forceRecoverFastPath;
+import static accord.messages.BeginRecovery.RecoveryFlags.isFastPathDecided;
 import static accord.primitives.ProgressToken.TRUNCATED_DURABLE_OR_INVALIDATED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedMedium;
@@ -124,7 +129,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                     BiConsumer<? super Outcome, Throwable> callback)
     {
         super(node, executor, txnId, route, topologies.nodes(), callback);
-        this.flags = computeFlags(isFastPathDecided, topologies);
+        this.flags = computeFlags(txnId, isFastPathDecided, topologies);
         Invariants.require(txnId.isVisible());
         this.adapter = node.coordinationAdapter(txnId, Recovery);
         this.ballot = ballot;
@@ -134,9 +139,11 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         this.tracker = new RecoveryTracker(topologies);
     }
 
-    private static int computeFlags(boolean isFastPathDecided, Topologies topologies)
+    private static int computeFlags(TxnId txnId, boolean isFastPathDecided, Topologies topologies)
     {
-        int flags = (isFastPathDecided ? TinyEnumSet.encode(FAST_PATH_DECIDED) : 0);
+        int flags = (isFastPathDecided ? TinyEnumSet.encode(FAST_PATH_DECIDED) : 0)
+                    | (!txnId.hasFastPath() && !recoverPartialAcceptPhaseIfNoFastPath() ? TinyEnumSet.encode(NO_CALCULATE_DEPS) : 0);
+
         for (int i = 0 ; i < topologies.size() ; ++i)
         {
             Topology topology = topologies.get(i);
@@ -284,16 +291,16 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         {
             Timestamp executeAt = acceptOrCommitNotTruncated.executeAt;
             Status status; {
-                Status tmp = acceptOrCommitNotTruncated.status;
-                if (committedExecuteAt != null)
-                {
-                    Invariants.require(acceptOrCommitNotTruncated.status.compareTo(Status.PreCommitted) < 0 || executeAt.equals(committedExecuteAt));
-                    // if we know from a prior Accept attempt that this is committed we can go straight to the commit phase
-                    if (tmp == AcceptedMedium || tmp == AcceptedSlow)
-                        tmp = Status.Committed;
-                }
-                status = tmp;
+            Status tmp = acceptOrCommitNotTruncated.status;
+            if (committedExecuteAt != null)
+            {
+                Invariants.require(acceptOrCommitNotTruncated.status.compareTo(Status.PreCommitted) < 0 || executeAt.equals(committedExecuteAt));
+                // if we know from a prior Accept attempt that this is committed we can go straight to the commit phase
+                if (tmp == AcceptedMedium || tmp == AcceptedSlow)
+                    tmp = Status.Committed;
             }
+            status = tmp;
+        }
 
             switch (status)
             {
@@ -312,7 +319,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                     if (tracing != null)
                         tracing.trace(null, "found AcceptedInvalidate: continuing Invalidate.");
 
-                    invalidate(oks);
+                    finishAndInvalidate(oks);
                     return;
                 }
 
@@ -323,7 +330,23 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
 
             LatestDeps.Merge merge = mergeDeps(okList);
             Participants<?> await = merge.notAccepted(scope);
-            awaitPartialEarlier(okList, await, () -> {
+
+            if (!calculateDeps(flags))
+            {
+                Invariants.require(!txnId.hasFastPath());
+                switch (status)
+                {
+                    case AcceptedMedium:
+                    case AcceptedSlow:
+                        if (!await.isEmpty())
+                        {
+                            finishAndInvalidate(oks);
+                            return;
+                        }
+                }
+            }
+
+            awaitPartialSimple(okList, await, () -> {
                 BiConsumer<Result, Throwable> callback = finishAndTakeResultCallback();
                 switch (status)
                 {
@@ -411,19 +434,19 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         }
 
         Invariants.require(committedExecuteAt == null || committedExecuteAt.equals(txnId));
-        Invariants.require(!TinyEnumSet.contains(flags, FAST_PATH_DECIDED) || TinyEnumSet.contains(flags, FORCE_RECOVER_FAST_PATH));
+        Invariants.require(!isFastPathDecided(flags) || forceRecoverFastPath(flags));
 
         boolean coordinatorInRecoveryQuorum = oks.get(txnId.node) != null;
         Participants<?> extraCoordVotes = extraCoordinatorVotes(txnId, coordinatorInRecoveryQuorum, okList);
-        Participants<?> extraRejects = Deps.merge(okList, okList.size(), List::get, ok -> ok.laterCoordRejects)
+        Participants<?> extraRejects = Deps.merge(okList, okList.size(), List::get, ok -> ok.supersedingCoordRejects)
                                            .intersecting(scope, id -> !oks.containsKey(id.node));
         InferredFastPath fastPath;
         if (txnId.hasPrivilegedCoordinator() && coordinatorInRecoveryQuorum) fastPath = Reject;
         else if (txnId.isSyncPoint()) fastPath = Reject;
         else fastPath = merge(
-            supersedingRejects(okList) ? Reject : Unknown,
-            tracker.inferFastPathDecision(txnId, extraCoordVotes, extraRejects)
-        );
+                supersedingRejects(okList) ? Reject : Unknown,
+                tracker.inferFastPathDecision(txnId, extraCoordVotes, extraRejects)
+            );
 
         switch (fastPath)
         {
@@ -432,7 +455,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                 if (tracing != null)
                     tracing.trace(null, "found fast path rejection; invoking Invalidate.");
 
-                invalidate(oks);
+                finishAndInvalidate(oks);
                 return;
             }
             case Accept:
@@ -444,8 +467,8 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
             case Unknown:
             {
                 // should all be PreAccept
-                Deps earlierWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.earlierWait);
-                Deps earlierNoWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.earlierNoWait);
+                Deps earlierWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleWait);
+                Deps earlierNoWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleNoWait);
                 earlierWait = earlierWait.without(earlierNoWait);
                 Deps laterWitnessedCoordRejects = Deps.merge(oks, oks.domainSize(), (map, i) -> selectCoordinatorReplies(map.getKey(i), map.getValue(i)), Function.identity());
 
@@ -455,37 +478,37 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                     // we have to be certain these commands have not successfully committed without witnessing us (thereby
                     // ruling out a fast path decision for us and changing our recovery decision).
                     // So, we wait for these commands to commit and recompute supersedingRejects for them.
-                    awaitToFinish(AsyncChains.reduce(awaitEarlier(node, earlierWait, HasCommittedDeps),
-                                              awaitLater(node, laterWitnessedCoordRejects, CommittedOrNotFastPathCommit, extraCoordVotes),
-                                              InferredFastPath::merge)
-                                      .invokeIfSuccess((inferred) -> {
-                                          switch (inferred)
-                                          {
-                                              default: throw new UnhandledEnum(inferred);
-                                              case Accept:
-                                              {
-                                                  if (tracing != null)
-                                                      tracing.trace(null, "found accepted fast path; proposing.");
-                                                  propose(SLOW, txnId, okList);
-                                                  break;
-                                              }
-                                              case Unknown:
-                                              {
-                                                  if (tracing != null)
-                                                      tracing.trace(null, "found unknown fast path decision; retrying.");
-                                                  retry(committedExecuteAt, finishAndUnwrapCallback());
-                                                  break;
-                                              }
-                                              case Reject:
-                                              {
-                                                  if (tracing != null)
-                                                      tracing.trace(null, "found fast path rejection; invoking Invalidate.");
+                    awaitToFinish(AsyncChains.reduce(awaitSimple(node, earlierWait, HasCommittedDeps),
+                                                     awaitSupersedingCoord(node, laterWitnessedCoordRejects, CommittedOrNotFastPathCommit, extraCoordVotes),
+                                                     InferredFastPath::merge)
+                                             .invokeIfSuccess((inferred) -> {
+                                                 switch (inferred)
+                                                 {
+                                                     default: throw new UnhandledEnum(inferred);
+                                                     case Accept:
+                                                     {
+                                                         if (tracing != null)
+                                                             tracing.trace(null, "found accepted fast path; proposing.");
+                                                         propose(SLOW, txnId, okList);
+                                                         break;
+                                                     }
+                                                     case Unknown:
+                                                     {
+                                                         if (tracing != null)
+                                                             tracing.trace(null, "found unknown fast path decision; retrying.");
+                                                         retry(committedExecuteAt, finishAndUnwrapCallback());
+                                                         break;
+                                                     }
+                                                     case Reject:
+                                                     {
+                                                         if (tracing != null)
+                                                             tracing.trace(null, "found fast path rejection; invoking Invalidate.");
 
-                                                  invalidate(oks);
-                                                  break;
-                                              }
-                                          }
-                                      }));
+                                                         finishAndInvalidate(oks);
+                                                         break;
+                                                     }
+                                                 }
+                                             }));
                 }
                 else
                 {
@@ -502,13 +525,13 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         return LatestDeps.merge(nullableRecoverOkList, ok -> ok == null ? null : ok.deps);
     }
 
-    private void awaitPartialEarlier(List<RecoverOk> nullableRecoverOkList, Participants<?> participants, Runnable whenReady)
+    private void awaitPartialSimple(List<RecoverOk> nullableRecoverOkList, Participants<?> participants, Runnable whenReady)
     {
-        Deps earlierWait = Deps.merge(nullableRecoverOkList, nullableRecoverOkList.size(), List::get, ok -> ok.earlierWait);
-        Deps earlierNoWait = Deps.merge(nullableRecoverOkList, nullableRecoverOkList.size(), List::get, ok -> ok.earlierNoWait);
+        Deps earlierWait = Deps.merge(nullableRecoverOkList, nullableRecoverOkList.size(), List::get, ok -> ok.simpleWait);
+        Deps earlierNoWait = Deps.merge(nullableRecoverOkList, nullableRecoverOkList.size(), List::get, ok -> ok.simpleNoWait);
         earlierWait = earlierWait.without(earlierNoWait);
         earlierWait = earlierWait.intersecting(participants);
-        awaitToFinish(awaitEarlier(node, earlierWait, HasDecidedExecuteAt).invokeIfSuccess(whenReady));
+        awaitToFinish(awaitSimple(node, earlierWait, HasDecidedExecuteAt).invokeIfSuccess(whenReady));
     }
 
     private static boolean supersedingRejects(List<RecoverOk> oks)
@@ -555,7 +578,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         if (ok == null)
             return null;
 
-        return ok.laterCoordRejects.with(id -> from.equals(id.node));
+        return ok.supersedingCoordRejects.with(id -> from.equals(id.node));
     }
 
     private void withCommittedDeps(LatestDeps.Merge merge, Timestamp executeAt, BiConsumer<?, Throwable> failureCallback, Consumer<Deps> withDeps)
@@ -568,10 +591,14 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         LatestDeps.withStable(adapter, node, executor, merge, Deps.NONE, scope, null, null, scope, ballot, txnId, executeAt, txn, failureCallback, withDeps);
     }
 
-    private void invalidate(SortedListMap<Id, RecoverOk> recoverOks)
+    private void finishAndInvalidate(SortedListMap<Id, RecoverOk> recoverOks)
+    {
+        invalidate(recoverOks, finishAndTakeCallback());
+    }
+
+    private void invalidate(SortedListMap<Id, RecoverOk> recoverOks, BiConsumer<? super Outcome, Throwable> callback)
     {
         Timestamp invalidateUntil = invalidateUntil(recoverOks);
-        BiConsumer<? super Outcome, Throwable> callback = finishAndTakeCallback();
         proposeInvalidate(node, executor, ballot, txnId, scope.homeKey(), (success, fail) -> {
             if (fail != null) callback.accept(null, fail);
             else commitInvalidate(invalidateUntil, callback);
@@ -618,13 +645,13 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
     private void retry(Timestamp executeAt, BiConsumer<? super Outcome, Throwable> callback)
     {
         Ballot ballot = node.uniqueTimestamp(Ballot::fromValues);
-        Recover.recover(node, tracker.topologies(), ballot, txnId, txn, scope, executeAt, TinyEnumSet.contains(flags, FAST_PATH_DECIDED), reportTo, callback);
+        Recover.recover(node, tracker.topologies(), ballot, txnId, txn, scope, executeAt, isFastPathDecided(flags), reportTo, callback);
     }
 
-    AsyncChain<InferredFastPath> awaitEarlier(Node node, Deps waitOn, Await.Until awaitUntil)
+    AsyncChain<InferredFastPath> awaitSimple(Node node, Deps waitOn, Await.Until awaitUntil)
     {
         if (tracing != null)
-            tracing.trace(null, "awaiting earlier decisions: " + waitOn.txnIds());
+            tracing.trace(null, "awaiting decisions: " + waitOn.txnIds());
 
         long requireEpoch = waitOn.maxTxnId(txnId).epoch();
         return node.withEpochAtLeast(requireEpoch, executor, () -> {
@@ -633,7 +660,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
             for (int i = 0 ; i < waitOn.txnIdCount() ; ++i)
             {
                 TxnId awaitId = waitOn.txnId(i);
-                Invariants.require(awaitId.compareTo(recoverId) < 0);
+                Invariants.require(awaitId.compareTo(recoverId) < 0 || !awaitId.hasFastPath());
                 Participants<?> participants = waitOn.participants(awaitId);
 
                 Topologies topologies;
@@ -651,7 +678,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         });
     }
 
-    AsyncChain<InferredFastPath> awaitLater(Node node, Deps waitOn, Await.Until awaitUntil, @Nullable Participants<?> selfCoordVotes)
+    AsyncChain<InferredFastPath> awaitSupersedingCoord(Node node, Deps waitOn, Await.Until awaitUntil, @Nullable Participants<?> selfCoordVotes)
     {
         if (tracing != null)
             tracing.trace(null, "awaiting later decisions or recoveries: " + waitOn.txnIds());

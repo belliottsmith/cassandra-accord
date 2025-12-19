@@ -19,6 +19,7 @@
 package accord.impl;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,12 +40,15 @@ import accord.api.LocalListeners;
 import accord.api.LocalListeners.ComplexListener;
 import accord.api.RemoteListeners.NoOpRemoteListeners;
 import accord.local.Command;
+import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.Routable;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status.Durability;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
+import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.utils.AccordGens;
 import accord.utils.Invariants;
@@ -433,6 +437,49 @@ public class LocalListenersTest
         }
     }
 
+    @Test
+    public void testTxnListeners()
+    {
+        DefaultLocalListeners listeners = new DefaultLocalListeners(new RemoteListenersTest.TestCommandStore(1), new DefaultRemoteListeners((DefaultRemoteListeners.NotifySink) null), null);
+        TxnId txnId1 = new TxnId(1, 1, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        TxnId txnId2 = new TxnId(1, 2, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        TxnId txnId3 = new TxnId(1, 3, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        TxnId txnId4 = new TxnId(1, 4, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        listeners.register(txnId1, SaveStatus.Applied, txnId2);
+        listeners.register(txnId1, SaveStatus.Applied, txnId3);
+        listeners.register(txnId1, SaveStatus.Applying, txnId2);
+        listeners.register(txnId2, SaveStatus.Applied, txnId3);
+        listeners.register(txnId2, SaveStatus.Applied, txnId4);
+        TreeMap<TxnId, TreeMap<SaveStatus, List<TxnId>>> actual = new TreeMap<>();
+        listeners.txnListeners().forEach(l -> {
+            actual.computeIfAbsent(l.waitingOn, ignore -> new TreeMap<>())
+                  .computeIfAbsent(l.awaitingStatus, ignore -> new ArrayList<>())
+                  .add(l.waiter);
+        });
+        TreeMap<TxnId, TreeMap<SaveStatus, List<TxnId>>> expected = new TreeMap<>();
+        expected.computeIfAbsent(txnId1, ignore -> new TreeMap<>())
+                .put(SaveStatus.Applying, Arrays.asList(txnId2));
+        expected.computeIfAbsent(txnId1, ignore -> new TreeMap<>())
+                .put(SaveStatus.Applied, Arrays.asList(txnId2, txnId3));
+        expected.computeIfAbsent(txnId2, ignore -> new TreeMap<>())
+                .put(SaveStatus.Applied, Arrays.asList(txnId3, txnId4));
+        Assertions.assertEquals(expected, actual);
+    }
 
-
+    @Test
+    public void testComplexListeners()
+    {
+        DefaultLocalListeners listeners = new DefaultLocalListeners(new RemoteListenersTest.TestCommandStore(1), new DefaultRemoteListeners((DefaultRemoteListeners.NotifySink) null), null);
+        TxnId txnId1 = new TxnId(1, 1, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        ComplexListener listener1 = (safeStore, safeCommand) -> false;
+        ComplexListener listener2 = (safeStore, safeCommand) -> false;
+        listeners.register(txnId1, listener1);
+        listeners.register(txnId1, listener2);
+        List<ComplexListener> waiters = new ArrayList<>();
+        listeners.complexListeners().forEach(l -> {
+            Assertions.assertEquals(txnId1, l.waitingOn());
+            waiters.add(l.waiting());
+        });
+        Assertions.assertEquals(Arrays.asList(listener1, listener2), waiters);
+    }
 }

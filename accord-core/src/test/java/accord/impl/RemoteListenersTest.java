@@ -46,7 +46,6 @@ import accord.api.RoutingKey;
 import accord.impl.LocalListenersTest.TestSafeCommand;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
-import accord.local.CommandSummaries;
 import accord.local.Node;
 import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
@@ -411,7 +410,7 @@ public class RemoteListenersTest
         }
 
         @Override protected void ensureDurable(Ranges ranges, RedundantBefore onCommandStoreDurable) {}
-        @Override public boolean inStore() { return false; }
+        @Override public boolean inStore() { return true; }
         @Override public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
         @Override public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply) { return null; }
         @Override public void shutdown() {}
@@ -446,7 +445,7 @@ public class RemoteListenersTest
         }
 
         @Override public <P1, P2> void visit(Unseekables<?> keys, @Nullable Timestamp withLowerTxnId, Txn.Kind.Kinds kinds, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2) { }
-        @Override public boolean visit(Unseekables<?> keys, TxnId testTxnId, Txn.Kind.Kinds testKind, CommandSummaries.TestStartedAt testStartedAt, Timestamp testStartedAtTimestamp, ComputeIsDep computeIsDep, AllCommandVisitor visit) { return true; }
+        @Override public boolean visit(Unseekables<?> keys, TxnId testTxnId, Txn.Kind.Kinds testKind, SupersedingCommandVisitor visit) { return true; }
         @Override public DataStore dataStore() { return null; }
         @Override public Agent agent() { return null; }
         @Override public ProgressLog progressLog() { return null; }
