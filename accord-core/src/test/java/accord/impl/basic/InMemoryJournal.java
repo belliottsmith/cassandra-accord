@@ -127,6 +127,11 @@ public class InMemoryJournal implements Journal
         this.partialCompactionChance = 1f - (random.nextFloat()/2);
     }
 
+    @Override
+    public void open(Node node)
+    {
+    }
+
     public void start(Node node)
     {
         this.node = node;
@@ -617,7 +622,7 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public boolean replay(CommandStores commandStores)
+    public boolean replay(CommandStores commandStores, Object param)
     {
         for (Map.Entry<Integer, NavigableMap<TxnId, Diffs>> diffEntry : diffsPerCommandStore.entrySet())
         {

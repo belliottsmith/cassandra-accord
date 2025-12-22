@@ -34,7 +34,12 @@ import accord.primitives.Participants;
 import accord.primitives.SaveStatus;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
+import static accord.impl.AbstractReplayer.Replay.NONE;
+import static accord.impl.AbstractReplayer.Replay.TO_BOTH;
+import static accord.impl.AbstractReplayer.Replay.TO_COMMAND_STORE;
+import static accord.impl.AbstractReplayer.Replay.TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.primitives.SaveStatus.Applying;
@@ -45,14 +50,41 @@ import static accord.primitives.Txn.Kind.Write;
 
 public abstract class AbstractReplayer implements Journal.Replayer
 {
+    // TODO (required): NON_DURABLE does not properly account for things like pre-bootstrap
+    public enum Mode { ALL, PART_NON_DURABLE, NON_DURABLE }
+    public enum Replay
+    {
+        // warning: behaviour depends on bit pattern of ordinals, so change with care
+        NONE, TO_COMMAND_STORE, TO_DATA_STORE, TO_BOTH;
+
+        private static final Replay[] lookup = values();
+
+        public boolean includes(Replay replay)
+        {
+            return (ordinal() & replay.ordinal()) == replay.ordinal();
+        }
+        public Replay atLeast(Replay that)
+        {
+            return lookup[ordinal() | that.ordinal()];
+        }
+        public Replay atMost(Replay that)
+        {
+            return lookup[ordinal() & that.ordinal()];
+        }
+    }
+
     public final RedundantBefore redundantBefore;
+    public final Mode mode;
     public final TxnId minReplay;
 
-    protected AbstractReplayer(CommandStore commandStore, @Nullable TxnId minReplay)
+    protected AbstractReplayer(CommandStore commandStore, Mode mode, @Nullable TxnId minReplay)
     {
         this.redundantBefore = commandStore.unsafeGetRedundantBefore();
+        this.mode = mode;
         Invariants.require(redundantBefore.ranges(Objects::nonNull).containsAll(commandStore.unsafeGetRangesForEpoch().all()));
-        this.minReplay = TxnId.noneIfNull(redundantBefore.foldl((b, v) -> TxnId.nonNullOrMin(v, b.maxBoundBoth(LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE)), minReplay, ignore -> false));
+        if (mode != Mode.ALL)
+            minReplay = redundantBefore.foldl((b, v) -> TxnId.nonNullOrMin(v, replayBound(b)), minReplay, ignore -> false);
+        this.minReplay = TxnId.noneIfNull(minReplay);
     }
 
     protected boolean maybeShouldReplay(TxnId txnId)
@@ -60,25 +92,47 @@ public abstract class AbstractReplayer implements Journal.Replayer
         return txnId.compareTo(minReplay) >= 0;
     }
 
-    protected boolean shouldReplay(TxnId txnId, StoreParticipants participants)
+    protected Replay shouldReplay(TxnId txnId, StoreParticipants participants)
     {
         Participants<?> search = participants.route();
         if (search == null) search = participants.hasTouched();
-        return redundantBefore.foldl(search, (b, v, id) -> v || b.maxBoundBoth(LOCALLY_DURABLE_TO_COMMAND_STORE, LOCALLY_DURABLE_TO_DATA_STORE).compareTo(id) <= 0, false, txnId, i -> i);
+        switch (mode)
+        {
+            default: throw new UnhandledEnum(mode);
+            case ALL: return TO_BOTH;
+            case NON_DURABLE: return redundantBefore.foldl(search, (b, v, id) -> v.atMost(replay(b, id)), TO_BOTH, txnId, i -> false);
+            case PART_NON_DURABLE: return redundantBefore.foldl(search, (b, v, id) -> v.atLeast(replay(b, id)), NONE, txnId, i -> false);
+        }
     }
 
-    protected void initialiseState(SafeCommandStore safeStore, TxnId txnId)
+    private static TxnId replayBound(RedundantBefore.Bounds bounds)
+    {
+        return bounds.maxBoundBoth(LOCALLY_DURABLE_TO_COMMAND_STORE, LOCALLY_DURABLE_TO_DATA_STORE);
+    }
+
+    private static Replay replay(RedundantBefore.Bounds bounds, TxnId txnId)
+    {
+        Replay replay = NONE;
+        if (bounds.maxBound(LOCALLY_DURABLE_TO_COMMAND_STORE).compareTo(txnId) <= 0)
+            replay = TO_COMMAND_STORE;
+        if (bounds.maxBound(LOCALLY_DURABLE_TO_DATA_STORE).compareTo(txnId) <= 0)
+            replay = replay.atLeast(TO_DATA_STORE);
+        return replay;
+    }
+
+    protected void replay(SafeCommandStore safeStore, TxnId txnId, Replay replay)
     {
         SafeCommand safeCommand = safeStore.unsafeGet(txnId);
         {
             Command command = safeCommand.current();
             if (command.saveStatus().compareTo(SaveStatus.Stable) >= 0 && command.saveStatus().compareTo(PreApplied) <= 0)
             {
-                Commands.maybeExecute(safeStore, safeCommand, command, false, true);
+                if (replay.includes(TO_COMMAND_STORE))
+                    Commands.maybeExecute(safeStore, safeCommand, command, false, true);
             }
             else if (command.saveStatus().compareTo(Applying) >= 0 && command.saveStatus().compareTo(TruncatedApplyWithOutcome) <= 0)
             {
-                if (command.txnId().is(Write))
+                if (command.txnId().is(Write) && replay.includes(TO_DATA_STORE))
                 {
                     Commands.applyChain(safeStore, command)
                             .begin(safeStore.agent());
@@ -86,7 +140,10 @@ public abstract class AbstractReplayer implements Journal.Replayer
                 else Invariants.expect(command.hasBeen(Applied), "%s is Applying but is not a Write transaction", txnId);
             }
         }
-        safeCommand.update(safeStore, safeCommand.current(), true);
-        safeStore.notifyListeners(safeCommand, null);
+        if (replay.includes(Replay.TO_COMMAND_STORE))
+        {
+            safeCommand.update(safeStore, safeCommand.current(), true);
+            safeStore.notifyListeners(safeCommand, null);
+        }
     }
 }

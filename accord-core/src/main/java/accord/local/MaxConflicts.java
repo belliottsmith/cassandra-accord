@@ -51,9 +51,9 @@ public class MaxConflicts extends BTreeReducingRangeMap<Timestamp>
         return update(this, keysOrRanges, maxConflict, Timestamp::mergeMax, MaxConflicts::new, Builder::new);
     }
 
-    private static class Builder extends AbstractBoundariesBuilder<RoutingKey, Timestamp, MaxConflicts>
+    public static class Builder extends AbstractBoundariesBuilder<RoutingKey, Timestamp, MaxConflicts>
     {
-        protected Builder(int capacity)
+        public Builder(int capacity)
         {
             super(capacity);
         }

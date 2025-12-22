@@ -908,7 +908,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         Invariants.requireArgument(ranges.length == 0 || ranges[0] != null);
         for (int i = 1 ; i < ranges.length ; ++i)
         {
-            if (ranges[i - 1].end().compareTo(ranges[i].start()) > 0)
+            if (ranges[i] == null || ranges[i - 1].end().compareTo(ranges[i].start()) > 0)
                 throw illegalArgument(Arrays.toString(ranges) + " is not correctly sorted or deoverlapped");
         }
 

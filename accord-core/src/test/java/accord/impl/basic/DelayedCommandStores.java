@@ -91,11 +91,11 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         {
             Snapshot current = current();
             RangesForEpoch ranges = e.getValue();
-            CommandStore commandStore = null;
+            DelayedCommandStore commandStore = null;
             for (ShardHolder shard : current)
             {
                 if (shard.ranges().equals(ranges))
-                    commandStore = shard.store;
+                    commandStore = (DelayedCommandStore) shard.store;
             }
             Invariants.nonNull(commandStore, "Each set of ranges should have a corresponding command store, but %d did not:(%s)",
                                ranges, Arrays.toString(shards))

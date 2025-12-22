@@ -45,10 +45,7 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
         public static DurableBefore create(RoutingKey[] ends, Entry[] values)
         {
             if (values.length == 0)
-            {
-                Invariants.require(ends.length == 1 && ends[0] == null);
                 return DurableBefore.EMPTY;
-            }
             return new DurableBefore(ends, values);
         }
     }
@@ -169,6 +166,14 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
     public static DurableBefore merge(DurableBefore a, DurableBefore b)
     {
         return ReducingIntervalMap.merge(a, b, DurableBefore.Entry::max, Builder::new);
+    }
+
+    public static DurableBefore mergeIfDifferent(DurableBefore prev, DurableBefore add)
+    {
+        DurableBefore next = DurableBefore.merge(prev, add);
+        if (next.equals(prev))
+            return prev;
+        return next.equals(prev) ? prev : next;
     }
 
     public HasOutcome min(TxnId txnId, Unseekables<?> unseekables)

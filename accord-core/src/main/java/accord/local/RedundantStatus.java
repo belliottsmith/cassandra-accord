@@ -109,13 +109,13 @@ public class RedundantStatus
          * We have applied the preceding transactions durably to the store, so that we can safely truncate the Write
          * information as we will not need to replay it to the store
          */
-        LOCALLY_DURABLE_TO_DATA_STORE      (false, false,  LE, LOCALLY_APPLIED),
+        LOCALLY_DURABLE_TO_DATA_STORE      (false, true,  LE, LOCALLY_APPLIED),
 
         /**
          * We have applied the preceding transactions durably to all summary structures, so that on restart we do
          * not need to replay the transaction to restore any internal state.
          */
-        LOCALLY_DURABLE_TO_COMMAND_STORE   (false, false,  LE, LOCALLY_APPLIED),
+        LOCALLY_DURABLE_TO_COMMAND_STORE   (false, true,  LE, LOCALLY_APPLIED),
 
         /**
          * We have fully executed until across all a majority of replicas for the range in question,

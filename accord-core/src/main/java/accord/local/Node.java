@@ -205,14 +205,10 @@ public class Node implements NodeCommandStoreService
         this.agent = agent;
         this.random = random;
         this.persistDurableBefore = new PersistentField<>(() -> durableBefore,
-                                                          (input, prev) -> {
-                                                              DurableBefore next = DurableBefore.merge(input, prev);
-                                                              if (next.equals(prev))
-                                                                  return prev;
-                                                              return next.equals(prev) ? prev : next;
-                                                          },
+                                                          DurableBefore::merge, DurableBefore::mergeIfDifferent,
                                                           safeDurableBeforePersister(durableBeforePersister),
-                                                          this::setPersistedDurableBefore);
+                                                          this::setPersistedDurableBefore,
+                                                          run -> someExecutor().execute(run));
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         this.topology = new TopologyManager(topologySorter, this, topologyService, time, timeouts);
         this.durabilityService = new DurabilityService(this);
@@ -319,7 +315,7 @@ public class Node implements NodeCommandStoreService
 
     public AsyncResult<?> markDurable(DurableBefore addDurableBefore)
     {
-        return withEpochExact(addDurableBefore.maxEpoch(), (AsyncExecutor)null, () -> persistDurableBefore.mergeAndUpdate(addDurableBefore).chain())
+        return withEpochExact(addDurableBefore.maxEpoch(), (AsyncExecutor)null, () -> persistDurableBefore.save(addDurableBefore).chain())
                .beginAsResult();
     }
 

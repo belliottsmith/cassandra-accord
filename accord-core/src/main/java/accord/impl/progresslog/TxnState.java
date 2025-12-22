@@ -34,6 +34,16 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public final class TxnState extends WaitingState implements PreLoadContext
 {
+    public static class SerializationSupport
+    {
+        public static TxnState create(TxnId txnId, long encoded)
+        {
+            TxnState result = new TxnState(txnId);
+            result.encodedState = encoded;
+            return result;
+        }
+    }
+
     TxnState(TxnId txnId)
     {
         super(txnId);
@@ -184,5 +194,27 @@ public final class TxnState extends WaitingState implements PreLoadContext
     public String reason()
     {
         return "Progress";
+    }
+
+    public TxnState snapshot()
+    {
+        TxnState copy = new TxnState(txnId);
+        copy.encodedState = (encodedState & (SNAPSHOT_HOME_MASK | SNAPSHOT_WAITING_MASK)) | RESTORED_BIT;
+        return copy;
+    }
+
+    public long encodedState()
+    {
+        return encodedState;
+    }
+
+    public boolean equals(Object that)
+    {
+        return that instanceof TxnState && equals((TxnState) that);
+    }
+
+    public boolean equals(TxnState that)
+    {
+        return this.txnId.equals(that.txnId) && this.encodedState == that.encodedState;
     }
 }

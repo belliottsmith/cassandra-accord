@@ -49,6 +49,8 @@ public class MaxDecidedRX extends ReducingRangeMap<MaxDecidedRX.DecidedRX>
 
         public DecidedRX(TxnId any, TxnId hlcBound)
         {
+            Invariants.nonNull(any);
+            Invariants.nonNull(hlcBound);
             this.any = any;
             this.hlcBound = hlcBound;
         }
@@ -56,7 +58,7 @@ public class MaxDecidedRX extends ReducingRangeMap<MaxDecidedRX.DecidedRX>
         @Override
         public String toString()
         {
-            return "{any=" + any + ",hlcBound=" + hlcBound + "}";
+            return "{any=" + any + ",hlcBound=" + hlcBound + '}';
         }
 
         public boolean includeDecided(TxnId txnId)
@@ -116,6 +118,31 @@ public class MaxDecidedRX extends ReducingRangeMap<MaxDecidedRX.DecidedRX>
             if (any == b.any && hlcBound == b.hlcBound)
                 return b;
             return new DecidedRX(any, hlcBound);
+        }
+
+        @Override
+        public boolean equals(Object that)
+        {
+            return that instanceof DecidedRX && equals((DecidedRX) that);
+        }
+
+        public boolean equals(DecidedRX that)
+        {
+            return this.any.equals(that.any) && this.hlcBound.equals(that.hlcBound);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    public static final class SerializerSupport
+    {
+        public static MaxDecidedRX create(RoutingKey[] starts, DecidedRX[] values)
+        {
+            return new MaxDecidedRX(starts, values);
         }
     }
 

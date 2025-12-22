@@ -21,6 +21,7 @@ import accord.api.RoutingKey;
 import accord.primitives.*;
 
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.IntFunction;
@@ -494,9 +495,47 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public <V2> ReducingRangeMap<V2> map(Function<V, V2> map, IntFunction<V2[]> allocator)
     {
+        RoutingKey[] starts = null;
         V2[] output = allocator.apply(values.length);
+        int count = 0;
         for (int i = 0 ; i < values.length ; ++i)
-            output[i] = map.apply(values[i]);
+        {
+            V2 next = map.apply(values[i]);
+            if (count == 0 ? next == null : (Objects.equals(next, output[i - 1])))
+            {
+                if (starts == null)
+                {
+                    starts = new RoutingKey[values.length];
+                    System.arraycopy(this.starts, 0, starts, 0, count);
+                }
+                continue;
+            }
+            if (starts != null)
+                starts[count] = this.starts[i];
+            output[count++] = next;
+        }
+
+        if (count > 0)
+        {
+            if (starts != null)
+            {
+                starts[count] = this.starts[this.starts.length - 1];
+                if (output[count - 1] == null)
+                    --count;
+
+                starts = Arrays.copyOf(starts, count + 1);
+                output = Arrays.copyOf(output, count);
+            }
+            else
+            {
+                Invariants.require(count == values.length);
+                starts = this.starts;
+            }
+        }
+
+        if (count == 0)
+            return new ReducingRangeMap<>();
+
         return new ReducingRangeMap<>(starts, output);
     }
 }

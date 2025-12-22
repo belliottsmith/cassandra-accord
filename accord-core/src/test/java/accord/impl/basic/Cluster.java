@@ -790,7 +790,7 @@ public class Cluster
                     listStore.restore();
                     for (CommandStore store : stores.all())
                         ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
-                    journal.replay(stores);
+                    journal.replay(stores, null);
                     Catchup.catchup(node);
 
                     // Re-enable safety checks
