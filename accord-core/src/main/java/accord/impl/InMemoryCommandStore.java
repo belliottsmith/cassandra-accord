@@ -41,6 +41,7 @@ import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,11 +50,14 @@ import accord.api.Agent;
 import accord.api.DataStore;
 import accord.api.Journal;
 import accord.api.LocalListeners;
+import accord.api.LocalListeners.TxnListener;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
+import accord.impl.cfr.IdEntry;
 import accord.impl.cfr.InMemoryRangeSummaryIndex;
 import accord.impl.cfr.LoadListener;
 import accord.impl.progresslog.DefaultProgressLog;
+import accord.impl.progresslog.TxnState;
 import accord.local.Cleanup;
 import accord.local.Command;
 import accord.local.CommandStore;
@@ -74,18 +78,8 @@ import accord.local.StoreParticipants;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.local.cfk.Serialize;
-import accord.primitives.AbstractUnseekableKeys;
-import accord.primitives.PartialDeps;
-import accord.primitives.Participants;
-import accord.primitives.Ranges;
-import accord.primitives.RoutableKey;
-import accord.primitives.Route;
-import accord.primitives.Status;
 import accord.primitives.Status.Durability.HasOutcome;
-import accord.primitives.Timestamp;
 import accord.primitives.Txn.Kind.Kinds;
-import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -106,6 +100,7 @@ import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applying;
+import static accord.primitives.SaveStatus.Invalidated;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
@@ -127,6 +122,9 @@ public abstract class InMemoryCommandStore extends CommandStore
 
         private final long id = nextId.incrementAndGet();
         private final NavigableMap<RoutingKey, ByteBuffer> commandsForKey = new TreeMap<>();
+        private List<IdEntry> commandsForRanges;
+        private List<TxnListener> listeners;
+        private List<TxnState> progressLog;
         private int waitingForCfk;
 
         private Snapshot(){}
@@ -136,6 +134,10 @@ public abstract class InMemoryCommandStore extends CommandStore
             for (Map.Entry<RoutingKey, ByteBuffer> e : commandsForKey.entrySet())
                 commandStore.commandsForKey.computeIfAbsent(e.getKey(), GlobalCommandsForKey::new).value(Serialize.fromBytes(e.getKey(), e.getValue()));
 
+            commandStore.progressLog.clear();
+            ((DefaultProgressLog)commandStore.progressLog).restore(null, progressLog);
+            ((DefaultLocalListeners)commandStore.listeners).restore(listeners);
+            commandStore.commandsForRanges.restore(commandsForRanges);
             commandStore.commandsForRanges.prune(commandStore);
         }
 
@@ -162,6 +164,9 @@ public abstract class InMemoryCommandStore extends CommandStore
         {
             Snapshot snapshot = new Snapshot();
 
+            snapshot.listeners = ((DefaultLocalListeners)commandStore.listeners).snapshot();
+            snapshot.progressLog = ((DefaultProgressLog)commandStore.progressLog).snapshot();
+            snapshot.commandsForRanges = commandStore.commandsForRanges.snapshot();
             for (Map.Entry<RoutableKey, GlobalCommandsForKey> e : commandStore.commandsForKey.entrySet())
             {
                 GlobalCommandsForKey global = e.getValue();
@@ -366,7 +371,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     }
 
     @Override
-    protected void updatedRedundantBefore(SafeCommandStore safeStore, RedundantBefore added)
+    protected void upsertedRedundantBefore(SafeCommandStore safeStore, RedundantBefore added)
     {
         InMemorySafeStore inMemorySafeStore = (InMemorySafeStore) safeStore;
         for (int i = 0 ; i < added.size() ; ++i)
@@ -390,7 +395,8 @@ public abstract class InMemoryCommandStore extends CommandStore
             for (TxnId txnId : clearing)
             {
                 GlobalCommand globalCommand = commands.get(txnId);
-                Invariants.require(globalCommand != null && !globalCommand.isEmpty());
+                if (globalCommand == null)
+                    continue; // now we restore contents from snapshot, we might repopulate older items
                 Command command = globalCommand.value();
                 StoreParticipants participants = command.participants().filter(LOAD, safeStore, txnId, command.executeAtIfKnown());
                 Cleanup cleanup = Cleanup.shouldCleanup(FULL, txnId, command.executeAtIfKnown(), command.saveStatus(), command.durability(), participants, unsafeGetRedundantBefore(), durableBefore());
@@ -401,16 +407,22 @@ public abstract class InMemoryCommandStore extends CommandStore
                                           || !Route.isFullRoute(command.route()))));
             }
         }
-        super.updatedRedundantBefore(safeStore, added);
+        super.upsertedRedundantBefore(safeStore, added);
     }
 
     @Override
     public void markShardDurable(SafeCommandStore safeStore, TxnId syncId, Ranges ranges, HasOutcome level)
     {
         super.markShardDurable(safeStore, syncId, ranges, level);
-        // TODO (required): this should happen on markLocallyApplied
         if (level == Universal)
             commandsForRanges.prune(syncId, ranges, safeStore.redundantBefore());
+    }
+
+    @Override
+    protected void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId syncId, Ranges ranges, SaveStatus prevStatus)
+    {
+        super.markExclusiveSyncPointLocallyApplied(safeStore, syncId, ranges, prevStatus);
+        commandsForRanges.prune(syncId, ranges, safeStore.redundantBefore());
     }
 
     protected InMemorySafeStore createSafeStore(PreLoadContext context, CommandsForRangeLoad cfrLoad,
@@ -925,8 +937,9 @@ public abstract class InMemoryCommandStore extends CommandStore
             Invariants.require(loader.loadKeysFor() == RECOVERY);
             Command command = commands.get(txnId).value();
             Summary summary = loader.ifRelevant(command);
-            Invariants.require(summary != null);
-            loaded.put(summary.plainTxnId(), summary);
+            // TODO (expected): prune implied invalidations from index, so no need to special case
+            if (summary == null) Invariants.require(command.saveStatus() == Invalidated);
+            else loaded.put(summary.plainTxnId(), summary);
         });
         return new CommandsForRangeLoad(loader, loaded, commandsForRanges.registerListener(new LoadListener(loader, loaded)));
     }
@@ -1217,7 +1230,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         commandsForKey.clear();
         commandsForRanges.clear();
         progressLog.clear();
-        unsafeSetRejectBefore(new RejectBefore());
+        unsafeSetRejectBefore(RejectBefore.EMPTY);
         hasResumedBootstraps = false;
     }
 
@@ -1233,17 +1246,17 @@ public abstract class InMemoryCommandStore extends CommandStore
         private CommandReplayer(InMemoryCommandStore commandStore)
         {
             // TODO (required): we shouldn't be providing TxnId.NONE here, we need to standardise on querying journal for data missing from InMemoryCommandStore
-            super(commandStore, TxnId.NONE);
+            super(commandStore, Mode.PART_NON_DURABLE, TxnId.NONE);
             this.commandStore = commandStore;
         }
 
-        private AsyncChain<Void> apply(Command command)
+        private AsyncChain<Void> apply(Command command, Replay replay)
         {
             return AsyncChains.success(commandStore.executeInContext(commandStore,
                                                                      PreLoadContext.contextFor(command.txnId(), "Replay"),
                                                                      null,
                                                                      (SafeCommandStore safeStore) -> {
-                                                                         initialiseState(safeStore, command.txnId());
+                                                                         super.replay(safeStore, command.txnId(), replay);
                                                                          return null;
                                                                      }));
         }
@@ -1276,10 +1289,14 @@ public abstract class InMemoryCommandStore extends CommandStore
                 }
             }
 
-            if (command == null || !maybeShouldReplay(txnId) || !shouldReplay(txnId, command.participants()))
+            if (command == null || !maybeShouldReplay(txnId))
                 return AsyncChains.success(null);
 
-            return apply(command);
+            Replay replay = shouldReplay(txnId, command.participants());
+            if (replay == Replay.NONE)
+                return AsyncChains.success(null);
+
+            return apply(command, replay);
         }
     }
 }

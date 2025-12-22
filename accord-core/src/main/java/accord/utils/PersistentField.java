@@ -19,13 +19,18 @@
 package accord.utils;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.TreeSet;
+import java.util.concurrent.Executor;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
@@ -40,41 +45,57 @@ public class PersistentField<Input, Saved>
         Saved load();
     }
 
-    private static class Pending<Saved>
+    private static class PendingInput<Input>
+    {
+        final AsyncResult.Settable<Void> done = AsyncResults.settable();
+        final Input input;
+
+        private PendingInput(Input input)
+        {
+            this.input = input;
+        }
+    }
+
+    private static class PendingSave<Saved>
     {
         final int id;
         final Saved saving;
 
-        private Pending(int id, Saved saving)
+        private PendingSave(int id, Saved saving)
         {
             this.id = id;
             this.saving = saving;
         }
     }
 
-    @Nonnull
     private final Supplier<Saved> currentValue;
-    @Nonnull
-    private final BiFunction<Input, Saved, Saved> merge;
-    @Nonnull
+    private final BiFunction<Input, Input, Input> mergeInputs;
+    private final BiFunction<Input, Saved, Saved> mergeToSave;
     private final Persister<Input, Saved> persister;
-    @Nonnull
     private final Consumer<Saved> set;
+    private final Executor mergeExecutor;
 
-    private Saved latestPending;
+    private Saved latestSave;
     private int nextId;
-    private final ArrayDeque<Pending<Saved>> pending = new ArrayDeque<>();
+    private final List<PendingInput<Input>> inputBuffer = new ArrayList<>();
+    private final ArrayDeque<PendingInput<Input>> inputs = new ArrayDeque<>();
+    private final ArrayDeque<PendingSave<Saved>> saves = new ArrayDeque<>();
     private final TreeSet<Integer> complete = new TreeSet<>();
+    private final Lock mergeLock = new ReentrantLock();
 
-    public PersistentField(@Nonnull Supplier<Saved> currentValue, @Nonnull BiFunction<Input, Saved, Saved> merge, @Nonnull Persister<Input, Saved> persister, @Nullable Consumer<Saved> set)
+    public PersistentField(@Nonnull Supplier<Saved> currentValue, @Nonnull BiFunction<Input, Input, Input> mergeInputs, @Nonnull BiFunction<Input, Saved, Saved> mergeToSave, @Nonnull Persister<Input, Saved> persister, Consumer<Saved> set, Executor mergeExecutor)
     {
         Invariants.nonNull(currentValue, "currentValue cannot be null");
+        Invariants.nonNull(mergeInputs, "mergeInputs cannot be null");
+        Invariants.nonNull(mergeToSave, "mergeToSave cannot be null");
         Invariants.nonNull(persister, "persist cannot be null");
         Invariants.nonNull(set, "set cannot be null");
         this.currentValue = currentValue;
-        this.merge = merge;
+        this.mergeInputs = mergeInputs;
+        this.mergeToSave = mergeToSave;
         this.persister = persister;
         this.set = set;
+        this.mergeExecutor = mergeExecutor;
     }
 
     public void load()
@@ -82,30 +103,79 @@ public class PersistentField<Input, Saved>
         set.accept(persister.load());
     }
 
-    public synchronized AsyncResult<?> mergeAndUpdate(@Nonnull Input inputValue)
+    public AsyncResult<?> save(@Nonnull Input inputValue)
     {
-        Invariants.nonNull(merge, "merge cannot be null");
         Invariants.nonNull(inputValue, "inputValue cannot be null");
-        return mergeAndUpdate(inputValue, merge);
+        PendingInput<Input> submit = new PendingInput<>(inputValue);
+        synchronized (this)
+        {
+            inputs.add(submit);
+        }
+        trySave();
+        return submit.done;
     }
 
-    private AsyncResult<?> mergeAndUpdate(@Nullable Input inputValue, @Nonnull BiFunction<Input, Saved, Saved> merge)
+    private void trySave()
     {
-        Invariants.nonNull(merge, "merge cannot be null");
-        Saved startingValue = latestPending;
-        if (startingValue == null)
+        if (mergeLock.tryLock())
         {
-            Invariants.require(pending.isEmpty());
-            startingValue = currentValue.get();
-        }
-        Saved newValue = merge.apply(inputValue, startingValue);
-        if (newValue == startingValue)
-            return AsyncResults.success(null);
-        this.latestPending = newValue;
-        int id = ++nextId;
-        pending.add(new Pending<>(id, newValue));
+            try { save(); }
+            finally { mergeLock.unlock(); }
 
-        AsyncResult.Settable<Void> result = AsyncResults.settable();
+            synchronized (this)
+            {
+                if (!inputs.isEmpty())
+                    mergeExecutor.execute(this::trySave);
+            }
+        }
+    }
+
+    @GuardedBy("mergeLock")
+    private void save()
+    {
+        Saved startingValue;
+        synchronized (this)
+        {
+            if (inputs.isEmpty())
+                return;
+
+            inputBuffer.clear();
+            inputBuffer.addAll(inputs);
+            inputs.clear();
+
+            startingValue = latestSave;
+            if (startingValue == null)
+            {
+                Invariants.require(saves.isEmpty());
+                startingValue = currentValue.get();
+            }
+        }
+
+        Input inputValue = inputBuffer.get(0).input;
+        for (int i = 1; i < inputBuffer.size() ; ++i)
+            inputValue = mergeInputs.apply(inputValue, inputBuffer.get(i).input);
+
+        Saved newValue = mergeToSave.apply(inputValue, startingValue);
+        if (newValue == startingValue)
+        {
+            inputBuffer.forEach(i -> i.done.setSuccess(null));
+            inputBuffer.clear();
+            return;
+        }
+
+        final List<AsyncResult.Settable<Void>> notifyOnDone = new ArrayList<>(inputBuffer.size());
+        for (PendingInput<?> pending : inputBuffer)
+            notifyOnDone.add(pending.done);
+        inputBuffer.clear();
+
+        int id;
+        synchronized (this)
+        {
+            this.latestSave = newValue;
+            id = ++nextId;
+            saves.add(new PendingSave<>(id, newValue));
+        }
+
         AsyncResult<?> pendingWrite = persister.persist(inputValue, newValue);
         pendingWrite.invoke((success, fail) -> {
             synchronized (this)
@@ -113,17 +183,15 @@ public class PersistentField<Input, Saved>
                 complete.add(id);
                 boolean upd = false;
                 Saved latest = null;
-                while (!complete.isEmpty() && pending.peek().id == complete.first())
+                while (!complete.isEmpty() && saves.peek().id == complete.first())
                 {
-                    latest = pending.poll().saving;
+                    latest = saves.poll().saving;
                     complete.pollFirst();
                     upd = true;
                 }
                 if (upd) set.accept(latest);
-                result.setSuccess(null);
+                notifyOnDone.forEach(i -> i.setSuccess(null));
             }
         });
-
-        return result;
     }
 }

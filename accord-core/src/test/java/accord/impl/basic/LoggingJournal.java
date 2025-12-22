@@ -75,7 +75,12 @@ public class LoggingJournal implements Journal
     }
 
     @Override
+    public void open(Node node)
+    {
+        delegate.open(node);
+    }
 
+    @Override
     public void start(Node node)
     {
         delegate.start(node);
@@ -130,9 +135,9 @@ public class LoggingJournal implements Journal
     }
 
     @Override
-    public boolean replay(CommandStores commandStores)
+    public boolean replay(CommandStores commandStores, Object param)
     {
-        return delegate.replay(commandStores);
+        return delegate.replay(commandStores, null);
     }
 
     @Override

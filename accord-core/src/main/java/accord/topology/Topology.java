@@ -422,7 +422,7 @@ public class Topology
             for (int i = shards.firstSetBit() ; i >= 0 ; i = shards.nextSetBit(i + 1, -1))
             {
                 supersetIndexes[count] = this.supersetIndexes[i];
-                ranges[count] = this.shards[this.supersetIndexes[i]].range;
+                ranges[count++] = this.shards[this.supersetIndexes[i]].range;
             }
             subsetOfRanges = Ranges.ofSortedAndDeoverlapped(ranges);
         }

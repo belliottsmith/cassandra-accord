@@ -21,6 +21,7 @@ package accord.impl.progresslog;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +56,8 @@ import accord.utils.LogGroupTimers;
 import accord.utils.TinyEnumSet;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
+import accord.utils.btree.BulkIterator;
+import accord.utils.btree.UpdateFunction;
 import org.agrona.collections.Long2ObjectHashMap;
 import org.agrona.collections.Object2ObjectHashMap;
 
@@ -462,7 +465,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (command == null) command = uninitialised(blockedBy.txnId());
 
         SaveStatus saveStatus = command.saveStatus();
-        Invariants.require(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
+        Invariants.expect(saveStatus.compareTo(blockedUntil.unblockedFrom) < 0);
 
         StoreParticipants blockedOnStoreParticipants2 = null;
         if (blockedOnParticipants != null || blockedOnRoute != null)
@@ -883,7 +886,6 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
     }
 
-    @VisibleForImplementation
     public void requeue(SafeCommandStore safeStore, TxnStateKind kind, TxnId txnId)
     {
         clearPendingAndActive(kind, txnId);
@@ -1072,7 +1074,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
         public boolean isWaitingUninitialised()
         {
-            return current.isUninitialised();
+            return current.isWaitingUninitialised();
         }
 
         @Nonnull
@@ -1121,5 +1123,37 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         {
             return current.homeRunCounter();
         }
+    }
+
+    public void restore(SafeCommandStore safeStore, List<TxnState> states)
+    {
+        if (!BTree.isEmpty(stateMap))
+            throw new IllegalStateException("Restore only supported if uninitialised");
+
+        {
+            List<TxnState> snapshot = new ArrayList<>(states.size());
+            for (TxnState state : states)
+                snapshot.add(state.snapshot());
+            states = snapshot;
+        }
+
+        states.sort(Comparator.naturalOrder());
+        stateMap = BTree.build(BulkIterator.of(states.iterator()), states.size(), UpdateFunction.noOp());
+
+        for (TxnState state : states)
+        {
+            if (!state.isHomeDoneOrUninitialised() && state.homeProgress() != NoneExpected)
+                state.updateScheduling(safeStore, this, Home, null, Queued);
+            if (!state.isWaitingDoneOrUninitialised() && state.waitingProgress() != NoneExpected)
+                state.updateScheduling(safeStore, this, Waiting, null, Queued);
+        }
+    }
+
+    public List<TxnState> snapshot()
+    {
+        List<TxnState> snapshot = new ArrayList<>(BTree.size(stateMap));
+        for (TxnState state : BTree.<TxnState>iterable(stateMap))
+            snapshot.add(state.snapshot());
+        return snapshot;
     }
 }

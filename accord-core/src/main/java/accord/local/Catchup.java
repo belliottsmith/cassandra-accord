@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +32,7 @@ import accord.coordinate.FetchDurableBefore;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
+import accord.primitives.Status;
 import accord.primitives.TxnId;
 import accord.utils.Reduce;
 import accord.utils.async.AsyncChain;
@@ -58,7 +60,8 @@ public class Catchup
 
         boolean register(SafeCommandStore safeStore)
         {
-            waitingOn = safeStore.ranges().all().slice(durableBefore.ranges(Objects::nonNull), Minimal);
+            waitingOn = safeStore.ranges().all().slice(durableBefore.ranges(Objects::nonNull), Minimal).mergeTouching();
+            logger.debug("{}: Registering listener on {}, filtering by {}", safeStore.commandStore(), waitingOn, safeStore.redundantBefore().map(b -> b == null ? null : b.maxBound(LOCALLY_APPLIED), TxnId[]::new));
             updateWaitingOn(safeStore);
 
             if (!waitingOn.isEmpty())
@@ -94,8 +97,14 @@ public class Catchup
             //noinspection DataFlowIssue
             safeStore = safeStore;
             PreLoadContext ctx = PreLoadContext.contextFor(txnId, "Catchup");
-            if (safeStore.canExecuteWith(ctx)) safeStore.progressLog().waiting(CanApply, safeStore, safeStore.get(txnId), null, Ranges.of(range), null);
-            else safeStore.commandStore().execute(ctx, safeStore0 -> safeStore0.progressLog().waiting(CanApply, safeStore0, safeStore0.get(txnId), null, Ranges.of(range), null));
+            if (safeStore.canExecuteWith(ctx)) markWaiting(safeStore, safeStore.get(txnId), range);
+            else safeStore.commandStore().execute(ctx, (Consumer<? super SafeCommandStore>) safeStore0 -> markWaiting(safeStore0, safeStore0.get(txnId), range), safeStore.agent());
+        }
+
+        private static void markWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, Range range)
+        {
+            if (!safeCommand.current().hasBeen(Status.PreApplied))
+                safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, Ranges.of(range), null);
         }
 
         private void done(SafeCommandStore safeStore)
