@@ -24,7 +24,7 @@ import accord.primitives.TxnId;
 
 public class IdSingleEntry extends IdEntry implements RangeEntry
 {
-    final Range range;
+    public final Range range;
 
     public IdSingleEntry(TxnId txnId, Range range)
     {

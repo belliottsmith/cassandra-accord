@@ -26,6 +26,7 @@ import accord.utils.async.AsyncCallbacks.RunOrFail;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.Cancellable;
 
+// TODO (required): consistent RejectedExecutionException handling
 public interface AsyncExecutor extends Executor
 {
     // unlike execute, throws no exceptions, nor will not wrap the runnable
@@ -38,6 +39,7 @@ public interface AsyncExecutor extends Executor
 
     // Depending on this implementation this method may queue-jump, i.e. task submission order is not guaranteed.
     // Make sure this is semantically safe at all call-sites.
+    // TODO (required): RejectedExecutionException?
     default void executeMaybeImmediately(Runnable run)
     {
         if (!tryExecuteImmediately(run))

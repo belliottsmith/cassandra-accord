@@ -1128,10 +1128,8 @@ public class Commands
         return false;
     }
 
-    static int counter = 0;
     public static boolean maybeCleanup(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, @Nonnull StoreParticipants newParticipants)
     {
-        ++counter;
         StoreParticipants cleanupParticipants = newParticipants.filter(LOAD, safeStore, command.txnId(), command.executeAtIfKnown());
         Cleanup cleanup = shouldCleanup(FULL, safeStore, command, cleanupParticipants);
         if (cleanup == NO)
@@ -1224,7 +1222,7 @@ public class Commands
             }
             else
             {
-                safeStore.commandStore().execute(this, this);
+                safeStore.commandStore().execute(this, this, safeStore.agent());
             }
         }
 

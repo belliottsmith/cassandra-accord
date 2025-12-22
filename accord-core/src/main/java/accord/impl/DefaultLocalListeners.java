@@ -18,10 +18,12 @@
 
 package accord.impl;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.Enumeration;
 import java.util.Iterator;
+import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
@@ -44,6 +46,8 @@ import accord.utils.AsymmetricComparator;
 import accord.utils.Invariants;
 import accord.utils.btree.BTree;
 import accord.utils.btree.BTreeRemoval;
+import accord.utils.btree.BulkIterator;
+import accord.utils.btree.UpdateFunction;
 
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.ArrayBuffers.cachedTxnIds;
@@ -736,5 +740,42 @@ public class DefaultLocalListeners implements LocalListeners
                 }
             };
         };
+    }
+
+    public void restore(List<TxnListener> listeners)
+    {
+        if (listeners.isEmpty())
+            return;
+
+        if (!BTree.isEmpty(txnListeners))
+            throw new IllegalStateException("Restore only supported if uninitialised");
+
+        listeners.sort((a, b) -> {
+            int c = a.waitingOn.compareTo(b.waitingOn);
+            if (c == 0) c = a.awaitingStatus.compareTo(b.awaitingStatus);
+            if (c == 0) c = a.waiter.compareTo(b.waiter);
+            return c;
+        });
+
+        List<TxnListeners> build = new ArrayList<>();
+        int li = 0;
+        while (li < listeners.size())
+        {
+            TxnListener l = listeners.get(li);
+            TxnListeners ls = new TxnListeners(l.waitingOn, l.awaitingStatus);
+            build.add(ls);
+            ls.add(l.waiter);
+            while (++li < listeners.size() && (l = listeners.get(li)).waitingOn.equals(ls) && l.awaitingStatus == ls.await)
+                ls.add(l.waiter);
+        }
+        txnListeners = BTree.build(BulkIterator.of(build.iterator()), build.size(), UpdateFunction.noOp());
+    }
+
+    public List<TxnListener> snapshot()
+    {
+        List<TxnListener> snapshot = new ArrayList<>(BTree.size(txnListeners));
+        for (TxnListener listener : txnListeners())
+            snapshot.add(listener);
+        return snapshot;
     }
 }

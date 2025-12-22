@@ -23,7 +23,7 @@ import accord.primitives.TxnId;
 
 public class IdMultiEntry extends IdEntry
 {
-    final Ranges ranges;
+    public final Ranges ranges;
 
     public IdMultiEntry(TxnId txnId, Ranges ranges)
     {

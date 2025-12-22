@@ -639,7 +639,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return notRetired.without(Ranges.of(bounds.range));
         }
 
-        RedundantStatus get(TxnId txnId, @Nullable Timestamp applyAtIfKnown)
+        public RedundantStatus get(TxnId txnId, @Nullable Timestamp applyAtIfKnown)
         {
             if (wasOwned(txnId))
             {
@@ -1277,17 +1277,26 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     @Override
     public String toString()
     {
-        return "gc:" + toString(GC_BEFORE)
-               + "\nlocal:" + toString(LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE)
-               + "\nbootstrap:" + toString(UNREADY);
+        return toString(", ");
     }
 
-    private String toString(Property p1)
+    public String toString(String delimiter)
     {
-        return toString(p1, null);
+        StringBuilder sb = new StringBuilder();
+        append(sb, delimiter, "gc:", GC_BEFORE);
+        append(sb, delimiter, "applied:", LOCALLY_APPLIED);
+        append(sb, delimiter, "command_store:", LOCALLY_DURABLE_TO_COMMAND_STORE);
+        append(sb, delimiter, "data_store:", LOCALLY_DURABLE_TO_DATA_STORE);
+        append(sb, delimiter, "unready:", UNREADY);
+        return sb.toString();
     }
 
-    private String toString(Property p1, Property p2)
+    private void append(StringBuilder builder, String delimiter, String prefix, Property p1)
+    {
+        append(builder, delimiter, prefix, p1, null);
+    }
+
+    private void append(StringBuilder builder, String delimiter, String prefix, Property p1, Property p2)
     {
         TreeMap<TxnId, List<Range>> map = new TreeMap<>();
         foldl((e, m, pp1, pp2) -> {
@@ -1297,8 +1306,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return m;
         }, map, p1, p2, i -> false);
 
-        return map.descendingMap().entrySet().stream()
-                  .map(e -> (e.getKey().equals(TxnId.NONE) ? "none" : e.getKey().toString()) + ":" + Ranges.ofSorted(e.getValue().toArray(new Range[0])).mergeTouching())
-                  .collect(Collectors.joining(", ", "{", "}"));
+        if (map.size() == 0 || map.size() == 1 && map.firstKey().equals(TxnId.NONE))
+            return;
+
+        if (builder.length() > 0)
+            builder.append(delimiter);
+        builder.append(prefix);
+        builder.append(map.descendingMap().entrySet().stream()
+                  .map(e -> (e.getKey().equals(TxnId.NONE) ? "none" : e.getKey().toString()) + ':' + Ranges.ofSorted(e.getValue().toArray(new Range[0])).mergeTouching())
+                  .collect(Collectors.joining(", ", "{", "}")));
     }
 }

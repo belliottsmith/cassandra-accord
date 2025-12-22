@@ -67,6 +67,7 @@ abstract class HomeState extends BaseTxnState
     private static final long SET_MASK = ~((PROGRESS_MASK << PROGRESS_SHIFT)
                                            | (STATUS_MASK << STATUS_SHIFT));
     static final int HOME_STATE_END_SHIFT = RUN_COUNTER_SHIFT + 3;
+    static final long SNAPSHOT_HOME_MASK = ~SET_MASK;
 
     static
     {
@@ -80,13 +81,13 @@ abstract class HomeState extends BaseTxnState
 
     void set(SafeCommandStore safeStore, DefaultProgressLog owner, HomePhase newHomePhase, Progress newProgress)
     {
-        setNoScheduling(newHomePhase, newProgress);
+        setWithoutScheduling(newHomePhase, newProgress);
         if (newProgress == NoneExpected)
             owner.clearProgressToken(txnId);
         updateScheduling(safeStore, owner, Home, null, newProgress);
     }
 
-    void setNoScheduling(HomePhase newHomePhase, Progress newProgress)
+    void setWithoutScheduling(HomePhase newHomePhase, Progress newProgress)
     {
         encodedState &= SET_MASK;
         encodedState |= ((long) newHomePhase.ordinal() << STATUS_SHIFT)
@@ -156,7 +157,7 @@ abstract class HomeState extends BaseTxnState
 
     HomePhase shouldUpdatePhase(DefaultProgressLog owner, Command command)
     {
-        if (command.saveStatus() == SaveStatus.Erased)
+        if (command.durability().isDurableOrInvalidated() || command.saveStatus() == SaveStatus.Erased)
             return Done;
 
         HomePhase phase = homePhase();
@@ -197,7 +198,7 @@ abstract class HomeState extends BaseTxnState
                     set(safeStore, owner, updatePhase, NoneExpected);
                     return;
                 }
-                setNoScheduling(updatePhase, Queued);
+                setWithoutScheduling(updatePhase, Queued);
             }
         }
 

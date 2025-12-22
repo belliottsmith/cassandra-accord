@@ -291,6 +291,7 @@ public class InMemoryRangeSummaryIndex extends SemiSyncIntervalTree<IdEntry>
 
     private static Boolean prune(RedundantBefore.Bounds bounds, Boolean prune, TxnId txnId)
     {
+        // TODO (expected): prune implied invalidations
         if (!prune) return false;
         if (bounds.maxBound(LOCALLY_APPLIED).compareTo(txnId) <= 0) return false;
         if (!txnId.isSyncPoint()) return bounds.maxBound(GC_BEFORE).compareTo(txnId) > 0;

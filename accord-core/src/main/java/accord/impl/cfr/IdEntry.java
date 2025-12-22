@@ -18,6 +18,7 @@
 
 package accord.impl.cfr;
 
+import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -27,6 +28,23 @@ import accord.utils.Invariants;
 
 public abstract class IdEntry extends TxnId
 {
+    public static class SerializerSupport
+    {
+        public static IdSingleEntry create(TxnId txnId, int encoded, Range range)
+        {
+            IdSingleEntry result = new IdSingleEntry(txnId, range);
+            result.encoded = encoded;
+            return result;
+        }
+
+        public static IdMultiEntry create(TxnId txnId, int encoded, Ranges ranges)
+        {
+            IdMultiEntry result = new IdMultiEntry(txnId, ranges);
+            result.encoded = encoded;
+            return result;
+        }
+    }
+
     static final int SAVE_STATUS_SHIFT = Status.Durability.ENCODING_BITS;
     static final int EXECUTE_AT_BIT = 1 << (SaveStatus.ENCODING_BITS + SAVE_STATUS_SHIFT);
 
@@ -77,5 +95,10 @@ public abstract class IdEntry extends TxnId
         Invariants.require(durability() == durability);
         Invariants.require(saveStatus() == saveStatus);
         return true;
+    }
+
+    public final int encoded()
+    {
+        return encoded;
     }
 }

@@ -96,8 +96,6 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     /**
      * The set of flags we want to retain as we merge timestamps (e.g. when taking mergeMax).
-     * Today this is only the REJECTED_FLAG, but we may include additional flags in future (such as Committed, Applied..)
-     * which we may also want to retain when merging in other contexts (such as in Deps).
      */
     static final int MERGE_FLAGS = REJECTED.bit | UNSTABLE.bit | HLC_BOUND.bit | SHARD_BOUND.bit;
     public static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF00FFL;

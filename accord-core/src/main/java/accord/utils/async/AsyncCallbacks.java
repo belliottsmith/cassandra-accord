@@ -30,6 +30,7 @@ public class AsyncCallbacks
     // a runnable interface that may be directly failed
     public interface RunOrFail extends Runnable
     {
+        // run should not throw any exception
         void run();
         void fail(Throwable fail);
     }
