@@ -218,11 +218,6 @@ public class DurabilityRequest
         }
     }
 
-    private String successString(Ranges success)
-    {
-        return success.isEmpty() ? "achieved" : "achieved " + require.local + "/" + require.remote + " for " + success + " but only";
-    }
-
     @Override
     public String toString()
     {

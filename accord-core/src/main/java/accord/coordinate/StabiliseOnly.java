@@ -41,7 +41,7 @@ public class StabiliseOnly extends Stabilise<Deps>
     @Override
     protected void onStabilised()
     {
-        finishAndInvokeCallback(stabiliseDeps, null);
+        finishWithSuccess(stabiliseDeps);
     }
 
     @Override

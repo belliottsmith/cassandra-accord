@@ -143,7 +143,9 @@ public class RedundantBeforeTest
 
                 RoutingKey key = keys[rs.nextInt(keys.length)];
                 addCanon(txnId, status, canon.get(key));
+                RedundantBefore prev = redundantBefore;
                 redundantBefore = RedundantBefore.merge(redundantBefore, RedundantBefore.create(Ranges.of(key.asRange()), txnId, status));
+                Assertions.assertThat(redundantBefore.isAtLeast(prev));
                 ++ignore;
             }
 

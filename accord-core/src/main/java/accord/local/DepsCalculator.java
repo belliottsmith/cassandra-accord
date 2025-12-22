@@ -80,12 +80,15 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     // TODO (expected): we can also track whether we have only single-key writes that have been Accepted with ballot 0 (or timestamp != t0), or else Committed[1];
     //  in this case we can decide immediately if we have a unique hlc as we don't run the risk of other keys inserting some arbitrary timestamp
     //  [1] probably unsafe to use Accepted with ballot > 0, as there could be a timestamp battle, and the timestamp we see might not be the one that gets decided.
-    private boolean hasUnappliedDependency;
+    private final long now;
+    private long sumUnappliedAge, maxUnappliedAge;
+    private int unappliedCount;
     private long maxAppliedHlc;
 
-    public DepsCalculator()
+    public DepsCalculator(Timestamp timestamp)
     {
         super(true);
+        this.now = timestamp.hlc();
     }
 
     @Override
@@ -97,7 +100,13 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
         if (self == null || !self.equals(depId))
             add(keyOrRange, depId);
         if (status.compareTo(APPLIED) < 0)
-            hasUnappliedDependency = true;
+        {
+            unappliedCount += 1;
+            long age = Math.max(0, now - depId.hlc());
+            sumUnappliedAge += age;
+            if (age > maxUnappliedAge)
+                maxUnappliedAge = age;
+        }
     }
 
     @Override
@@ -110,7 +119,7 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     public ExecuteFlags executeFlags(TxnId txnId)
     {
         ExecuteFlags flags = ExecuteFlags.none();
-        if (!hasUnappliedDependency)
+        if (unappliedCount == 0)
         {
             flags = flags.with(READY_TO_EXECUTE);
             // we don't know whether hlc is unique unless dependencies have applied
@@ -118,6 +127,14 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
                 flags = flags.with(HAS_UNIQUE_HLC);
         }
         return flags;
+    }
+
+    public Timestamp executeAt(SafeCommand safeCommand, Node node)
+    {
+        Timestamp executeAt = safeCommand.current().executeAtOrTxnId();
+        if (unappliedCount > 0 && node.agent().softReject(unappliedCount, maxUnappliedAge, sumUnappliedAge))
+            executeAt = executeAt.addFlag(Timestamp.Flag.SOFT_REJECT);
+        return executeAt;
     }
 
     public Deps calculate(SafeCommandStore safeStore, TxnId txnId, StoreParticipants participants, long minEpoch, Timestamp executeAt, boolean nullIfRedundant)
@@ -162,7 +179,7 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
 
     public static Deps calculateDeps(SafeCommandStore safeStore, TxnId txnId, Participants<?> touches, long minEpoch, Timestamp executeAt, boolean nullIfRedundant)
     {
-        try (DepsCalculator calculator = new DepsCalculator())
+        try (DepsCalculator calculator = new DepsCalculator(executeAt))
         {
             return calculator.calculate(safeStore, txnId, touches, minEpoch, executeAt, nullIfRedundant);
         }

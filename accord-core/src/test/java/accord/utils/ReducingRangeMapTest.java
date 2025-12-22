@@ -81,7 +81,7 @@ public class ReducingRangeMapTest
 
     private static Range r(RoutingKey l, RoutingKey r)
     {
-        return END_INCLUSIVE ? new Range.EndInclusive(l, r) : new Range.StartInclusive(l, r);
+        return new IntKey.Range((IntKey.Routing) l, (IntKey.Routing) r);
     }
 
     private static RoutingKey incr(RoutingKey rk)

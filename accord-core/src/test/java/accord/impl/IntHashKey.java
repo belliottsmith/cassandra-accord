@@ -160,7 +160,7 @@ public abstract class IntHashKey implements RoutableKey
         }
     }
 
-    public static class Range extends accord.primitives.Range.EndInclusive
+    public static class Range extends accord.primitives.Range
     {
         public Range(Hash start, Hash end)
         {

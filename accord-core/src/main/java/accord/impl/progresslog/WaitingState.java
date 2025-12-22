@@ -104,7 +104,7 @@ abstract class WaitingState extends HomeState
     private static final int AWAIT_STARTED_SHIFT = QUERY_SHARDS_NOT_HOME_SHIFT + 1;
     private static final int AWAIT_STARTED_BIT = 1 << AWAIT_STARTED_SHIFT;
     private static final int AWAIT_SHIFT = AWAIT_STARTED_SHIFT + 1;
-    private static final int AWAIT_BITS = 26;
+    private static final int AWAIT_BITS = 24;
     private static final long AWAIT_MASK = (1L << AWAIT_BITS) - 1;
     private static final int AWAIT_EPOCH_SHIFT = AWAIT_SHIFT + AWAIT_BITS;
     private static final int AWAIT_EPOCH_BITS = 4;
@@ -114,6 +114,8 @@ abstract class WaitingState extends HomeState
     private static final int RETRY_COUNTER_SHIFT = AWAIT_EPOCH_SHIFT + AWAIT_EPOCH_BITS;
     private static final long RETRY_COUNTER_MASK = 0x7;
     static final int WAITING_STATE_END_SHIFT = RETRY_COUNTER_SHIFT + 3;
+    static long SNAPSHOT_WAITING_MASK = INITIALISED_MASK | ~SET_MASK | QUERY_SHARDS_NOT_HOME_BIT;
+
     static
     {
         Invariants.require(BLOCKED_UNTIL_SHIFT == PROGRESS_SHIFT + Long.bitCount(PROGRESS_MASK));
@@ -153,7 +155,7 @@ abstract class WaitingState extends HomeState
         encodedState |= (long) homeStatus.ordinal() << HOME_SATISFIES_SHIFT;
     }
 
-    boolean isUninitialised()
+    boolean isWaitingUninitialised()
     {
         return 0 == (encodedState & INITIALISED_MASK);
     }
@@ -450,13 +452,17 @@ abstract class WaitingState extends HomeState
         incrementWaitingRunCounter();
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
-        if (command.saveStatus().compareTo(SaveStatus.Erased) >= 0 // TODO (expected): improve progress log clearing to guarantee we don't encounter this status
-            || !Invariants.expect(command.saveStatus().compareTo(blockedUntil.unblockedFrom) < 0,
-                           "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s", blockedUntil.unblockedFrom, command))
+        if (command.saveStatus().compareTo(blockedUntil.unblockedFrom) >= 0)
         {
+            // TODO (expected): improve progress log clearing to guarantee we don't encounter Erased or Invalidated
+            //   (Invalidated at least can be encountered due to invalidation on load in integration, which doesn't invoke update)
+            Invariants.expect(command.saveStatus().compareTo(SaveStatus.Erased) >= 0 || isRestored(),
+                              "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s",
+                              blockedUntil.unblockedFrom, command);
             setWaitingDone(owner);
             return;
         }
+
         TxnId txnId = safeCommand.txnId();
         // first make sure we have enough information to obtain the command locally
         Timestamp executeAt = command.executeAtIfKnown();
@@ -832,6 +838,13 @@ abstract class WaitingState extends HomeState
                 return;
             }
 
+            if (safeCommand != null && safeCommand.current().saveStatus().compareTo(querying.unblockedFrom) >= 0)
+            {
+                if (tracing != null)
+                    tracing.trace(owner.commandStore, "Received async callback %d with %s; local command already exceeds wait status");
+                return;
+            }
+
             callbackId >>= 1;
             Invariants.nonNull(safeCommand);
             Route<?> route = Route.castToRoute(safeCommand.current().maxParticipants());
@@ -924,7 +937,7 @@ abstract class WaitingState extends HomeState
 
     void awaitSlice(DefaultProgressLog owner, BlockedUntil blockedUntil, TxnId txnId, Timestamp executeAt, Route<?> route, int callbackId, @Nullable Tracing tracing)
     {
-        Invariants.require(blockedUntil.waitsOn == SHARD);
+        Invariants.require(blockedUntil.waitsOn == SHARD || queryShardsNotHome());
         // TODO (expected): special-case when this shard is home key to avoid remote messages
         await(owner, blockedUntil, txnId, executeAt, route, callbackId, WaitingState::synchronousAwaitSliceCallback, tracing);
     }
@@ -980,6 +993,11 @@ abstract class WaitingState extends HomeState
     boolean isWaitingDone()
     {
         return waitingProgress() == NoneExpected && blockedUntil() == CanApply;
+    }
+
+    boolean isWaitingDoneOrUninitialised()
+    {
+        return isWaitingDone() || isWaitingUninitialised();
     }
 
     enum CallbackKind

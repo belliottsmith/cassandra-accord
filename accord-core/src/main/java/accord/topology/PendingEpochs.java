@@ -32,6 +32,7 @@ class PendingEpochs
     final TopologyManager manager;
     private PendingEpoch[] epochs = new PendingEpoch[16];
     private int start, end;
+    private long minPermittedEpoch = 0;
 
     PendingEpochs(TopologyManager manager)
     {
@@ -46,6 +47,16 @@ class PendingEpochs
     boolean isEmpty()
     {
         return end == start;
+    }
+
+    boolean isPermitted(long epoch)
+    {
+        return epoch >= minPermittedEpoch;
+    }
+
+    void setMinPermitted(long minPrependEpoch)
+    {
+        this.minPermittedEpoch = minPrependEpoch;
     }
 
     private void append(PendingEpoch append)
@@ -94,7 +105,9 @@ class PendingEpochs
     void remoteReadyToCoordinate(Node.Id node, long epoch)
     {
         Invariants.requireArgument(epoch > 0);
-        getOrCreate(epoch).remoteReadyToCoordinate(node);
+        PendingEpoch pending = getOrCreateIfPermitted(epoch);
+        if (pending != null)
+            pending.remoteReadyToCoordinate(node);
     }
 
     /**
@@ -103,7 +116,10 @@ class PendingEpochs
      */
     Ranges closed(Ranges ranges, long epoch)
     {
-        return getOrCreate(epoch).closed(ranges);
+        PendingEpoch pending = getOrCreateIfPermitted(epoch);
+        if (pending != null)
+            return pending.closed(ranges);
+        return ranges;
     }
 
     /**
@@ -112,7 +128,10 @@ class PendingEpochs
      */
     Ranges retired(Ranges ranges, long epoch)
     {
-        return getOrCreate(epoch).retired(ranges);
+        PendingEpoch pending = getOrCreateIfPermitted(epoch);
+        if (pending != null)
+            return pending.retired(ranges);
+        return ranges;
     }
 
     PendingEpoch atIndex(int i)
@@ -127,9 +146,16 @@ class PendingEpochs
         return isEmpty() ? 0 : epochs[end - 1].epoch;
     }
 
-    PendingEpoch getOrCreate(long epoch)
+    long minEpoch()
     {
-        Invariants.require(manager.active().currentEpoch < epoch);
+        return isEmpty() ? 0 : epochs[start].epoch;
+    }
+
+    PendingEpoch getOrCreateIfPermitted(long epoch)
+    {
+        if (!isPermitted(epoch))
+            return null;
+
         if (isEmpty())
         {
             append(new PendingEpoch(epoch, manager));
@@ -155,10 +181,21 @@ class PendingEpochs
         return epochs[end - 1];
     }
 
+    PendingEpoch getOrCreateOrMin(long epoch)
+    {
+        PendingEpoch pending = getOrCreateIfPermitted(epoch);
+        return pending != null ? pending : atIndex(0);
+    }
+
+    PendingEpoch getOrCreate(long epoch)
+    {
+        return Invariants.nonNull(getOrCreateIfPermitted(epoch));
+    }
+
     void removeFirst(long epoch)
     {
         Invariants.require(start < end);
-        Invariants.require(epochs[start].epoch == epoch);
+        Invariants.require(epochs[start].epoch == epoch, "%d != %d", epochs[start].epoch, epoch);
         epochs[start++] = null;
     }
 }

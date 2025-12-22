@@ -306,17 +306,12 @@ public class ShardDurability
                 if (min.equals(cycleMin)) logger.warn("Minimum durability {} for {} has not advanced in at least {} seconds.", min, shard.range, seconds);
                 else logger.info("Durability for {} at least {}.", min, shard.range);
 
-                String report = durableBefore.foldlWithBounds(Ranges.of(shard.range), (entry, sb, start, end) -> {
+                String report = durableBefore.foldl(Ranges.of(shard.range), (entry, sb, p1, p2) -> {
                         if (sb.length() > 0)
                             sb.append(", ");
-                        sb.append('(');
-                        sb.append(start);
-                        sb.append(",");
-                        sb.append(end);
-                        sb.append("]:");
                         sb.append(entry);
                         return sb;
-                    }, new StringBuilder(), ignore -> false).toString();
+                    }, new StringBuilder(), null, null).toString();
                 logger.debug("{}", report);
             }
             else if (min.equals(cycleMin))

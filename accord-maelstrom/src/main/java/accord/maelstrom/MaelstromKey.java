@@ -176,7 +176,7 @@ public abstract class MaelstromKey implements RoutableKey
         }
     }
 
-    public static class Range extends accord.primitives.Range.EndInclusive
+    public static class Range extends accord.primitives.Range
     {
         public Range(RoutingKey start, RoutingKey end)
         {

@@ -297,7 +297,7 @@ public class DefaultRemoteListeners implements RemoteListeners
             this.end = 1;
         }
 
-        Listeners merge(Listeners that)
+        synchronized Listeners merge(Listeners that)
         {
             int count = 0;
             int i = this.start, j = that.start;
@@ -342,6 +342,41 @@ public class DefaultRemoteListeners implements RemoteListeners
 
             start = 0;
             end = count;
+            return this;
+        }
+
+        synchronized Listeners notify(NotifySink notifySink, SafeCommandStore safeStore, SafeCommand safeCommand, Command prev)
+        {
+            int storeId = safeStore.commandStore().id();
+            SaveStatus newStatus = safeCommand.current().saveStatus();
+            Durability newDurability = safeCommand.current().durability();
+
+            StatusListeners[] listeners = statusListeners;
+            for (int i = start ; i < end ; ++i)
+            {
+                StatusListeners listener = listeners[i];
+                if (awaitSaveStatus(listener.await).compareTo(newStatus) > 0)
+                    return this;
+
+                if (awaitDurability(listener.await).compareTo(newDurability.decisionOrOutcome()) > 0)
+                    continue;
+
+                listener.removeWaitingOn(storeId);
+                if (listener.waitingOnCount == 0)
+                {
+                    // if we get invalidated we don't save the route, so we take the combined route of before and after the new status
+                    Route<?> route = Route.merge(safeCommand.current().route(), prev == null ? null : (Route)prev.route());
+                    notifySink.notify(safeCommand.txnId(), newStatus, route, listener.listeners, listener.listenerCount);
+                    if (i != start)
+                        System.arraycopy(listeners, start, listeners, start + 1, i - start);
+                    listeners[start] = null;
+                    ++start;
+                }
+            }
+
+            if (start == end)
+                return null;
+
             return this;
         }
     }
@@ -396,7 +431,7 @@ public class DefaultRemoteListeners implements RemoteListeners
         }
 
         @Override
-        public int done()
+        public synchronized int done()
         {
             if (count == 0)
                 return 0;
@@ -435,36 +470,14 @@ public class DefaultRemoteListeners implements RemoteListeners
     public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev)
     {
         TxnId txnId = safeCommand.txnId();
-        Listeners entry = this.listeners.get(txnId);
-        if (entry == null)
-            return;
-
-        int storeId = safeStore.commandStore().id();
-        SaveStatus newStatus = safeCommand.current().saveStatus();
-        Durability newDurability = safeCommand.current().durability();
-
-        int start = entry.start, end = entry.end;
-        StatusListeners[] listeners = entry.statusListeners;
-        for (int i = start ; i < end ; ++i)
+        Listeners entry = listeners.get(txnId);
+        if (entry != null && null == entry.notify(notifySink, safeStore, safeCommand, prev))
         {
-            StatusListeners listener = listeners[i];
-            if (awaitSaveStatus(listener.await).compareTo(newStatus) > 0)
-                return;
-
-            if (awaitDurability(listener.await).compareTo(newDurability.decisionOrOutcome()) > 0)
-                continue;
-
-            listener.removeWaitingOn(storeId);
-            if (listener.waitingOnCount == 0)
-            {
-                // if we get invalidated we don't save the route, so we take the combined route of before and after the new status
-                Route<?> route = Route.merge(safeCommand.current().route(), prev == null ? null : (Route)prev.route());
-                notifySink.notify(txnId, newStatus, route, listener.listeners, listener.listenerCount);
-                if (i != start)
-                    System.arraycopy(listeners, start, listeners, start + 1, i - start);
-                listeners[start] = null;
-                start = ++entry.start;
-            }
+            listeners.compute(txnId, (ignore, e) -> {
+                if (e == entry && e.start == e.end)
+                    return null;
+                return e;
+            });
         }
     }
 

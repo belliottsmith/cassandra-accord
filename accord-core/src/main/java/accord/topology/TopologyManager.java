@@ -290,9 +290,9 @@ public class TopologyManager
         {
             long epoch = topology.epoch;
             // if active is empty, treat the earliest pending epoch as our low bound to avoid race conditions where we begin updating active but discover an earlier epoch
-            long currentEpoch = !active.isEmpty() ? active.currentEpoch : !pending.isEmpty() ? pending.atIndex(0).epoch - 1 : 0;
-            if (epoch <= currentEpoch)
+            if (!pending.isPermitted(epoch))
             {
+                long currentEpoch = !active.isEmpty() ? active.currentEpoch : pending.minEpoch();
                 logger.debug("Ignoring topology for epoch {} which is behind our latest epoch {}", epoch, currentEpoch);
                 return;
             }
@@ -322,13 +322,15 @@ public class TopologyManager
                 PendingEpoch pending;
                 synchronized (this)
                 {
-                    if (this.pending.isEmpty() || (!this.active.isEmpty() && this.pending.atIndex(0).epoch > 1 + current().epoch()))
+                    if (this.pending.isEmpty() || (!active.isEmpty() && active.currentEpoch + 1 != this.pending.minEpoch()))
                         return;
 
                     pending = this.pending.atIndex(0);
                     topology = pending.topology();
                     if (topology == null)
                         return;
+
+                    this.pending.setMinPermitted(topology.epoch + 1);
                 }
 
                 Supplier<EpochReady> bootstrap = node.commandStores().updateTopology(node, topology);
@@ -428,7 +430,8 @@ public class TopologyManager
             if (epoch <= active.currentEpoch)
                 return AsyncChains.success(null);
 
-            pendingEpoch = pending.getOrCreate(epoch);
+
+            pendingEpoch = pending.getOrCreateOrMin(epoch);
             fetch = pendingEpoch.fetching == null;
         }
 
@@ -445,8 +448,8 @@ public class TopologyManager
                     if (epoch <= active.currentEpoch)
                         break;
 
-                    pendingEpoch = pending.getOrCreate(epoch);
-                    if (pendingEpoch.fetching != null)
+                    pendingEpoch = pending.getOrCreateIfPermitted(epoch);
+                    if (pendingEpoch == null || pendingEpoch.fetching != null)
                         break;
                 }
             }
@@ -487,13 +490,9 @@ public class TopologyManager
         synchronized (this)
         {
             if (active.hasAtLeastEpoch(epoch))
-            {
-                if (!active.hasEpoch(epoch))
-                    return get.apply(EpochReady.done(epoch));
-                return get.apply(active.getKnown(epoch).epochReady());
-            }
+                return get.apply(active.epochReady(epoch));
 
-            return pending.getOrCreate(epoch).whenActive().get().flatMap(r -> get.apply(active.epochReady(epoch)));
+            return pending.getOrCreateOrMin(epoch).whenActive().get().flatMap(r -> get.apply(active.epochReady(epoch)));
         }
     }
 

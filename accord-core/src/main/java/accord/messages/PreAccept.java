@@ -136,14 +136,16 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                     return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE, ExecuteFlags.none());
 
             case Retired:
+                Timestamp executeAt;
                 ExecuteFlags flags;
                 Deps deps;
-                try (DepsCalculator calculator = new DepsCalculator())
+                try (DepsCalculator calculator = new DepsCalculator(txnId))
                 {
                     deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
                     if (deps == null)
                         return PreAcceptNack.INSTANCE;
                     flags = calculator.executeFlags(txnId);
+                    executeAt = calculator.executeAt(safeCommand, node);
                 }
 
                 // NOTE: we CANNOT test whether we adopt a future dependency here because it might be that this command
@@ -152,7 +154,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                 // We do however prohibit later epochs as dependencies as we cannot handle those effectively
                 // when back-filling for execution of the transaction.
                 Invariants.require(deps.maxTxnId(txnId).epoch() <= txnId.epoch());
-                return new PreAcceptOk(txnId, command.executeAtOrTxnId(), deps, flags);
+                return new PreAcceptOk(txnId, executeAt, deps, flags);
 
             case Truncated:
             case RejectedBallot:

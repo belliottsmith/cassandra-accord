@@ -31,6 +31,7 @@ import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 
+import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalState;
 
 public interface ViolationHandler
@@ -57,7 +58,7 @@ public interface ViolationHandler
         {
             message += ". RedundantBefore={";
             Participants<?> participants = Participants.merge(Participants.merge(otherParticipants, (Participants)otherRoute), command.route());
-            message += safeStore.redundantBefore().foldlWithBounds(participants, (b, m, s, e) -> (m.isEmpty() ? "[" : ", [") + s + ',' + e + "]:" + b, "", ignore -> false) + '}';
+            message += safeStore.redundantBefore().foldlWithBounds(participants, (b, m, s, e) -> (m.isEmpty() ? "[" : ", [") + s + ',' + e + "]:" + b, "", alwaysFalse()) + '}';
         }
         return message;
     }

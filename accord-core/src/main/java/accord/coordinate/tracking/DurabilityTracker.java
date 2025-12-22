@@ -137,9 +137,13 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
             return including.size() + "/" + (shard.rf - exclude.size()) + '(' + shard.rf + ')';
         }
 
-        DurabilityLevel result(Node.Id self)
+        DurabilityLevel result(Node.Id self, boolean knownToSelf)
         {
-            SyncLocal local = including.contains(self) || !shard.nodes.contains(self) ? SyncLocal.Self : SyncLocal.NoLocal;
+            SyncLocal local;
+            if (including.contains(self) || !shard.nodes.contains(self)) local = SyncLocal.Self;
+            else if (knownToSelf) local = SyncLocal.KnownToSelf;
+            else local = SyncLocal.NoLocal;
+
             SyncRemote remote;
             if (hasSucceeded()) remote = SyncRemote.All;
             else if (hasQuorumSuccess()) remote = SyncRemote.Quorum;
@@ -195,7 +199,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
         return topologies.nodes().without(successes::contains);
     }
 
-    public ReducingRangeMap<DurabilityLevel> results(Node.Id self)
+    public ReducingRangeMap<DurabilityLevel> results(Node.Id self, boolean knownToSelf)
     {
         ReducingRangeMap<DurabilityLevel> result = null;
         ReducingRangeMap.Builder<DurabilityLevel> builder = new ReducingRangeMap.Builder<>(trackers.length);
@@ -207,7 +211,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
                 if (tracker == null)
                     continue;
 
-                builder.appendNoOverlap(tracker.shard.range.start(), tracker.result(self));
+                builder.appendNoOverlap(tracker.shard.range.start(), tracker.result(self, knownToSelf));
                 builder.appendNoOverlap(tracker.shard.range.end(), null);
             }
 

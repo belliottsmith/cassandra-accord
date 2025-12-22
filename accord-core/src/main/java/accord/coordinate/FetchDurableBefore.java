@@ -114,7 +114,7 @@ public class FetchDurableBefore extends AbstractCoordination<Ranges, DurableBefo
             case Success:
                 SortedListMap<Node.Id, DurableBefore> oks = finishOks();
                 DurableBefore durableBefore = oks.foldlNonNullValues(DurableBefore::merge, DurableBefore.EMPTY);
-                finishAndInvokeCallback(durableBefore, null);
+                finishWithSuccess(durableBefore);
                 break;
             case Failed:
                 finishOnFailure();

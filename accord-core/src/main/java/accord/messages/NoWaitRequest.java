@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
+import accord.api.VisibleForImplementationTesting;
 import accord.local.Node;
 import accord.local.MapReduceConsumeCommandStores;
 import accord.primitives.Participants;
@@ -140,14 +141,9 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
         cleanup(timeoutInternal());
     }
 
-    protected @Nullable Cancellable timeoutInternal()
-    {
-        return cancelInternal().cancel;
-    }
-
     protected boolean cancel()
     {
-        Cancellation clear = cancelInternal();
+        Cancellable clear = cancelInternal();
         if (clear.getClass() == Done.class)
             return false;
 
@@ -164,12 +160,17 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
         cleanup(clearInternal());
     }
 
-    protected final Cancellation clearInternal()
+    protected final Cancellable clearInternal()
     {
-        return clearInternal(DONE);
+        return clearInternal(DONE).timeout;
     }
 
-    protected final Cancellation cancelInternal()
+    protected final @Nullable Cancellable timeoutInternal()
+    {
+        return clearInternal(CANCEL).cancel;
+    }
+
+    protected final Cancellable cancelInternal()
     {
         return clearInternal(CANCEL);
     }
@@ -223,4 +224,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
     {
         return getClass().getSimpleName();
     }
+
+    @VisibleForImplementationTesting
+    public void unsafeSetNode(Node node) { this.node = node; }
 }

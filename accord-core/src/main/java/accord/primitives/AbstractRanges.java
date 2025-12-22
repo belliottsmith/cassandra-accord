@@ -29,6 +29,7 @@ import com.google.common.collect.Iterators;
 import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
+import accord.utils.AsymmetricComparator;
 import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedTriFold;
 import accord.utils.Invariants;
@@ -38,6 +39,7 @@ import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.primitives.Ranges.EMPTY;
 import static accord.utils.ArrayBuffers.cachedRanges;
+import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FAST;
@@ -271,6 +273,11 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return SortedArrays.exponentialSearch(ranges, thisIndex, size(), find, Range::compareIntersecting, search);
     }
 
+    public final int findNext(int thisIndex, int thisLimit, Range find, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(ranges, thisIndex, thisLimit, find, Range::compareIntersecting, search);
+    }
+
     public final int find(RoutingKey find, SortedArrays.Search search)
     {
         return SortedArrays.binarySearch(ranges, 0, size(), find, (k, r) -> -r.compareTo(k), search);
@@ -279,6 +286,11 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     public final int findNext(int thisIndex, RoutingKey find, SortedArrays.Search search)
     {
         return SortedArrays.exponentialSearch(ranges, thisIndex, size(), find, (k, r) -> -r.compareTo(k), search);
+    }
+
+    public final int findNext(int thisIndex, int thisLimit, RoutingKey find, AsymmetricComparator<RoutingKey, Range> comparator, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(ranges, thisIndex, thisLimit, find, comparator, search);
     }
 
     public Ranges toRanges()
@@ -908,7 +920,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         Invariants.requireArgument(ranges.length == 0 || ranges[0] != null);
         for (int i = 1 ; i < ranges.length ; ++i)
         {
-            if (ranges[i - 1].end().compareTo(ranges[i].start()) > 0)
+            if (ranges[i] == null || ranges[i - 1].end().compareTo(ranges[i].start()) > 0)
                 throw illegalArgument(Arrays.toString(ranges) + " is not correctly sorted or deoverlapped");
         }
 
@@ -930,7 +942,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     @Inline
     public final <P1, P2, V> V foldl(AbstractRanges intersect, IndexedTriFold<P1, P2, Range, V> fold, P1 p1, P2 p2, V accumulator)
     {
-        return Routables.foldl(this, intersect, fold, p1, p2, accumulator, i -> false);
+        return Routables.foldl(this, intersect, fold, p1, p2, accumulator, alwaysFalse());
     }
 
     public Range[] unsafeRanges()

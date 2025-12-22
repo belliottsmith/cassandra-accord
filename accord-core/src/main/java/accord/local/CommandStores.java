@@ -567,6 +567,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     protected void loadSnapshot(Snapshot toLoad)
     {
+        Invariants.require(!shuttingDown);
         current = toLoad;
     }
 
@@ -657,6 +658,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     final ShardDistributor shardDistributor;
     final Journal journal;
     volatile Snapshot current;
+    boolean shuttingDown;
     int nextId;
 
     private CommandStores(StoreSupplier supplier, ShardDistributor shardDistributor, Journal journal)
@@ -722,7 +724,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             results.add(shard.store.startUnsafeBootstrap(node, shard.ranges.all(), snapshot.global.epoch(), Sync));
         return AsyncResults.allOf(results).flatMap(list -> {
             return AsyncChains.reduce(list.stream()
-                                             .flatMap(b -> Stream.of(b.reads.chain(), b.coordinate.chain()))
+                                             .map(b -> b.reads.chain())
                                              .collect(Collectors.toList()),
                                       Reduce.toNull()).beginAsResult();
         });
@@ -962,10 +964,13 @@ public abstract class CommandStores implements AsyncExecutorFactory
         for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
         {
             Invariants.require(e.getValue() != null);
-            EpochUpdateHolder holder = new EpochUpdateHolder();
-            holder.add(1, e.getValue(), e.getValue().all());
-            shards[i++] = new ShardHolder(supplier.create(e.getKey(), holder), e.getValue());
+            EpochUpdateHolder epochUpdates = new EpochUpdateHolder();
+            ShardHolder shard = new ShardHolder(supplier.create(e.getKey(), epochUpdates), e.getValue());
+            // TODO (required): if the add is necessary (highly unlikely) it needs to be done once journal is writeable so we NEED to move this
+            if (!shard.ranges.equals(shard.store.rangesForEpoch))
+                epochUpdates.add(1, e.getValue(), e.getValue().all());
             maxId = Math.max(maxId, e.getKey());
+            shards[i++] = shard;
         }
         Arrays.sort(shards, Comparator.comparingInt(shard -> shard.store.id));
 
@@ -975,7 +980,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public synchronized void resetTopology(Journal.TopologyUpdate update)
     {
-        // TODO: assert
         Snapshot current = this.current;
         Invariants.require(update.global.epoch() == current.local.epoch());
         ShardHolder[] shards = new ShardHolder[current.commandStores.size()];
@@ -1025,6 +1029,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology)
     {
+        if (shuttingDown)
+            throw new IllegalStateException("CommandStores are shutting down");
+
         TopologyUpdate update = updateTopology(node, current, newTopology);
         if (update.snapshot != current)
         {
@@ -1044,8 +1051,14 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return update.bootstrap;
     }
 
+    protected synchronized void markShuttingDown()
+    {
+        shuttingDown = true;
+    }
+
     public void shutdown()
     {
+        markShuttingDown();
         for (ShardHolder shard : current.shards)
             shard.store.shutdown();
     }

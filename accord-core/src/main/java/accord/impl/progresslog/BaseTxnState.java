@@ -46,7 +46,10 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
  */
 abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<BaseTxnState>
 {
-    private static final int CONTACT_ALL_SHIFT = 63; // TODO (desired): have separate contact all flags for recovery and waiting states
+    private static final int RESTORED_SHIFT = 63;
+    static final long RESTORED_BIT = 1L << RESTORED_SHIFT;
+    private static final int CONTACT_ALL_SHIFT = RESTORED_SHIFT - 1;
+    private static final long CONTACT_ALL_BIT = 1L << CONTACT_ALL_SHIFT; // TODO (desired): have separate contact all flags for recovery and waiting states
     private static final int SCHEDULED_TIMER_SHIFT = CONTACT_ALL_SHIFT - 1;
     private static final int INVALID_IF_UNCOMMITTED_SHIFT = SCHEDULED_TIMER_SHIFT - 1;
     private static final int PENDING_TIMER_BITS = 9;
@@ -59,22 +62,25 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
     public final TxnId txnId;
 
     /**
-     * bits [0..43) encode WaitingState
-     * 2 bits for Progress
-     * 3 bits for BlockedUntil target
-     * 3 bits for BlockedUntil that home shard can satisfy
-     * 32 bits for remote progress key counter [note: if we need to in future we can safely and easily reclaim bits here]
-     * 3 bits for retry counter
-     * <p>
-     * bits [43..51) encode HomeState
+     * bits [0..8) encode HomeState
      * 2 bits for Progress
      * 3 bits for CoordinatePhase
      * 3 bits for retry counter
      * <p>
-     * bits [52..61) for pending timer delay
-     * bit 61 indicates if this transaction can be inferred invalid if a later quorum finds it not committed on any shard
-     * bit 62 for which kind of timer is scheduled
-     * bit 63 for whether we should contact all candidate replicas (rather than just our preferred group)
+     * bits [8..51) encode WaitingState
+     * 2 bits for Progress
+     * 2 bits for BlockedUntil target
+     * 2 bits for BlockedUntil querying (<= target)
+     * 2 bits for BlockedUntil that home shard can satisfy
+     * 1 bit to query non-home shards (as home shard has been truncated)
+     * 24+5 bits for remote key progress tracking [note: if we need to in future we can safely and easily reclaim bits here]
+     * 3 bits for retry counter
+     * <p>
+     * bits [51..60) for pending timer delay
+     * bit 60 indicates if this transaction can be inferred invalid if a later quorum finds it not committed on any shard
+     * bit 61 for which kind of timer is scheduled
+     * bit 62 for whether we should contact all candidate replicas (rather than just our preferred group)
+     * bit 63 for whether the item was restored from a snapshot (so can modify certain invariants)
      */
     long encodedState;
 
@@ -89,9 +95,14 @@ abstract class BaseTxnState extends LogGroupTimers.Timer implements Comparable<B
         return this.txnId.compareTo(that.txnId);
     }
 
+    boolean isRestored()
+    {
+        return (encodedState & RESTORED_BIT) != 0L;
+    }
+
     boolean contactEveryone()
     {
-        return ((encodedState >>> CONTACT_ALL_SHIFT) & 1L) == 1L;
+        return (encodedState & CONTACT_ALL_BIT) != 0L;
     }
 
     void setContactEveryone(boolean newContactEveryone)

@@ -51,6 +51,7 @@ import accord.utils.Rethrowable;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Accept.AcceptFlags.filterDeps;
+import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedInvalidate;
@@ -99,7 +100,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         {
             default: throw new AssertionError("Unhandled AcceptOutcome: " + reply.outcome());
             case RejectedBallot:
-                finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
+                finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                 break;
 
             case Truncated:
@@ -113,7 +114,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
                         failNow = Preempted.preempted(node.agent(), txnId, scope.homeKey());
 
                     if (failNow != null)
-                        finishWithFailureOverride(failNow);
+                        finishOnFailure(failNow);
                     else
                         onFailureInternal(from, fromIndex, reply.committedExecuteAt == null ? null : new Redundant(txnId, scope.homeKey(), reply.committedExecuteAt));
                     break;
@@ -148,9 +149,16 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         //  Or we must pick it up as an Unstable dependency here.
         Deps newDeps = mergeNewDeps();
         Deps deps = mergeDeps(newDeps);
-        node.agent().coordinatorEvents().onAccepted(txnId, ballot);
-        if (kind == Accept.Kind.MEDIUM) adapter().execute(node, executor, tracker.topologies(), scope, ballot, ExecutePath.MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, finishAndTakeCallback());
+        node.agent().coordinatorEvents().onAccepted(txnId, ballot, executePath());
+        if (kind == MEDIUM) adapter().execute(node, executor, tracker.topologies(), scope, ballot, ExecutePath.MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, finishAndTakeCallback());
         else adapter().stabilise(node, executor, tracker.topologies(), scope, ballot, txnId, txn, executeAt, deps, finishAndTakeCallback());
+    }
+
+    private ExecutePath executePath()
+    {
+        if (kind == MEDIUM) return ExecutePath.MEDIUM;
+        if (ballot.equals(Ballot.ZERO)) return ExecutePath.SLOW;
+        return ExecutePath.RECOVER;
     }
 
     Deps mergeDeps()
@@ -265,14 +273,15 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
             proposeInvalidate(node, executor, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
                 if (fail != null)
                 {
-                    callback.accept(null, fail);
+                    if (callback != null)
+                        callback.accept(null, fail);
                 }
                 else
                 {
-                    node.agent().coordinatorEvents().onInvalidated(txnId);
-                    node.withEpochExact(invalidateUntil.epoch(), executor, callback, t -> Rethrowable.rethrowable(t), () -> {
+                    node.withEpochExact(invalidateUntil.epoch(), executor, callback == null ? node.agent() : callback, t -> Rethrowable.rethrowable(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
-                        callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
+                        if (callback != null) callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
+                        else node.agent().coordinatorEvents().onInvalidated(txnId);
                     });
                 }
             });
@@ -283,7 +292,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         {
             if (!reply.isOk())
             {
-                finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, null));
+                finishOnFailure(Preempted.preempted(node.agent(), txnId, null));
                 return;
             }
 
