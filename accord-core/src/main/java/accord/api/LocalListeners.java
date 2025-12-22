@@ -105,10 +105,26 @@ public interface LocalListeners
             this.waitingOn = waitingOn;
             this.awaitingStatus = awaitingStatus;
         }
+
+        @Override
+        public boolean equals(Object that)
+        {
+            return that instanceof TxnListener && equals((TxnListener) that);
+        }
+
+        public boolean equals(TxnListener that)
+        {
+            return this.waiter.equals(that.waiter) && this.waitingOn.equals(that.waitingOn) && this.awaitingStatus == that.awaitingStatus;
+        }
+
+        @Override
+        public int hashCode()
+        {
+            throw new UnsupportedOperationException();
+        }
     }
 
     Iterable<TxnListener> txnListeners();
+    Iterable<TxnId> txnListenersWaitingOn();
     Iterable<Registered> complexListeners();
-
-    Iterable<TxnId> txnsWaitingOn(SaveStatus saveStatus);
 }

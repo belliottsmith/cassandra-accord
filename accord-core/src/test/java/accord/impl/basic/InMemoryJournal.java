@@ -70,6 +70,7 @@ import org.agrona.collections.Int2ObjectHashMap;
 import static accord.api.Journal.Load.ALL;
 import static accord.api.Journal.Load.MINIMAL;
 import static accord.api.Journal.Load.MINIMAL_WITH_DEPS;
+import static accord.impl.AbstractReplayer.Mode.PART_NON_DURABLE;
 import static accord.impl.CommandChange.Field;
 import static accord.impl.CommandChange.Field.ACCEPTED;
 import static accord.impl.CommandChange.Field.CLEANUP;
@@ -125,6 +126,11 @@ public class InMemoryJournal implements Journal
     {
         this.random = random;
         this.partialCompactionChance = 1f - (random.nextFloat()/2);
+    }
+
+    @Override
+    public void open(Node node)
+    {
     }
 
     public void start(Node node)
@@ -247,7 +253,7 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public List<TopologyUpdate> replayTopologies()
+    public List<TopologyUpdate> loadTopologies()
     {
         return new ArrayList<>(topologyUpdates);
     }
@@ -617,7 +623,7 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public boolean replay(CommandStores commandStores)
+    public boolean replay(CommandStores commandStores, Object param)
     {
         for (Map.Entry<Integer, NavigableMap<TxnId, Diffs>> diffEntry : diffsPerCommandStore.entrySet())
         {
@@ -627,7 +633,7 @@ public class InMemoryJournal implements Journal
             Map<TxnId, List<Diff>> diffs = new TreeMap<>();
 
             InMemoryCommandStore commandStore = (InMemoryCommandStore) commandStores.forId(commandStoreId);
-            Replayer replayer = commandStore.replayer();
+            Replayer replayer = commandStore.replayer(PART_NON_DURABLE);
 
             for (Map.Entry<TxnId, Diffs> e : diffEntry.getValue().entrySet())
                 diffs.put(e.getKey(), e.getValue().sorted(true));

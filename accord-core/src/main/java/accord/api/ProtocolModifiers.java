@@ -235,8 +235,7 @@ public class ProtocolModifiers
         public static boolean recoveryAwaitsSupersedingSyncPoints() { return recoveryAwaitsSupersedingSyncPoints; }
         public static void setRecoveryAwaitsSupersedingSyncPoints(boolean newRecoveryAwaitsSupersedingSyncPoints) { recoveryAwaitsSupersedingSyncPoints = newRecoveryAwaitsSupersedingSyncPoints; }
 
-        // TODO (required): default this to false once released support via recoveryAwaitsSupersedingSyncPoints
-        private static boolean syncPointsTrackUnstableMediumPathDependencies = true;
+        private static boolean syncPointsTrackUnstableMediumPathDependencies = false;
         public static boolean syncPointsTrackUnstableMediumPathDependencies() { return syncPointsTrackUnstableMediumPathDependencies; }
         public static void setSyncPointsTrackUnstableMediumPathDependencies(boolean newSyncPointsTrackUnstableMediumPathDependencies) { syncPointsTrackUnstableMediumPathDependencies = newSyncPointsTrackUnstableMediumPathDependencies; }
 
@@ -244,11 +243,13 @@ public class ProtocolModifiers
         public static boolean recoverPartialAcceptPhaseIfNoFastPath() { return recoverPartialAcceptPhaseIfNoFastPath; }
         public static void setRecoverPartialAcceptPhaseIfNoFastPath(boolean newSyncPointsRecoverPartialAcceptPhase) {recoverPartialAcceptPhaseIfNoFastPath = newSyncPointsRecoverPartialAcceptPhase; }
 
+        private static boolean recoverReads = false;
+        public static boolean recoverReads() { return recoverReads; }
+        public static void setRecoverReads(boolean newRecoverReads) { recoverReads = newRecoverReads; }
+
         private static boolean filterDuplicateDependenciesFromAcceptReply = true;
         public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
         public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
-
-
 
         public enum SendStableMessages { TO_ALL, FOR_READS, FOR_READS_OR_NONE_IF_FASTEXEC}
         private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;

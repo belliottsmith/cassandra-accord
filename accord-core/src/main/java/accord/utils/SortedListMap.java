@@ -285,6 +285,11 @@ public class SortedListMap<K extends Comparable<? super K>, V> extends AbstractM
         return result;
     }
 
+    public long foldlNonNullValues(FoldToLong<V> foldl, long zero)
+    {
+        return Functions.foldlNonNull(values, foldl, zero);
+    }
+
     public <O> O foldlNonNull(TriFunction<K, V, O, O> foldl, O zero)
     {
         return foldlNonNull(TriFunction::apply, foldl, zero);

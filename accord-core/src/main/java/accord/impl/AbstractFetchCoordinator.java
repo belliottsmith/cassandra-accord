@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import accord.local.Command;
+import accord.local.MaxConflicts;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.ReadData;
@@ -260,7 +261,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         // must be invoked by implementations some time after the read has started OR must override safeToReadAt()
         protected void readStarted(SafeCommandStore safeStore)
         {
-            safeToReadAfter = Timestamp.nonNullOrMax(Timestamp.NONE, Timestamp.nonNullOrMax(safeToReadAfter, safeStore.commandStore().unsafeGetMaxConflicts().foldl(Timestamp::nonNullOrMax)));
+            safeToReadAfter = Timestamp.nonNullOrMax(Timestamp.NONE, Timestamp.nonNullOrMax(safeToReadAfter, safeStore.commandStore().unsafeGetMaxConflicts().foldl(MaxConflicts.Entry::mergeMax, Timestamp.NONE)));
         }
 
         protected Timestamp safeToReadAfter()

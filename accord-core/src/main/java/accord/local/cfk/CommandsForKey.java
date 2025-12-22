@@ -219,12 +219,13 @@ import static accord.utils.SortedArrays.Search.FAST;
  *      2) when a transaction proposed in a future epoch visits an earlier epoch, it is registered here for recovery
  *         decisions, so that recovery does not need to contact future epochs to find any superseding transactions
  *      3) when an accept round visits a later epoch than the one in which it is agreed.
+ * TODO (desired):  by waiting for a prefix to commit before executing we can in theory have old ids proposed that delay execution.
  * TODO (desired):  track whether a TxnId is a write on this key only for execution (rather than globally)
  * TODO (desired):  save space by encoding InternalStatus in TxnId.flags(), so that when executeAt==txnId we can save 8 bytes per entry
  * TODO (required): better linearizability violation detection
  * TODO (expected): cleanup unmanaged transitively known transactions
- * TODO (desired): introduce a new status or other fast and simple mechanism for filtering treatment of range or unmanaged transactions
- * TODO (desired): store missing transactions against the highest known transaction only (this should also permit us to prune better by ignoring the missing collection contents)
+ * TODO (desired):  introduce a new status or other fast and simple mechanism for filtering treatment of range or unmanaged transactions
+ * TODO (desired):  store missing transactions against the highest known transaction only (this should also permit us to prune better by ignoring the missing collection contents)
  */
 public class CommandsForKey extends CommandsForKeyUpdate
 {

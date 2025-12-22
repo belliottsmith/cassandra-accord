@@ -537,7 +537,7 @@ public class DurabilityQueue
             {
                 if (success == null) achieved = Ranges.EMPTY;
                 else if (success.min.remote == All) achieved = ranges;
-                else achieved = success.achieved.foldlWithBounds((p, r, s, e) -> p.remote == All ? r.with(Ranges.of(s.rangeFactory().newRange(s, e))) : r, Ranges.EMPTY, ignore -> false);
+                else achieved = success.achieved.foldlWithBounds((p, r, s, e) -> p.remote == All ? r.with(Ranges.of(s.rangeFactory().newRange(s, e))) : r, Ranges.EMPTY);
                 isDone = achieved.containsAll(ranges);
             }
             else

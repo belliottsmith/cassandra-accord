@@ -31,6 +31,8 @@ import accord.utils.ReducingRangeMap;
 
 public class RejectBefore extends ReducingRangeMap<Timestamp>
 {
+    public static final RejectBefore EMPTY = new RejectBefore();
+
     public static class SerializerSupport
     {
         public static RejectBefore create(RoutingKey[] ends, Timestamp[] values)
@@ -76,7 +78,7 @@ public class RejectBefore extends ReducingRangeMap<Timestamp>
             throw new IllegalArgumentException("value is null");
 
         if (ranges.isEmpty())
-            return new RejectBefore();
+            return EMPTY;
 
         return create(ranges, value, Builder::new);
     }

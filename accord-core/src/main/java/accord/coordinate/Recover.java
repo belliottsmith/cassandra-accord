@@ -216,7 +216,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
             case Reject:
             case Truncated:
                 // TODO (required): handle partial truncations (both within a shard e.g. pre-bootstrap, and for some shards)
-                finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
+                finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                 return;
 
             case Ok:
@@ -427,7 +427,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
                     //   when the home shard shares all of its replicas with another shard that has autonomously invalidated
                     //   the transaction, so that all received InvalidateReply show truncation (when in fact this is only partial).
                     //   We could paper over this, but better to revisit and provide stronger invariants we can rely on.
-                    finishAndInvokeCallback(TRUNCATED_DURABLE_OR_INVALIDATED, null);
+                    finishWithSuccess(TRUNCATED_DURABLE_OR_INVALIDATED);
                     return;
                 }
             }
@@ -467,18 +467,18 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
             case Unknown:
             {
                 // should all be PreAccept
-                Deps earlierWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleWait);
-                Deps earlierNoWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleNoWait);
-                earlierWait = earlierWait.without(earlierNoWait);
+                Deps simpleWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleWait);
+                Deps simpleNoWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleNoWait);
+                simpleWait = simpleWait.without(simpleNoWait);
                 Deps laterWitnessedCoordRejects = Deps.merge(oks, oks.domainSize(), (map, i) -> selectCoordinatorReplies(map.getKey(i), map.getValue(i)), Function.identity());
 
-                if (!earlierWait.isEmpty() || !laterWitnessedCoordRejects.isEmpty())
+                if (!simpleWait.isEmpty() || !laterWitnessedCoordRejects.isEmpty())
                 {
                     // If there exist commands that were proposed a later execution time than us that have not witnessed us,
                     // we have to be certain these commands have not successfully committed without witnessing us (thereby
                     // ruling out a fast path decision for us and changing our recovery decision).
                     // So, we wait for these commands to commit and recompute supersedingRejects for them.
-                    awaitToFinish(AsyncChains.reduce(awaitSimple(node, earlierWait, HasCommittedDeps),
+                    awaitToFinish(AsyncChains.reduce(awaitSimple(node, simpleWait, HasCommittedDeps),
                                                      awaitSupersedingCoord(node, laterWitnessedCoordRejects, CommittedOrNotFastPathCommit, extraCoordVotes),
                                                      InferredFastPath::merge)
                                              .invokeIfSuccess((inferred) -> {

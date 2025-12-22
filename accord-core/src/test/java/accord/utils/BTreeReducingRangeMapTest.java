@@ -25,15 +25,15 @@ import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
-import accord.utils.BTreeReducingRangeMap.RawBuilder;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+
+import accord.utils.btree.ReducingBTree;
 import org.opentest4j.AssertionFailedError;
 
-import javax.annotation.Nonnull;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -49,12 +49,45 @@ import static java.lang.Integer.MIN_VALUE;
 //  and minimal changes to this test class did not detect it
 public class BTreeReducingRangeMapTest
 {
-    static final BTreeReducingRangeMap<Timestamp> EMPTY = new BTreeReducingRangeMap<>();
+    static class Entry extends ReducingBTree.Entry<Entry>
+    {
+        final Timestamp timestamp;
+
+        public Entry(Range range, Timestamp timestamp)
+        {
+            this(range.start(), range.end(), timestamp);
+        }
+
+        public Entry(RoutingKey start, RoutingKey end, Timestamp timestamp)
+        {
+            super(start, end);
+            this.timestamp = timestamp;
+        }
+
+        @Override
+        public boolean equalsIgnoreRange(Entry that)
+        {
+            return false;
+        }
+
+        @Override
+        public Entry with(RoutingKey start, RoutingKey end)
+        {
+            return new Entry(start, end, timestamp);
+        }
+
+        public static Entry mergeMax(RoutingKey start, RoutingKey end, Entry a, Entry b)
+        {
+            return new Entry(start, end, Timestamp.mergeMax(a.timestamp, b.timestamp));
+        }
+    }
+
+    static final BTreeReducingRangeMap<Entry> EMPTY = new BTreeReducingRangeMap<>();
     static final RoutingKey MINIMUM_EXCL = new IntKey.Routing(MIN_VALUE);
     static final RoutingKey MAXIMUM_EXCL = new IntKey.Routing(MAX_VALUE);
     static boolean END_INCLUSIVE = false;
 
-    private static RoutingKey rk(int t)
+    private static IntKey.Routing rk(int t)
     {
         return new IntKey.Routing(t);
     }
@@ -79,7 +112,7 @@ public class BTreeReducingRangeMapTest
 
     private static Range r(RoutingKey l, RoutingKey r)
     {
-        return END_INCLUSIVE ? new Range.EndInclusive(l, r) : new Range.StartInclusive(l, r);
+        return new IntKey.Range((IntKey.Routing)l, (IntKey.Routing)r);
     }
 
     private static RoutingKey incr(RoutingKey rk)
@@ -97,32 +130,6 @@ public class BTreeReducingRangeMapTest
         return r(rk(l), rk(r));
     }
 
-    private static Pair<RoutingKey, Timestamp> pt(int t, int e, int b)
-    {
-        return Pair.create(rk(t), ts(e, b));
-    }
-
-    private static Pair<RoutingKey, Timestamp> pt(int t, Timestamp b)
-    {
-        return Pair.create(rk(t), b);
-    }
-
-    private static Pair<RoutingKey, Timestamp> pt(RoutingKey t, int e, int b)
-    {
-        return Pair.create(t, ts(e, b));
-    }
-
-    private static BTreeReducingRangeMap<Timestamp> h(Pair<RoutingKey, Timestamp>... points)
-    {
-        Invariants.require(points[0].right == none());
-        int length = points.length;
-        RawBuilder<Timestamp, BTreeReducingRangeMap<Timestamp>> builder = new RawBuilder<>(true, length - 1);
-        for (int i = 1 ; i < length ; ++i)
-            builder.append(points[i - 1].left, points[i].right);
-        builder.append(points[length - 1].left);
-        return builder.build((inclusiveEnds, tree) -> new BTreeReducingRangeMap<Timestamp>(tree));
-    }
-
     static
     {
         assert rk(100).equals(rk(100));
@@ -131,11 +138,11 @@ public class BTreeReducingRangeMapTest
 
     private static class Builder
     {
-        BTreeReducingRangeMap<Timestamp> history = EMPTY;
+        BTreeReducingRangeMap<Entry> history = EMPTY;
 
         Builder add(Timestamp timestamp, Range... ranges)
         {
-            history = BTreeReducingRangeMap.add(history, Ranges.of(ranges), timestamp);
+            history = BTreeReducingRangeMap.add(history, Ranges.of(ranges), timestamp, Entry::new, Entry::mergeMax, BTreeReducingRangeMap::new);
             return this;
         }
 
@@ -229,16 +236,16 @@ public class BTreeReducingRangeMapTest
 
     static class RandomMap
     {
-        BTreeReducingRangeMap<Timestamp> test = new BTreeReducingRangeMap<>();
+        BTreeReducingRangeMap<Entry> test = new BTreeReducingRangeMap<>();
 
         void add(Ranges ranges, Timestamp timestamp)
         {
-            test = BTreeReducingRangeMap.add(test, ranges, timestamp);
+            test = BTreeReducingRangeMap.add(test, ranges, timestamp, Entry::new, Entry::mergeMax, BTreeReducingRangeMap::new);
         }
 
         void merge(RandomMap other)
         {
-            test = BTreeReducingRangeMap.merge(test, other.test, Timestamp::mergeMax);
+            test = BTreeReducingRangeMap.merge(test, other.test, Entry::mergeMax, BTreeReducingRangeMap::new);
         }
 
         void addOneRandom(Random random, int maxRangeCount, float maxCoverage, float minChance)
@@ -273,7 +280,7 @@ public class BTreeReducingRangeMapTest
         }
 
 
-        static BTreeReducingRangeMap<Timestamp> build(Random random, int count, int maxNumberOfRangesPerAddition, float maxCoveragePerRange, float chanceOfMinRoutingKey)
+        static BTreeReducingRangeMap<Entry> build(Random random, int count, int maxNumberOfRangesPerAddition, float maxCoveragePerRange, float chanceOfMinRoutingKey)
         {
             RandomMap result = new RandomMap();
             result.addRandom(random, count, maxNumberOfRangesPerAddition, maxCoveragePerRange, chanceOfMinRoutingKey);
@@ -298,9 +305,7 @@ public class BTreeReducingRangeMapTest
         RandomWithCanonical merge(Random random, RandomWithCanonical other)
         {
             RandomWithCanonical result = new RandomWithCanonical();
-            result.test = random.nextBoolean()
-                          ? BTreeReducingRangeMap.merge(test, other.test, Timestamp::mergeMax)
-                          : BTreeReducingIntervalMap.mergeIntervals(test, other.test, IntervalBuilder::new);
+            result.test = BTreeReducingRangeMap.merge(test, other.test, Entry::mergeMax, BTreeReducingRangeMap::new);
             result.canonical = new TreeMap<>();
             result.canonical.putAll(canonical);
             RoutingKey prev = null;
@@ -310,38 +315,6 @@ public class BTreeReducingRangeMapTest
                 prev = entry.getKey();
             }
             return result;
-        }
-
-        static class IntervalBuilder extends BTreeReducingIntervalMap.AbstractIntervalBuilder<RoutingKey, Timestamp, BTreeReducingRangeMap<Timestamp>>
-        {
-            protected IntervalBuilder(int capacity)
-            {
-                super(capacity);
-            }
-
-            @Override
-            protected Timestamp slice(RoutingKey start, RoutingKey end, Timestamp value)
-            {
-                return value;
-            }
-
-            @Override
-            protected Timestamp reduce(Timestamp a, Timestamp b)
-            {
-                return Timestamp.mergeMax(a, b);
-            }
-
-            @Override
-            protected Timestamp tryMergeEqual(@Nonnull Timestamp a, Timestamp b)
-            {
-                return a;
-            }
-
-            @Override
-            protected BTreeReducingRangeMap<Timestamp> buildInternal(Object[] tree)
-            {
-                return new BTreeReducingRangeMap<>(tree);
-            }
         }
 
 //        void serdeser()
@@ -421,11 +394,11 @@ public class BTreeReducingRangeMapTest
                         ranges = Ranges.of(tmp2);
                     }
 
-                    List<Timestamp> foldl = test.foldl(keys, (timestamp, timestamps) -> {
-                            if (timestamps.isEmpty() || !timestamps.get(timestamps.size() - 1).equals(timestamp))
-                                timestamps.add(timestamp);
+                    List<Timestamp> foldl = test.foldl(keys, (e, timestamps) -> {
+                            if (timestamps.isEmpty() || !timestamps.get(timestamps.size() - 1).equals(e))
+                                timestamps.add(e.timestamp);
                             return timestamps;
-                        }, new ArrayList<>(), ignore -> false);
+                        }, new ArrayList<>());
 
                     List<Timestamp> canonFoldl = new ArrayList<>();
                     for (RoutingKey key : keys)
@@ -438,11 +411,11 @@ public class BTreeReducingRangeMapTest
                     }
                     Assertions.assertEquals(canonFoldl, foldl, id);
 
-                    foldl = test.foldl(ranges, (timestamp, timestamps) -> {
-                        if (timestamps.isEmpty() || !timestamps.get(timestamps.size() - 1).equals(timestamp))
-                            timestamps.add(timestamp);
+                    foldl = test.foldl(ranges, (e, timestamps) -> {
+                        if (timestamps.isEmpty() || !timestamps.get(timestamps.size() - 1).equals(e))
+                            timestamps.add(e.timestamp);
                         return timestamps;
-                    }, new ArrayList<>(), ignore -> false);
+                    }, new ArrayList<>());
 
                     canonFoldl.clear();
                     for (Range range : ranges)

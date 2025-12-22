@@ -179,7 +179,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
 
     public Known computeValidForAll(Unseekables<?> routeOrParticipants)
     {
-        Known validForAll = foldlWithDefault(routeOrParticipants, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null, i -> false);
+        Known validForAll = foldlWithDefault(routeOrParticipants, KnownMap::reduceKnownFor, MinAndMaxKnown.Nothing, null);
         return this.validForAll.atLeast(validForAll).validForAll();
     }
 

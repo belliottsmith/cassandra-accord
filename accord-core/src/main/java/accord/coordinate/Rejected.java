@@ -28,28 +28,28 @@ import accord.utils.Invariants;
 /**
  * Thrown when a transaction has been invalidated
  */
-public class Invalidated extends CoordinationFailed
+public class Rejected extends Invalidated
 {
-    public static Invalidated invalidated(Agent agent, TxnId txnId, @Nullable RoutingKey homeKey)
+    public static Rejected rejected(Agent agent, TxnId txnId, @Nullable RoutingKey homeKey)
     {
-        agent.coordinatorEvents().onInvalidated(txnId);
-        return new Invalidated(txnId, homeKey);
+        agent.coordinatorEvents().onRejected(txnId);
+        return new Rejected(txnId, homeKey);
     }
 
-    Invalidated(TxnId txnId, @Nullable RoutingKey homeKey)
+    private Rejected(TxnId txnId, @Nullable RoutingKey homeKey)
     {
         super(txnId, homeKey);
     }
 
-    Invalidated(TxnId txnId, @Nullable RoutingKey homeKey, Invalidated cause)
+    private Rejected(TxnId txnId, @Nullable RoutingKey homeKey, Rejected cause)
     {
         super(txnId, homeKey, cause);
     }
 
     @Override
-    public Invalidated rethrowable()
+    public Rejected rethrowable()
     {
-        Invariants.require(this.getClass() == Invalidated.class);
-        return new Invalidated(txnId(), homeKey(), this);
+        Invariants.require(this.getClass() == Rejected.class);
+        return new Rejected(txnId(), homeKey(), this);
     }
 }

@@ -56,13 +56,13 @@ public class MaelstromStore implements DataStore
     }
 
     @Override
-    public FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges callback, FetchKind kind)
+    public FetchResult image(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges callback)
     {
         return new ImmediateFetchResult(ranges);
     }
 
     @Override
-    public void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore reportOnSuccess)
+    public void ensureDurable(CommandStore commandStore, RedundantBefore reportOnSuccess, int flags)
     {
-        commandStore.execute((PreLoadContext.Empty)() -> "Report CommandStore Durable", safeStore -> safeStore.upsertRedundantBefore(reportOnSuccess));
+        commandStore.execute((PreLoadContext.Empty)() -> "Report CommandStore Durable", safeStore -> safeStore.reportDurable(reportOnSuccess, flags));
     }}

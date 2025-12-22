@@ -751,7 +751,7 @@ public class Cluster
 
                 Journal.TopologyUpdate lastUpdate = null;
                 {
-                    Iterator<? extends Journal.TopologyUpdate> iter = journal.replayTopologies().iterator();
+                    Iterator<? extends Journal.TopologyUpdate> iter = journal.loadTopologies().iterator();
                     while (iter.hasNext())
                     {
                         Journal.TopologyUpdate update = iter.next();
@@ -790,7 +790,7 @@ public class Cluster
                     listStore.restore();
                     for (CommandStore store : stores.all())
                         ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
-                    journal.replay(stores);
+                    journal.replay(stores, null);
                     Catchup.catchup(node);
 
                     // Re-enable safety checks
@@ -1377,7 +1377,7 @@ public class Cluster
             RoutingKey blockedOnKey = waitingOn.lastWaitingOnKey();
             if (blockedOnKey == null)
             {
-                blockedOnId = waitingOn.nextWaitingOn();
+                blockedOnId = waitingOn.nextWaitingOnTxn();
                 Invariants.require(!command.txnId().equals(blockedOnId));
                 if (blockedOnId != null)
                     blockedVia = command.partialDeps().participants(blockedOnId);

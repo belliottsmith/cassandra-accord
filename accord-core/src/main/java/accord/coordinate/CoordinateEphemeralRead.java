@@ -162,7 +162,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     @Override
     void onNewEpochTopologyMismatch(TopologyMismatch mismatch)
     {
-        finishWithFailureOverride(mismatch);
+        finishOnFailure(mismatch);
     }
 
     @Override
@@ -175,7 +175,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
         try { topologies = node.topology().active().reselect(this.topologies, QuorumEpochIntersections.preaccept.include, scope, executeAtEpoch, executeAtEpoch, LIVE, Owned); }
         catch (Throwable t)
         {
-            finishWithFailureOverride(t);
+            finishOnFailure(t);
             return;
         }
         CoordinationFlags flags = oks.foldlNonNull((d, k, v, out) -> {

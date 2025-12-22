@@ -53,6 +53,7 @@ public interface Journal
         MINIMAL_WITH_DEPS
     }
 
+    void open(Node node);
     void start(Node node);
 
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
@@ -61,8 +62,16 @@ public interface Journal
     Command.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
-    List<? extends TopologyUpdate> replayTopologies();
+    List<? extends TopologyUpdate> loadTopologies();
     void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush);
+
+    RedundantBefore loadRedundantBefore(int store);
+    NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int store);
+    NavigableMap<Timestamp, Ranges> loadSafeToRead(int store);
+    CommandStores.RangesForEpoch loadRangesForEpoch(int store);
+    void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
+
+    Persister<DurableBefore, DurableBefore> durableBeforePersister();
 
     void purge(CommandStores commandStores, EpochSupplier minEpoch);
 
@@ -70,16 +79,7 @@ public interface Journal
      * Replays all messages from journal to rehydrate CommandStores state. Returns whether it has seen (and ignored)
      * any exceptions during replay.
      */
-    boolean replay(CommandStores commandStores);
-
-    RedundantBefore loadRedundantBefore(int store);
-    NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int store);
-    NavigableMap<Timestamp, Ranges> loadSafeToRead(int store);
-    CommandStores.RangesForEpoch loadRangesForEpoch(int store);
-
-    Persister<DurableBefore, DurableBefore> durableBeforePersister();
-
-    void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
+    boolean replay(CommandStores commandStores, Object param);
 
     class TopologyUpdate
     {

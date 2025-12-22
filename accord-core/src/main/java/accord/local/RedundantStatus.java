@@ -88,10 +88,12 @@ public class RedundantStatus
          * which then execute in an unordered fashion.
          *
          * See also {@link SafeCommandStore#safeToReadAt()}.
+         * Being UNREADY on one epoch doesn't override another epoch where we have lost ownership
+         * (a sync point may still be waiting for it to apply)
          */
-        UNREADY(true, true, LT, LOCALLY_DEFUNCT),
+        UNREADY(false, true, LT, LOCALLY_DEFUNCT),
 
-        UNUSED(true, true, LT),
+        UNUSED(false, true, LT),
 
         /**
          * A point before which we do not know OUR OWN log
@@ -109,13 +111,13 @@ public class RedundantStatus
          * We have applied the preceding transactions durably to the store, so that we can safely truncate the Write
          * information as we will not need to replay it to the store
          */
-        LOCALLY_DURABLE_TO_DATA_STORE      (false, false,  LE, LOCALLY_APPLIED),
+        LOCALLY_DURABLE_TO_DATA_STORE      (false, true,  LT, LOCALLY_APPLIED),
 
         /**
          * We have applied the preceding transactions durably to all summary structures, so that on restart we do
          * not need to replay the transaction to restore any internal state.
          */
-        LOCALLY_DURABLE_TO_COMMAND_STORE   (false, false,  LE, LOCALLY_APPLIED),
+        LOCALLY_DURABLE_TO_COMMAND_STORE   (false, false,  LT, LOCALLY_APPLIED),
 
         /**
          * We have fully executed until across all a majority of replicas for the range in question,

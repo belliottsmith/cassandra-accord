@@ -23,8 +23,6 @@ import accord.impl.IntKey.Raw;
 import accord.impl.IntKey.Routing;
 import accord.primitives.Range;
 import accord.impl.IntKey;
-import accord.primitives.Range.EndInclusive;
-import accord.primitives.Range.StartInclusive;
 import accord.primitives.Keys;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -47,12 +45,7 @@ public class RangeTest
 
     static Range rangeEndIncl(int start, int end)
     {
-        return new EndInclusive(r(start), r(end));
-    }
-
-    static Range rangeStartIncl(int start, int end)
-    {
-        return new StartInclusive(r(start), r(end));
+        return new IntKey.Range(r(start), r(end));
     }
 
     static Keys keys(int... values)
@@ -65,16 +58,6 @@ public class RangeTest
 
     private static void assertInvalidKeyRange(int start, int end)
     {
-        try
-        {
-            rangeStartIncl(start, end);
-            Assertions.fail("Expected IllegalArgumentException");
-        }
-        catch (IllegalArgumentException e)
-        {
-            // expected
-        }
-
         try
         {
             rangeEndIncl(start, end);
@@ -102,11 +85,11 @@ public class RangeTest
         Assertions.assertTrue(endInclRange.contains(k(20)));
         Assertions.assertTrue(endInclRange.endInclusive());
 
-        Range startInclRange = rangeStartIncl(10, 20);
-        Assertions.assertTrue(startInclRange.contains(k(10)));
-        Assertions.assertTrue(startInclRange.startInclusive());
-        Assertions.assertFalse(startInclRange.contains(k(20)));
-        Assertions.assertFalse(startInclRange.endInclusive());
+//        Range startInclRange = rangeStartIncl(10, 20);
+//        Assertions.assertTrue(startInclRange.contains(k(10)));
+//        Assertions.assertTrue(startInclRange.startInclusive());
+//        Assertions.assertFalse(startInclRange.contains(k(20)));
+//        Assertions.assertFalse(startInclRange.endInclusive());
     }
 
     private static void assertHigherKeyIndex(int expectedIdx, Range range, Keys keys)
@@ -122,21 +105,14 @@ public class RangeTest
     {
         Keys keys = keys(10, 11, 12, 13, 14, 15, 16);
         assertHigherKeyIndex(0, rangeEndIncl(0, 9), keys);
-        assertHigherKeyIndex(0, rangeStartIncl(0, 10), keys);
         assertHigherKeyIndex(0, rangeEndIncl(0, 5), keys);
-        assertHigherKeyIndex(0, rangeStartIncl(0, 5), keys);
 
         assertHigherKeyIndex(1, rangeEndIncl(9, 10), keys);
-        assertHigherKeyIndex(0, rangeStartIncl(9, 10), keys);
         assertHigherKeyIndex(5, rangeEndIncl(11, 14), keys);
-        assertHigherKeyIndex(4, rangeStartIncl(11, 14), keys);
         assertHigherKeyIndex(6, rangeEndIncl(11, 15), keys);
-        assertHigherKeyIndex(5, rangeStartIncl(11, 15), keys);
 
         assertHigherKeyIndex(7, rangeEndIncl(16, 25), keys);
-        assertHigherKeyIndex(7, rangeStartIncl(16, 25), keys);
         assertHigherKeyIndex(7, rangeEndIncl(20, 25), keys);
-        assertHigherKeyIndex(7, rangeStartIncl(20, 25), keys);
     }
 
     private static void assertLowKeyIndex(int expectedIdx, Range range, Keys keys, int lowerBound)
@@ -165,26 +141,15 @@ public class RangeTest
     {
         Keys keys = keys(10, 11, 12, 13, 14, 15, 16);
         assertLowKeyIndex(-1, rangeEndIncl(0, 5), keys);
-        assertLowKeyIndex(-1, rangeStartIncl(0, 5), keys);
         assertLowKeyIndex(-1, rangeEndIncl(0, 9), keys);
-        assertLowKeyIndex(-1, rangeStartIncl(0, 9), keys);
 
         assertLowKeyIndex(0, rangeEndIncl(5, 10), keys);
-        assertLowKeyIndex(-1, rangeStartIncl(5, 10), keys);
         assertLowKeyIndex(2, rangeEndIncl(11, 15), keys);
-        assertLowKeyIndex(1, rangeStartIncl(11, 15), keys);
         assertLowKeyIndex(3, rangeEndIncl(12, 14), keys);
-        assertLowKeyIndex(2, rangeStartIncl(12, 14), keys);
         assertLowKeyIndex(6, rangeEndIncl(15, 20), keys);
-        assertLowKeyIndex(5, rangeStartIncl(15, 20), keys);
 
         assertLowKeyIndex(-8, rangeEndIncl(16, 20), keys);
-        assertLowKeyIndex(6, rangeStartIncl(16, 20), keys);
         assertLowKeyIndex(-8, rangeEndIncl(20, 25), keys);
-        assertLowKeyIndex(-8, rangeStartIncl(20, 25), keys);
-
-        // non-intersecting
-        assertLowKeyIndex(-2, rangeStartIncl(12, 14), keys(10, 16));
     }
 
     @Test

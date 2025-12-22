@@ -28,6 +28,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -50,6 +51,7 @@ import accord.primitives.Routables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
+import accord.utils.Functions;
 import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
@@ -66,6 +68,7 @@ import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STOR
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
+import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.WAS_OWNED_SYNCED;
@@ -80,6 +83,7 @@ import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.ArrayBuffers.cachedInts;
+import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.require;
 import static accord.utils.Invariants.requireStrictlyOrdered;
@@ -631,15 +635,30 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return notWitnessed;
         }
 
-        static Ranges withoutAnyRetired(Bounds bounds, @Nonnull Ranges notRetired)
+        static Ranges withoutRetired(Bounds bounds, @Nonnull Ranges notRetired)
         {
-            if (bounds == null || bounds.endEpoch > bounds.maxBound(SHARD_APPLIED).epoch())
+            return withoutRetired(bounds, notRetired, b -> b.maxBound(SHARD_APPLIED));
+        }
+
+        static Ranges withoutLocallyRetired(Bounds bounds, @Nonnull Ranges notRetired)
+        {
+            return withoutRetired(bounds, notRetired, b -> b.maxBound(LOCALLY_APPLIED));
+        }
+
+        static Ranges withoutQuorumAndLocallyRetired(Bounds bounds, @Nonnull Ranges notRetired)
+        {
+            return withoutRetired(bounds, notRetired, b -> b.maxBoundBoth(QUORUM_APPLIED, LOCALLY_APPLIED));
+        }
+
+        private static Ranges withoutRetired(Bounds bounds, @Nonnull Ranges notRetired, Function<Bounds, TxnId> getBound)
+        {
+            if (bounds == null || bounds.endEpoch > getBound.apply(bounds).epoch())
                 return notRetired;
 
             return notRetired.without(Ranges.of(bounds.range));
         }
 
-        RedundantStatus get(TxnId txnId, @Nullable Timestamp applyAtIfKnown)
+        public RedundantStatus get(TxnId txnId, @Nullable Timestamp applyAtIfKnown)
         {
             if (wasOwned(txnId))
             {
@@ -997,12 +1016,25 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
     public Ranges removeRetired(Ranges ranges)
     {
-        return foldl(ranges, Bounds::withoutAnyRetired, ranges, r -> false);
+        return removeRetired(ranges, Bounds::withoutRetired);
     }
 
     public Ranges removeLocallyRetired(Ranges ranges)
     {
-        return ranges.without(lostRanges);
+        return removeRetired(ranges, Bounds::withoutLocallyRetired);
+    }
+
+    public Ranges removeQuorumAndLocallyRetired(Ranges ranges)
+    {
+        return removeRetired(ranges, Bounds::withoutQuorumAndLocallyRetired);
+    }
+
+    private Ranges removeRetired(Ranges ranges, BiFunction<Bounds, Ranges, Ranges> fold)
+    {
+        if (!lostRanges.intersects(ranges))
+            return ranges;
+
+        return foldl(ranges, fold, ranges, alwaysFalse());
     }
 
     public Ranges removeLostOrStale(Ranges ranges)
@@ -1052,6 +1084,26 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
             return foldl(participants, Bounds::withoutRedundantAnd_Unready, participants, txnId, executeAt);
         }
+    }
+
+    public boolean isAtLeast(RedundantBefore atLeast)
+    {
+        return foldl((b, v, al, e) -> {
+            return al.foldl(Ranges.of(b.range), (lb, v2, ub) -> {
+                int j = 0;
+                for (int i = 0 ; i < lb.bounds.length ; ++i)
+                {
+                    TxnId bound = lb.bounds[i];
+                    j = Arrays.binarySearch(ub.bounds, j, ub.bounds.length, bound, Comparator.reverseOrder());
+                    if (j < 0) j = -2 - j;
+                    if (j < 0
+                        || (lb.status(i*2) & ~ub.status(j*2)) != 0
+                        || (lb.status(i*2+1) & ~ub.status(j*2+1)) != 0)
+                        return false;
+                }
+                return v2;
+            }, v, b);
+        }, true, atLeast, null, Functions.alwaysFalse());
     }
 
     /**
@@ -1258,7 +1310,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
                 s.range = e.range;
                 // TODO (desired): move the bounds check into forEach, matching structure used for keys
                 d.forEach(e.range, b, s, (b0, s0, txnIdx) -> {
-                    if (txnIdx < s0.bootstrapIdx && b0.isWaitingOnDirectRangeTxnIdx(txnIdx) && s0.isFullyBootstrapping(txnIdx))
+                    if (txnIdx < s0.bootstrapIdx && b0.isWaitingOnTxnIndex(txnIdx) && s0.isFullyBootstrapping(txnIdx))
                         b0.removeWaitingOnDirectRangeTxnId(txnIdx);
                 });
             }
@@ -1277,17 +1329,26 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     @Override
     public String toString()
     {
-        return "gc:" + toString(GC_BEFORE)
-               + "\nlocal:" + toString(LOCALLY_DURABLE_TO_DATA_STORE, LOCALLY_DURABLE_TO_COMMAND_STORE)
-               + "\nbootstrap:" + toString(UNREADY);
+        return toString(", ");
     }
 
-    private String toString(Property p1)
+    public String toString(String delimiter)
     {
-        return toString(p1, null);
+        StringBuilder sb = new StringBuilder();
+        append(sb, delimiter, "gc:", GC_BEFORE);
+        append(sb, delimiter, "applied:", LOCALLY_APPLIED);
+        append(sb, delimiter, "command_store:", LOCALLY_DURABLE_TO_COMMAND_STORE);
+        append(sb, delimiter, "data_store:", LOCALLY_DURABLE_TO_DATA_STORE);
+        append(sb, delimiter, "unready:", UNREADY);
+        return sb.toString();
     }
 
-    private String toString(Property p1, Property p2)
+    private void append(StringBuilder builder, String delimiter, String prefix, Property p1)
+    {
+        append(builder, delimiter, prefix, p1, null);
+    }
+
+    private void append(StringBuilder builder, String delimiter, String prefix, Property p1, Property p2)
     {
         TreeMap<TxnId, List<Range>> map = new TreeMap<>();
         foldl((e, m, pp1, pp2) -> {
@@ -1295,10 +1356,21 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             m.computeIfAbsent(bound, ignore -> new ArrayList<>())
              .add(e.range);
             return m;
-        }, map, p1, p2, i -> false);
+        }, map, p1, p2);
 
-        return map.descendingMap().entrySet().stream()
-                  .map(e -> (e.getKey().equals(TxnId.NONE) ? "none" : e.getKey().toString()) + ":" + Ranges.ofSorted(e.getValue().toArray(new Range[0])).mergeTouching())
-                  .collect(Collectors.joining(", ", "{", "}"));
+        if (map.size() == 0 || map.size() == 1 && map.firstKey().equals(TxnId.NONE))
+            return;
+
+        if (builder.length() > 0)
+            builder.append(delimiter);
+        builder.append(prefix);
+        builder.append(map.descendingMap().entrySet().stream()
+                  .map(e -> (e.getKey().equals(TxnId.NONE) ? "none" : e.getKey().toString()) + ':' + Ranges.ofSorted(e.getValue().toArray(new Range[0])).mergeTouching())
+                  .collect(Collectors.joining(", ", "{", "}")));
+    }
+
+    public RedundantBefore map(Function<Bounds, Bounds> map)
+    {
+        return map(map, Bounds[]::new, EMPTY, RedundantBefore::new);
     }
 }

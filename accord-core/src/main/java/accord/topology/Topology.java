@@ -269,7 +269,7 @@ public class Topology
 
     public Topology cloneEquivalentWithEpoch(long epoch)
     {
-        return new Topology(epoch, removed, hardRemoved, stale, shards);
+        return new Topology(null, epoch, shards, ranges, removed, hardRemoved, stale, nodes, nodeLookup, ranges, supersetIndexes);
     }
 
     @Override
@@ -422,7 +422,7 @@ public class Topology
             for (int i = shards.firstSetBit() ; i >= 0 ; i = shards.nextSetBit(i + 1, -1))
             {
                 supersetIndexes[count] = this.supersetIndexes[i];
-                ranges[count] = this.shards[this.supersetIndexes[i]].range;
+                ranges[count++] = this.shards[this.supersetIndexes[i]].range;
             }
             subsetOfRanges = Ranges.ofSortedAndDeoverlapped(ranges);
         }

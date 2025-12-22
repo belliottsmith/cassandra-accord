@@ -42,7 +42,7 @@ import accord.topology.Topologies;
 import accord.topology.TopologyMismatch;
 import accord.utils.SortedListMap;
 
-import static accord.coordinate.Propose.NotAccept.proposeInvalidate;
+import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.coordinate.tracking.RequestStatus.Success;
 
 /**
@@ -95,6 +95,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
             case NoChange:
                 break;
             case Failed:
+                proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, null);
                 finishOnFailure();
                 break;
             case Success:
@@ -108,7 +109,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
         if (!reply.isOk())
         {
             // we've been preempted by a recovery coordinator; defer to it, and wait to hear any result
-            finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
+            finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
         }
         else
         {
@@ -135,12 +136,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
          * We cannot execute the transaction because the execution epoch's topology no longer contains all of the
          * participating keys/ranges, so we propose that the transaction is invalidated in its coordination epoch
          */
-        BiConsumer<? super T, Throwable> callback = finishAndTakeCallback();
-        proposeInvalidate(node, executor, node.uniqueTimestamp(Ballot::fromValues), txnId, scope.homeKey(), (outcome, failure) -> {
-            if (failure != null)
-                mismatch.addSuppressed(failure);
-            callback.accept(null, mismatch);
-        });
+        finishWithFailure(mismatch);
     }
 
     @Override

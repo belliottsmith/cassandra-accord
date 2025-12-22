@@ -164,20 +164,12 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
         }
     }
 
-    private Scheduler.Scheduled scheduled;
-
-    /**
-     * Logical fsync-like operation: anything written to the store prior to the invocation of this method
-     * must be durable once the AsyncResult completes successfully. That is, a restart of the node must
-     * restore the DataStore to a state on or after the point at which snapshot was invoked.
-     */
-    @Override
-    public void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore onSuccess)
+    public void ensureDurable(CommandStore commandStore, RedundantBefore onSuccess, int flags)
     {
         if (commandStore.node().isReplaying())
             return;
         snapshot(false).invoke((success, fail) -> {
-            if (fail == null) commandStore.execute((PreLoadContext.Empty)()->"Report DataStore Durable", safeStore -> safeStore.upsertRedundantBefore(onSuccess));
+            if (fail == null) commandStore.execute((PreLoadContext.Empty)()->"Report DataStore Durable", safeStore -> safeStore.reportDurable(onSuccess, flags));
         });
     }
 
@@ -369,7 +361,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     private final Int2ObjectHashMap<Ranges> pendingFetches = new Int2ObjectHashMap<>();
 
     @Override
-    public FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges delegate, FetchKind kind)
+    public FetchResult image(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges delegate)
     {
         int storeId = safeStore.commandStore().id();
         synchronized (this)
@@ -434,6 +426,12 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
         }
         coordinator.start();
         return coordinator.result();
+    }
+
+    @Override
+    public FetchResult sync(Node node, SafeCommandStore safeStore, Map<TxnId, Ranges> atLeast, FetchRanges callback)
+    {
+        throw new UnsupportedOperationException();
     }
 
     static Timestamped<int[]> merge(Timestamped<int[]> a, Timestamped<int[]> b)

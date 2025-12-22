@@ -34,6 +34,7 @@ import com.google.common.annotations.VisibleForTesting;
 import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
 import static accord.api.ProtocolModifiers.RangeSpec.isStartExclusive;
 import static accord.api.ProtocolModifiers.RangeSpec.isStartInclusive;
+import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -87,6 +88,11 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         return result;
     }
 
+    public <V2> V2 foldl(BiFunction<V, V2, V2> reduce, V2 accumulator)
+    {
+        return foldl(reduce, accumulator, alwaysFalse());
+    }
+
     public <V2> V2 foldl(BiFunction<V, V2, V2> reduce, V2 accumulator, Predicate<V2> terminate)
     {
         for (V value : values)
@@ -112,6 +118,10 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
         return accumulator;
     }
 
+    public <V2> V2 foldlWithBounds(QuadFunction<V, V2, K, K, V2> fold, V2 accumulator)
+    {
+        return foldlWithBounds(fold, accumulator, alwaysFalse());
+    }
     public <V2> V2 foldlWithBounds(QuadFunction<V, V2, K, K, V2> fold, V2 accumulator, Predicate<V2> terminate)
     {
         for (int i = 0 ; i < values.length ; ++i)
@@ -371,7 +381,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         if (left != null) left = builder.slice(start, end, left);
         if (right != null) right = builder.slice(start, end, right);
-        return left == null ? right : right == null ? left : builder.reduce(left, right);
+        return left == null ? right : right == null ? left : builder.slice(start, end, builder.reduce(left, right));
     }
 
     RangeIterator intersecting(K start, K end)

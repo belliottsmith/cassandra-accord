@@ -206,7 +206,7 @@ public class KeyDepsTest
                 throw new AssertionError(start + " == " + end);
 
             TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachUniqueTxnId(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), false, true)), txnId -> {
+            deps.test.forEachUniqueTxnId(Ranges.of(Range.of(start.toUnseekable(), end.toUnseekable())), txnId -> {
                 if (!seen.add(txnId))
                     throw new AssertionError("Seen " + txnId + " multiple times");
             });
@@ -230,7 +230,7 @@ public class KeyDepsTest
             RoutingKey end = keys.get(keys.size() - 1);
 
             TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachUniqueTxnId(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), true, false)), txnId -> {
+            deps.test.forEachUniqueTxnId(Ranges.of(Range.of(start.toUnseekable(), end.toUnseekable())), txnId -> {
                 if (!seen.add(txnId))
                     throw new AssertionError("Seen " + txnId + " multiple times");
             });
@@ -254,7 +254,7 @@ public class KeyDepsTest
             RoutingKey end = keys.get(0);
 
             TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachUniqueTxnId(Ranges.of(Range.range(start.toUnseekable(), end.toUnseekable(), true, false)), txnId -> {
+            deps.test.forEachUniqueTxnId(Ranges.of(Range.of(start.toUnseekable(), end.toUnseekable())), txnId -> {
                 if (!seen.add(txnId))
                     throw new AssertionError("Seen " + txnId + " multiple times");
             });

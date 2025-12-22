@@ -35,6 +35,7 @@ import accord.primitives.Writes;
 import accord.utils.Invariants;
 
 import static accord.local.StoreParticipants.Filter.LOAD;
+import static accord.primitives.Status.Stable;
 
 public abstract class SafeCommand
 {
@@ -46,8 +47,8 @@ public abstract class SafeCommand
     }
 
     public abstract Command current();
-    public abstract void invalidate();
-    public abstract boolean invalidated();
+    public abstract void markUnsafe();
+    public abstract boolean isUnsafe();
 
     public boolean isUnset()
     {
@@ -74,7 +75,6 @@ public abstract class SafeCommand
 
         Invariants.require(prev == null || update == SaveStatus.max(update, prev, Command::saveStatus, Command::acceptedOrCommitted) || update.saveStatus() == SaveStatus.Erased || update.saveStatus() == SaveStatus.Vestigial);
         set(update);
-        safeStore.progressLog().update(safeStore, txnId, prev, update, force);
         safeStore.update(prev, update, force);
         return update;
     }
@@ -84,6 +84,7 @@ public abstract class SafeCommand
         if (current() == update)
             return update;
 
+        Invariants.require(!update.hasBeen(Stable) || current().hasBeen(Stable));
         set(update);
         return update;
     }
