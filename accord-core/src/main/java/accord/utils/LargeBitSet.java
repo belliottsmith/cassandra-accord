@@ -87,6 +87,7 @@ public class LargeBitSet implements SimpleBitSet
         Arrays.fill(bits, 0, length, 0L);
     }
 
+    @Override
     public boolean set(int i)
     {
         int index = indexOf(i);
@@ -98,36 +99,38 @@ public class LargeBitSet implements SimpleBitSet
         return true;
     }
 
-    public void setRange(int from, int to)
+    @Override
+    public void setRange(int fromInclusive, int toExclusive)
     {
-        Invariants.requireArgument(from <= to, "from > to (%s > %s)", from, to);
-        if (from == to)
+        int fromIndex = indexOf(fromInclusive);  // validates input so call early
+        validateExclusive(toExclusive);
+        Invariants.requireArgument(fromInclusive <= toExclusive, "from > to (%s > %s)", fromInclusive, toExclusive);
+        if (fromInclusive == toExclusive)
             return;
 
-        int fromIndex = from >>> 6;
-        int toIndex = (to + 63) >>> 6;
+        int toIndex = (toExclusive + 63) >>> 6;
         if (fromIndex + 1 == toIndex)
         {
-            long addBits = (-1L >>> (64 - (to & 63))) & (-1L << (from & 63));
+            long addBits = (-1L >>> (64 - (toExclusive & 63))) & (-1L << (fromInclusive & 63));
             orBitsAtIndex(fromIndex,  addBits);
         }
         else if (count == 0)
         {
-            bits[toIndex - 1] = -1L >>> (64 - (to & 63));
+            bits[toIndex - 1] = -1L >>> (64 - (toExclusive & 63));
             for (int i = fromIndex + 1, maxi = toIndex - 1; i < maxi ; ++i)
                 bits[i] = -1L;
-            bits[fromIndex] = -1L << (from & 63);
-            count = to - from;
+            bits[fromIndex] = -1L << (fromInclusive & 63);
+            count = toExclusive - fromInclusive;
         }
         else
         {
-            orBitsAtIndex(fromIndex, -1L << (from & 63));
+            orBitsAtIndex(fromIndex, -1L << (fromInclusive & 63));
             for (int i = fromIndex + 1, maxi = toIndex - 1; i < maxi ; ++i)
             {
                 count += 64 - Long.bitCount(bits[i]);
                 bits[i] = -1L;
             }
-            orBitsAtIndex(toIndex - 1, -1L >>> (64 - (to & 63)));
+            orBitsAtIndex(toIndex - 1, -1L >>> (64 - (toExclusive & 63)));
         }
     }
 
@@ -163,6 +166,7 @@ public class LargeBitSet implements SimpleBitSet
         count += Long.bitCount(nextBits) - Long.bitCount(prevBits);
     }
 
+    @Override
     public boolean unset(int i)
     {
         int index = indexOf(i);
@@ -174,6 +178,7 @@ public class LargeBitSet implements SimpleBitSet
         return true;
     }
 
+    @Override
     public final boolean get(int i)
     {
         int index = indexOf(i);
@@ -320,7 +325,7 @@ public class LargeBitSet implements SimpleBitSet
     private int nextSetBitInternal(int i, int exclIndexBound, int ifNotFound)
     {
         Invariants.requireArgument(i >= 0);
-        Invariants.requireArgument(i <= size());
+        validateExclusive(i);
 
         if (count == 0)
             return ifNotFound;
@@ -443,8 +448,14 @@ public class LargeBitSet implements SimpleBitSet
     {
         int index = i >>> 6;
         if (index >= length)
-            throw new IndexOutOfBoundsException(String.format("%d >= %d", index, length));
+            throw new IndexOutOfBoundsException(String.format("Unable to access bit %d; must be between 0 and %d", i, size() - 1));
         return index;
+    }
+
+    private void validateExclusive(int i)
+    {
+        if (i > size())
+            throw new IndexOutOfBoundsException(String.format("Unable to access bit %d; must be between 0 and %d", i, size()));
     }
 
     private int lowerLimitOf(int i)
