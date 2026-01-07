@@ -102,11 +102,11 @@ public class LargeBitSet implements SimpleBitSet
     @Override
     public void setRange(int fromInclusive, int toExclusive)
     {
+        if (fromInclusive == toExclusive)
+            return;
         int fromIndex = indexOf(fromInclusive);  // validates input so call early
         validateExclusive(toExclusive);
         Invariants.requireArgument(fromInclusive <= toExclusive, "from > to (%s > %s)", fromInclusive, toExclusive);
-        if (fromInclusive == toExclusive)
-            return;
 
         int toIndex = (toExclusive + 63) >>> 6;
         if (fromIndex + 1 == toIndex)
