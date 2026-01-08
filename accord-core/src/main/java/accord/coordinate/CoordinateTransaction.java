@@ -30,7 +30,6 @@ import accord.api.Timeouts.RegisteredTimeout;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
-import accord.local.Command;
 import accord.local.Commands;
 import accord.local.DepsCalculator;
 import accord.local.LoadKeys;
@@ -129,6 +128,25 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     }
 
     @Override
+    protected void finishWithFailure(Throwable failure)
+    {
+        if (failure instanceof Preempted)
+        {
+            // cannot expect to successfully propose invalidation, and no point as already being recovered
+            super.finishWithFailure(failure);
+        }
+        else
+        {
+            BiConsumer<? super Result, Throwable> callback = finishAndTakeCallback();
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, (success, invalidated) -> {
+                failure.addSuppressed(invalidated);
+                callback.accept(null, failure);
+                node.agent().coordinatorEvents().onFailed(failure, txnId, scope, this);
+            });
+        }
+    }
+
+    @Override
     void onPreAccepted(Topologies topologies, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
@@ -138,20 +156,18 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             // the behaviour on PreAccept that does not calculate Deps if we are a voting replica and mark REJECTED;
             // that is, if we have some earlier topology where the lack of deps would be an invalid quorum vote, we must reject the transaction
             // otherwise, if we have somehow reached a medium or fast path decision this vote can be safely ignored
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, executeAt, finishAndTakeCallback());
-            node.agent().coordinatorEvents().onRejected(txnId);
+            finishWithFailure(Rejected.rejected(node.agent(), txnId, scope.homeKey()));
             return;
         }
 
         if (executeAt.is(SOFT_REJECT))
         {
             // count soft rejects, and hard reject if too many
-            long count = oks.foldlNonNullValues((ok, v) -> ok.witnessedAt.is(SOFT_REJECT) ? v + 1 : v, 0L);
-            // TODO (expected): make this configurable
-            if (count >= Math.max(2, (oks.size() + 3)/4))
+            int count = (int) oks.foldlNonNullValues((ok, v) -> ok.witnessedAt.is(SOFT_REJECT) ? v + 1 : v, 0L);
+            // TODO (expected): calculate this per shard?
+            if (node.agent().hardReject(count, oks.size()))
             {
-                proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, executeAt, finishAndTakeCallback());
-                node.agent().coordinatorEvents().onRejected(txnId);
+                finishWithFailure(Rejected.rejected(node.agent(), txnId, scope.homeKey()));
                 return;
             }
             executeAt = executeAt.removeFlag(SOFT_REJECT);
@@ -261,11 +277,11 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         @Override
         public void accept(PreAcceptReply result, Throwable failure)
         {
-            success();
+            done();
             executor.executeMaybeImmediately(() -> {
                 if (failure != null)
                 {
-                    finishWithFailureOverride(failure);
+                    finishOnFailure(failure);
                 }
                 else
                 {
@@ -281,7 +297,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                     }
                     else
                     {
-                        finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
+                        finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                     }
                 }
             });
@@ -341,7 +357,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             cancel.cancel();
         }
 
-        void success()
+        void done()
         {
             RegisteredTimeout cancel;
             synchronized (this)

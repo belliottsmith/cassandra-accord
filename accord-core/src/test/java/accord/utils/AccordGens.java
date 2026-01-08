@@ -432,8 +432,7 @@ public class AccordGens
     public static Gen<Range> ranges(Gen<? extends RoutingKey> keyGen)
     {
         return ranges(keyGen, (rs, a, b) -> {
-            boolean left = rs.nextBoolean();
-            return Range.range(a, b, left, !left);
+            return Range.of(a, b);
         });
     }
 
@@ -450,9 +449,35 @@ public class AccordGens
         };
     }
 
+    public static <T extends RoutingKey> Gen<Range> prefixRanges(Gen<? extends Gen<? extends T>> keyGen)
+    {
+        List<T> keys = Arrays.asList(null, null);
+        return rs -> {
+            Gen<? extends T> gen = keyGen.next(rs);
+            keys.set(0, gen.next(rs));
+            // range doesn't allow a=b
+            do keys.set(1, gen.next(rs));
+            while (Objects.equals(keys.get(0), keys.get(1)));
+            keys.sort(Comparator.naturalOrder());
+            return Range.of(keys.get(0), keys.get(1));
+        };
+    }
+
     public static <T extends RoutingKey> Gen<Ranges> ranges(Gen.IntGen sizeGen, Gen<T> keyGen, RangeFactory<T> factory)
     {
         Gen<Range> rangeGen = ranges(keyGen, factory);
+        return rs -> {
+            int size = sizeGen.nextInt(rs);
+            Range[] ranges = new Range[size];
+            for (int i = 0; i < size; i++)
+                ranges[i] = rangeGen.next(rs);
+            return Ranges.of(ranges);
+        };
+    }
+
+    public static <T extends RoutingKey> Gen<Ranges> prefixRanges(Gen.IntGen sizeGen, Gen<Gen<T>> keyGen)
+    {
+        Gen<Range> rangeGen = prefixRanges(keyGen);
         return rs -> {
             int size = sizeGen.nextInt(rs);
             Range[] ranges = new Range[size];

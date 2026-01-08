@@ -252,11 +252,10 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
     {
         Invariants.require(!isDone);
         Invariants.require(failure != null);
-        onDone(null, failure);
+        invokeOnDone(null, failure);
         node.agent().coordinatorEvents().onFailed(failure, txnId, scope(), this);
         if (tracing != null)
             tracing.trace(null, "finishing with failure: %s", failure);
-        setDone();
     }
 
     protected void finishOnExhaustion()
@@ -284,6 +283,17 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
             Coordination.traceStop(tracing, this);
     }
 
+    private void invokeOnDone(Success success, Throwable failure)
+    {
+        setDone();
+        try { onDone(success, failure); }
+        catch (Throwable t)
+        {
+            if (callback != null)
+                callback.accept(null, t);
+        }
+    }
+
     private void handle(RequestStatus result)
     {
         switch (result)
@@ -295,9 +305,7 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
             case Success:
                 Invariants.require(!isDone);
                 Success success = waitingOnData == 0 ? Success.Success : Success.Quorum;
-                onDone(success, null);
-                // isDone = true needs to be last or exceptions thrown by onDone are ignored and this never finishes
-                setDone();
+                invokeOnDone(success, null);
                 if (tracing != null)
                     tracing.trace(null, "finishing with %s", success);
                 break;

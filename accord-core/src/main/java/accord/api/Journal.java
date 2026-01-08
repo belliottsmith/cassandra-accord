@@ -80,7 +80,7 @@ public interface Journal
      * any exceptions during replay.
      */
     boolean replay(CommandStores commandStores, Object param);
-    
+
     class TopologyUpdate
     {
         public final Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores;

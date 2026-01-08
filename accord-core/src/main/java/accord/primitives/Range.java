@@ -35,135 +35,15 @@ import static accord.utils.SortedArrays.Search.FAST;
 /**
  * A range of keys
  */
-public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seekable, RangeFactory
+public class Range implements Comparable<RoutableKey>, Unseekable, Seekable, RangeFactory
 {
-    public static class EndInclusive extends Range
-    {
-        public EndInclusive(RoutingKey start, RoutingKey end)
-        {
-            super(start, end);
-            Invariants.require(END_INCLUSIVE);
-        }
-
-        public EndInclusive(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
-        {
-            super(start, end, antiRange);
-            Invariants.require(END_INCLUSIVE);
-        }
-
-        @Override
-        public int compareTo(RoutableKey key)
-        {
-            if (key.compareTo(start()) <= 0)
-                return 1;
-            if (key.compareTo(end()) > 0)
-                return -1;
-            return 0;
-        }
-
-        @Override
-        public int compareStartTo(RoutableKey key)
-        {
-            int c = start().compareTo(key);
-            if (c == 0) c = 1;
-            return c;
-        }
-
-        @Override
-        public int compareEndTo(RoutableKey key)
-        {
-            return end().compareTo(key);
-        }
-
-        @Override
-        public boolean startInclusive()
-        {
-            return false;
-        }
-
-        @Override
-        public boolean endInclusive()
-        {
-            return true;
-        }
-
-        @Override
-        public Range newRange(RoutingKey start, RoutingKey end)
-        {
-            return new EndInclusive(start, end);
-        }
-    }
-
-    public static class StartInclusive extends Range
-    {
-        public StartInclusive(RoutingKey start, RoutingKey end)
-        {
-            super(start, end);
-            Invariants.require(!END_INCLUSIVE);
-        }
-
-        public StartInclusive(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
-        {
-            super(start, end, antiRange);
-            Invariants.require(!END_INCLUSIVE);
-        }
-
-        @Override
-        public int compareTo(RoutableKey key)
-        {
-            if (key.compareTo(start()) < 0)
-                return 1;
-            if (key.compareTo(end()) >= 0)
-                return -1;
-            return 0;
-        }
-
-        @Override
-        public boolean startInclusive()
-        {
-            return true;
-        }
-
-        @Override
-        public boolean endInclusive()
-        {
-            return false;
-        }
-
-        @Override
-        public int compareStartTo(RoutableKey key)
-        {
-            return start().compareTo(key);
-        }
-
-        @Override
-        public int compareEndTo(RoutableKey key)
-        {
-            int c = end().compareTo(key);
-            if (c == 0) c = -1;
-            return c;
-        }
-
-        @Override
-        public Range newRange(RoutingKey start, RoutingKey end)
-        {
-            return new StartInclusive(start, end);
-        }
-    }
-
-    public static Range range(RoutingKey start, RoutingKey end, boolean startInclusive, boolean endInclusive)
-    {
-        Invariants.require(startInclusive != endInclusive);
-        return startInclusive ? new StartInclusive(start, end) : new EndInclusive(start, end);
-    }
-
-    // used to construct an unsafe Range used only for representing an absence of information. Imposes weaker invariants.
-    public enum AntiRangeMarker { ANTI_RANGE };
+    // used to construct an unsafe Ranges used only for representing an absence of information. Imposes weaker invariants.
+    public enum UnsafeMarker { NULLS, ANTI_RANGE }
 
     private final RoutingKey start;
     private final RoutingKey end;
 
-    private Range(RoutingKey start, RoutingKey end)
+    protected Range(RoutingKey start, RoutingKey end)
     {
         // TODO (expected): should we at least relax to permit an empty Range?
         Invariants.requireArgument(start.compareTo(end) < 0, "%s >= %s", start, end);
@@ -172,9 +52,9 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         this.end = end;
     }
 
-    private Range(RoutingKey start, RoutingKey end, AntiRangeMarker antiRange)
+    protected Range(RoutingKey start, RoutingKey end, UnsafeMarker antiRange)
     {
-        Invariants.requireArgument(start.compareTo(end) < 0, "%s >= %s", start, end);
+        Invariants.requireArgument(antiRange == UnsafeMarker.NULLS || start.compareTo(end) < 0, "%s >= %s", start, end);
         this.start = start;
         this.end = end;
     }
@@ -200,10 +80,61 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     @Override
     public final Kind kind() { return Kind.Range; }
 
-    public abstract boolean startInclusive();
-    public abstract boolean endInclusive();
+    /**
+     * Returns a negative integer, zero, or a positive integer as the provided key is greater than, contained by,
+     * or less than this range.
+     */
+    @Override
+    public final int compareTo(RoutableKey key)
+    {
+        if (key.compareTo(start) < (END_INCLUSIVE ? 1 : 0))
+            return 1;
+        if (key.compareTo(end) > (END_INCLUSIVE ? 0 : -1))
+            return -1;
+        return 0;
+    }
 
-    public abstract Range newRange(RoutingKey start, RoutingKey end);
+    /**
+     * Returns a negative integer, zero, or a positive integer as the provided key is greater than, equal to,
+     * or less than the start of this range. This comparison is informed by the inclusivity of the start, i.e.
+     * if the raw keys are equal but the start is exclusive, the start is considered to sort after the provided key,
+     * so that it falls outside of the range.
+     */
+    public final int compareStartTo(RoutableKey key)
+    {
+        int c = start().compareTo(key);
+        if (END_INCLUSIVE && c == 0) c = 1;
+        return c;
+    }
+
+    /**
+     * Returns a negative integer, zero, or a positive integer as the provided key is greater than, contained by,
+     * or less than the end of this range. This comparison is informed by the inclusivity of the end, i.e.
+     * if the raw keys are equal but the end is exclusive, the end is considered to sort before the provided key,
+     * so that it falls outside of the range.
+     */
+    public final int compareEndTo(RoutableKey key)
+    {
+        int c = end().compareTo(key);
+        if (!END_INCLUSIVE && c == 0) c = -1;
+        return c;
+    }
+
+    public final boolean startInclusive()
+    {
+        return !END_INCLUSIVE;
+    }
+
+    public final boolean endInclusive()
+    {
+        return END_INCLUSIVE;
+    }
+
+    @Override
+    public Range newRange(RoutingKey start, RoutingKey end)
+    {
+        return new Range(start, end);
+    }
 
     @Override
     public Key asKey()
@@ -229,7 +160,7 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         Range that = (Range) o;
-        return Objects.equals(start, that.start) && Objects.equals(end, that.end);
+        return this.start.equals(that.start) && this.end.equals(that.end);
     }
 
     @Override
@@ -237,29 +168,6 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
     {
         return start.hashCode() * 31 + end.hashCode();
     }
-
-    /**
-     * Returns a negative integer, zero, or a positive integer as the provided key is greater than, contained by,
-     * or less than this range.
-     */
-    @Override
-    public abstract int compareTo(RoutableKey key);
-
-    /**
-     * Returns a negative integer, zero, or a positive integer as the provided key is greater than, equal to,
-     * or less than the start of this range. This comparison is informed by the inclusivity of the start, i.e.
-     * if the raw keys are equal but the start is exclusive, the start is considered to sort after the provided key,
-     * so that it falls outside of the range.
-     */
-    public abstract int compareStartTo(RoutableKey key);
-
-    /**
-     * Returns a negative integer, zero, or a positive integer as the provided key is greater than, contained by,
-     * or less than the end of this range. This comparison is informed by the inclusivity of the end, i.e.
-     * if the raw keys are equal but the end is exclusive, the end is considered to sort before the provided key,
-     * so that it falls outside of the range.
-     */
-    public abstract int compareEndTo(RoutableKey key);
 
     public boolean contains(RoutableKey key)
     {

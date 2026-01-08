@@ -124,7 +124,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onNewEpochTopologyMismatch(TopologyMismatch mismatch)
     {
-        finishWithFailureOverride(mismatch);
+        finishOnFailure(mismatch);
     }
 
     @Override
@@ -136,7 +136,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onPreAccepted()
     {
-        finishAndInvokeCallback(maxConflict, null);
+        finishWithSuccess(maxConflict);
     }
 
     @Nonnull

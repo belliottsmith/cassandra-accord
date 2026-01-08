@@ -18,14 +18,11 @@
 
 package accord.local;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import accord.api.Agent;
-import accord.api.DataStore;
 import accord.api.DataStore.FetchKind;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.primitives.Ranges;
@@ -41,7 +38,6 @@ import accord.utils.async.AsyncResults;
 import static accord.api.DataStore.FetchKind.Image;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
-import static accord.utils.Invariants.illegalState;
 
 /**
  * Captures state associated with a command store's adoption of a collection of new ranges.

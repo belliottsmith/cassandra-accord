@@ -967,7 +967,7 @@ public class Commands
 
         if (current.saveStatus().compareTo(SaveStatus.Committed) < 0)
         {   // ephemeral reads can be erased without warning
-            Invariants.require(current.txnId().is(EphemeralRead));
+            Invariants.expect(current.txnId().is(EphemeralRead), "%s was considered committed by %s but is only %s.", safeCommand.txnId(), key, current.saveStatus());
             return;
         }
 

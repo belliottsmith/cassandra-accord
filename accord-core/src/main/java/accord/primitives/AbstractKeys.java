@@ -123,6 +123,11 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         return SortedArrays.exponentialSearch(keys, thisIndex, size(), find, Range::compareTo, search);
     }
 
+    public final int findNext(int thisIndex, int thisLimit, Range find, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(keys, thisIndex, thisLimit, find, Range::compareTo, search);
+    }
+
     @Override
     public final long findNextIntersection(int thisIdx, AbstractRanges that, int thatIdx)
     {

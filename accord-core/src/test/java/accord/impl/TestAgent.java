@@ -168,12 +168,6 @@ public class TestAgent implements Agent, OwnershipEventListener
     }
 
     @Override
-    public boolean softReject(long unappliedCount, long cumulativeUnappliedAge)
-    {
-        return false;
-    }
-
-    @Override
     public Txn emptySystemTxn(Txn.Kind kind, Domain domain)
     {
         return new Txn.InMemory(kind, domain == Domain.Key ? Keys.EMPTY : Ranges.EMPTY, MockStore.read(Keys.EMPTY), MockStore.QUERY, null);

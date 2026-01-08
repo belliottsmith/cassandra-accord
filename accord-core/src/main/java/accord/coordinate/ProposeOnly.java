@@ -49,7 +49,7 @@ public class ProposeOnly extends Propose<Deps>
     void onAccepted()
     {
         Deps deps = mergeDeps();
-        finishAndInvokeCallback(deps, null);
+        finishWithSuccess(deps);
     }
 
     @Override

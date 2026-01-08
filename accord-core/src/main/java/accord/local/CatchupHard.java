@@ -111,12 +111,12 @@ public class CatchupHard
         }
 
         logger.info("Catching up {} with quorums", catchUp);
-        RedundantBefore upsert = durableBefore.foldlWithBounds(catchUp, (e, builder, start, end) -> {
-            Ranges ranges = Ranges.of(Range.of(start, end)).slice(catchUp, Minimal);
+        RedundantBefore upsert = durableBefore.foldl(catchUp, (e, builder, p1, p2) -> {
+            Ranges ranges = Ranges.of(e.toPlainRange()).slice(catchUp, Minimal);
             for (Range range : ranges)
-                builder.append(start, end, RedundantBefore.Bounds.create(range, e.quorumBefore, LOG_UNAVAILABLE_ONLY, null));
+                builder.append(range.start(), range.end(), RedundantBefore.Bounds.create(range, e.quorum, LOG_UNAVAILABLE_ONLY, null));
             return builder;
-        }, new RedundantBefore.Builder(catchUp.size())).build();
+        }, new RedundantBefore.Builder(catchUp.size()), null, null).build();
 
         ReducingRangeMap<TxnId> bounds = upsert.map(b -> b.maxBound(LOG_UNAVAILABLE), TxnId[]::new);
 

@@ -816,7 +816,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (c.isUnset() || c.current().saveStatus().isUninitialised())
                     commandStore().commands.remove(c.txnId());
 
-                c.invalidate();
+                c.markUnsafe();
             });
             commandsForKey.values().forEach(cfk -> {
                 if (cfk.isUnset())

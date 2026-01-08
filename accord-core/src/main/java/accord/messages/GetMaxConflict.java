@@ -66,7 +66,7 @@ public class GetMaxConflict extends RouteRequest.WithUnsynced<GetMaxConflict.Get
     @Override
     public GetMaxConflictOk applyInternal(SafeCommandStore safeStore)
     {
-        Timestamp maxConflict = safeStore.commandStore().maxConflict(scope);
+        Timestamp maxConflict = safeStore.commandStore().maxConflict(txnId, scope);
         return new GetMaxConflictOk(maxConflict, Math.max(safeStore.node().epoch(), node.epoch()));
     }
 

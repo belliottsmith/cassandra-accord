@@ -87,7 +87,7 @@ class AbstractRangesTest
 
     private static Range range(Object prefix, int start, int end)
     {
-        return Range.range(new PrefixKey(start, prefix), new PrefixKey(end, prefix), true , false);
+        return Range.of(new PrefixKey(start, prefix), new PrefixKey(end, prefix));
     }
 
     private static class Ranges extends AbstractRanges

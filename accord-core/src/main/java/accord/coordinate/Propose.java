@@ -99,7 +99,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         {
             default: throw new AssertionError("Unhandled AcceptOutcome: " + reply.outcome());
             case RejectedBallot:
-                finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
+                finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                 break;
 
             case Truncated:
@@ -113,7 +113,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
                         failNow = Preempted.preempted(node.agent(), txnId, scope.homeKey());
 
                     if (failNow != null)
-                        finishWithFailureOverride(failNow);
+                        finishOnFailure(failNow);
                     else
                         onFailureInternal(from, fromIndex, reply.committedExecuteAt == null ? null : new Redundant(txnId, scope.homeKey(), reply.committedExecuteAt));
                     break;
@@ -265,14 +265,15 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
             proposeInvalidate(node, executor, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
                 if (fail != null)
                 {
-                    callback.accept(null, fail);
+                    if (callback != null)
+                        callback.accept(null, fail);
                 }
                 else
                 {
-                    node.agent().coordinatorEvents().onInvalidated(txnId);
                     node.withEpochExact(invalidateUntil.epoch(), executor, callback, t -> Rethrowable.rethrowable(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
-                        callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
+                        if (callback != null)
+                            callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
                     });
                 }
             });
@@ -283,7 +284,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         {
             if (!reply.isOk())
             {
-                finishWithFailureOverride(Preempted.preempted(node.agent(), txnId, null));
+                finishOnFailure(Preempted.preempted(node.agent(), txnId, null));
                 return;
             }
 

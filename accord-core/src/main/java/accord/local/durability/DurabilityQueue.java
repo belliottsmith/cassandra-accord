@@ -69,7 +69,6 @@ import static accord.local.durability.DurabilityService.SyncRemote.All;
 import static accord.local.durability.DurabilityService.SyncRemote.Quorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
-import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.btree.IntervalBTree.InclusiveEndHelper.endWithStart;
 import static accord.utils.btree.IntervalBTree.InclusiveEndHelper.startWithEnd;
 import static accord.utils.btree.IntervalBTree.InclusiveEndHelper.startWithStart;

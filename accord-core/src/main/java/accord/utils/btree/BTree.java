@@ -1990,7 +1990,7 @@ public class BTree
      * has a worst case of {@code O(n)}. However compared to a simple linear merge, the best case for exponential
      * search is {@code O(lg(n))} instead of {@code O(n)}.
      */
-    private static <Compare> int exponentialSearch(Comparator<? super Compare> comparator, Object[] in, int from, int to, Compare find)
+    static <Compare> int exponentialSearch(Comparator<? super Compare> comparator, Object[] in, int from, int to, Compare find)
     {
         int step = 0;
         while (from + step < to)
@@ -2311,7 +2311,7 @@ public class BTree
          */
         public final boolean isEmpty()
         {
-            return count == 0 && savedNextKey == null;
+            return count == 0 && savedNextKey == null && (getClass() != BranchBuilder.class || !((BranchBuilder)this).hasRightChild);
         }
 
         abstract void initialiseCopy(Object[] unode);
@@ -2441,7 +2441,7 @@ public class BTree
      * Note that {@link AbstractFastBuilder} extends this class directly, however it is convenient to maintain
      * distinct classes in the hierarchy for clarity of behaviour and intent.
      */
-    private static abstract class LeafBuilder extends LeafOrBranchBuilder
+    static abstract class LeafBuilder extends LeafOrBranchBuilder
     {
         LeafBuilder()
         {
@@ -3314,6 +3314,14 @@ public class BTree
             return result;
         }
 
+        public void replacePrev(V value)
+        {
+            LeafBuilder leaf = leaf();
+            Invariants.require(leaf.count > 0 || leaf.savedNextKey != null);
+            if (leaf.count == 0) leaf.savedNextKey = value;
+            else leaf.buffer[leaf.count - 1] = value;
+        }
+
         @Override
         public void close()
         {
@@ -3366,9 +3374,29 @@ public class BTree
 
     private static abstract class AbstractUpdater extends AbstractFastBuilder implements AutoCloseable
     {
+        protected void requireEmpty()
+        {
+            Invariants.require(leaf().isEmpty());
+            BranchBuilder branch = leaf().parent;
+            while (branch != null && branch.inUse)
+            {
+                Invariants.require(branch.isEmpty());
+                branch = branch.parent;
+            }
+            Invariants.require(branch == null || branch.isEmpty());
+            if (Invariants.isParanoid() && branch != null)
+            {
+                while (branch != null)
+                {
+                    Invariants.require(!branch.inUse);
+                    Invariants.require(branch.sourceNode == null);
+                    branch = branch.parent;
+                }
+            }
+        }
+
         void reset()
         {
-            assert leaf().count == 0;
             clearLeafBuffer(leaf().buffer);
             if (leaf().savedBuffer != null)
                 Arrays.fill(leaf().savedBuffer, null);
@@ -3384,16 +3412,6 @@ public class BTree
                     Arrays.fill(branch.savedBuffer, null); // by definition full, if non-empty
                 branch.inUse = false;
                 branch = branch.parent;
-            }
-            Invariants.require(branch == null || (branch.count == 0 && !branch.hasRightChild));
-            if (Invariants.isParanoid() && branch != null)
-            {
-                while (branch != null)
-                {
-                    Invariants.require(!branch.inUse);
-                    Invariants.require(branch.sourceNode == null);
-                    branch = branch.parent;
-                }
             }
         }
 
@@ -3489,7 +3507,7 @@ public class BTree
             ik = updateRecursive(ik, update, null, builder);
             assert ik == null;
             Object[] result = builder.completeBuild();
-
+            requireEmpty();
             return result;
         }
 
@@ -3673,6 +3691,7 @@ public class BTree
         }
 
         abstract O apply(I in);
+        O applyNoInput() { return null; }
 
         LeafOrBranchBuilder initRoot(Object[] root)
         {
@@ -3690,7 +3709,7 @@ public class BTree
         }
 
         // for branch nodes, can seek to usz+1 indicating we should ascend
-        abstract int seekInBranch(Object[] unode, int upos, int usz);
+        abstract int seekInBranch(BranchBuilder level, Object[] unode, int upos, int usz);
         // transform the leaf - false means we should directly propagate the leaf to its parent
         protected abstract boolean transformLeaf(Object[] unode, int upos, int usz);
 
@@ -3727,7 +3746,7 @@ public class BTree
                 else
                 {
                     BranchBuilder branch = (BranchBuilder) level;
-                    int pos = seekInBranch(unode, upos, usz);
+                    int pos = seekInBranch(branch, unode, upos, usz);
                     if (pos < 0)
                     {
                         pos = -1 -pos;
@@ -3793,16 +3812,26 @@ public class BTree
                                 break successor;
                         }
 
-                        do
+                        int ascendTo = update.ascendIfUnfinishedParent();
+                        if (ascendTo >= 0)
                         {
-                            if (!update.ascendToParent())
-                                return finishAndDrain(level);
-
+                            Invariants.require(ascendTo > 0);
                             unode = update.node();
                             upos = update.position();
                             usz = shallowSizeOfBranch(unode);
-                            level = level.parent;
-                        } while (upos >= usz);
+                            while (ascendTo-- > 0)
+                                level = level.parent;
+                        }
+                        else
+                        {
+                            if (null != (next = applyNoInput()))
+                                break;
+
+                            while (update.ascendToParent())
+                                level = level.parent;
+
+                            return finishAndDrain(level);
+                        }
 
                         next = apply((I) unode[upos++]);
                         if (next != null)
@@ -3821,6 +3850,21 @@ public class BTree
             }
         }
 
+        Object successorBranchKey()
+        {
+            // if we sort after the last key in the branch, we may need to descend into the right-most child
+            // but, for all branches besides the root we can try to look at a parent node to decide this.
+            int pdepth = update.depth;
+            while (--pdepth >= 0)
+            {
+                Object[] pnode = update.nodes[pdepth];
+                int ppos = update.positions[pdepth];
+                if (ppos < shallowSizeOfBranch(pnode))
+                    return pnode[ppos];
+            }
+            return null;
+        }
+
         LeafOrBranchBuilder descend(LeafOrBranchBuilder from, LeafOrBranchBuilder to, Object[] unode, int upos, int usz)
         {
             while (update.height() > to.height)
@@ -3829,7 +3873,7 @@ public class BTree
                 unode = update.node();
                 upos = update.position();
                 usz = shallowSize(unode);
-                from = from.child;
+                from = Invariants.nonNull(from.child);
                 from.setSourceNode(unode);
             }
             return to;
@@ -4004,6 +4048,87 @@ public class BTree
             fill.prepend(predecessor, predecessorNextKey);
         }
 
+        void overwritePrev(Object with)
+        {
+            LeafOrBranchBuilder level = leaf();
+            if (level.isEmpty())
+            {
+                BranchBuilder parent = leaf().parent;
+                while (parent != null && parent.inUse && parent.isEmpty())
+                    parent = parent.parent;
+
+                if (parent != null)
+                {
+                    if (parent.hasRightChild)
+                    {
+                        setRightMost(parent, with);
+                        return;
+                    }
+                    level = parent;
+                }
+            }
+            overwriteLast(level, with);
+        }
+
+        private void overwriteLast(LeafOrBranchBuilder level, Object with)
+        {
+            if (level.count > 0) level.buffer[level.count - 1] = validateOverwritePrev(level.buffer[level.count - 1], with);
+            else if (level.savedNextKey != null) level.savedNextKey = validateOverwritePrev(level.savedNextKey, with);
+            else throw new IllegalStateException("Nothing written yet");
+        }
+
+        Object validateOverwritePrev(Object overwriting, Object with)
+        {
+            return with;
+        }
+
+        Object prev()
+        {
+            if (!leaf().isEmpty())
+                return last(leaf());
+
+            BranchBuilder parent = leaf().parent;
+            while (parent != null && parent.inUse && parent.isEmpty())
+                parent = parent.parent;
+
+            if (parent == null || parent.isEmpty())
+                return null;
+
+            if (parent.hasRightChild)
+                return rightMost(parent);
+
+            return last(parent);
+        }
+
+        private Object last(LeafOrBranchBuilder level)
+        {
+            if (level.count > 0) return level.buffer[level.count - 1];
+            else if (level.savedNextKey != null) return level.savedNextKey;
+            else return null;
+        }
+
+        private Object rightMost(BranchBuilder level)
+        {
+            Object[] node = (Object[]) level.buffer[31 + level.count];
+            while (!BTree.isLeaf(node))
+                node = (Object[]) node[node.length - 2];
+            return node[BTree.sizeOfLeaf(node) - 1];
+        }
+
+        private void setRightMost(LeafOrBranchBuilder level, Object set)
+        {
+            Object[] node = (Object[]) level.buffer[31 + level.count];
+            level.buffer[31 + level.count] = replaceRightMost(node, set);
+        }
+
+        private Object[] replaceRightMost(Object[] node, Object set)
+        {
+            Object[] result = node.clone();
+            if (BTree.isLeaf(result)) result[BTree.sizeOfLeaf(result) - 1] = validateOverwritePrev(result[BTree.sizeOfLeaf(result) - 1], set);
+            else result[result.length - 2] = replaceRightMost((Object[])result[result.length - 2], set);
+            return result;
+        }
+
         void reset()
         {
             super.reset();
@@ -4018,16 +4143,15 @@ public class BTree
      */
     static abstract class AbstractSubtraction<K, T extends K> extends AbstractSeekingTransformer<T, T> implements AutoCloseable
     {
-        /**
-         * An iterator over the tree we are updating
-         */
         PeekingSearchIterator<K, ? extends K> remove;
         Comparator<K> comparator;
 
         Object[] subtract(Object[] update, PeekingSearchIterator<K, ? extends K> remove)
         {
             this.remove = remove;
-            return apply(update);
+            Object[] result = apply(update);
+            requireEmpty();
+            return result;
         }
 
         Object[] subtract(Object[] update, Object[] remove)
@@ -4042,7 +4166,7 @@ public class BTree
         }
 
         @Override
-        int seekInBranch(Object[] unode, int upos, int usz)
+        int seekInBranch(BranchBuilder level, Object[] unode, int upos, int usz)
         {
             if (!remove.hasNext())
                 return -1 - (1 + usz);
@@ -4053,18 +4177,12 @@ public class BTree
             {
                 // if we sort after the last key in the branch, we may need to descend into the right-most child
                 // but, for all branches besides the root we can try to look at a parent node to decide this.
-                // we only look at the direct parent, and if we are its right-most child already, we just assume we must descend
-                int pdepth = update.depth - 1;
-                if (pdepth >= 0)
+                Object successor = successorBranchKey();
+                if (successor != null && comparator.compare(next, (K)successor) >= 0)
                 {
-                    Object[] pnode = update.nodes[pdepth];
-                    int ppos = update.positions[pdepth];
-                    if (ppos < shallowSizeOfBranch(pnode) && comparator.compare(next, (K)pnode[ppos]) >= 0)
-                    {
-                        // increase our result index to point to *after* the last child;
-                        // (it's an inequality binary search semantic answer, so will be negated)
-                        --i;
-                    }
+                    // increase our result index to point to *after* the last child;
+                    // (it's an inequality binary search semantic answer, so will be negated)
+                    --i;
                 }
             }
             return i;
@@ -4125,9 +4243,17 @@ public class BTree
     private static abstract class AbstractTransformer<I, O> extends AbstractSeekingTransformer<I, O>
     {
         @Override
-        final int seekInBranch(Object[] unode, int upos, int usz)
+        final int seekInBranch(BranchBuilder level, Object[] unode, int upos, int usz)
         {
             return -1 - upos;
+        }
+
+        @Override
+        Object[] apply(Object[] root)
+        {
+            Object[] result = super.apply(root);
+            requireEmpty();
+            return result;
         }
 
         protected final boolean transformLeaf(Object[] unode, int upos, int usz)
@@ -4222,7 +4348,7 @@ public class BTree
     /**
      * A base class for very simple walks of a tree without recursion, supporting reuse
      */
-    private static abstract class SimpleTreeStack
+    static abstract class SimpleTreeStack
     {
         // stack we have descended, with 0 the root node
         Object[][] nodes;
@@ -4254,7 +4380,7 @@ public class BTree
     // Similar to SimpleTreeNavigator, but visits values eagerly
     // (the exception being ascendToParent(), which permits iterating through finished parents).
     // Begins by immediately descending to first leaf; if empty terminates immediately.
-    private static class SimpleTreeIterator extends SimpleTreeStack
+    static class SimpleTreeIterator extends SimpleTreeStack
     {
         int initToLeaf(Object[] tree)
         {
@@ -4338,6 +4464,30 @@ public class BTree
             if (depth < 0)
                 return false;
             return --depth >= 0;
+        }
+
+        int ascendIfUnfinishedParent()
+        {
+            int d = depth;
+            while (--d >= 0)
+            {
+                Object[] unode = nodes[d];
+                int upos = positions[d];
+                int usz = shallowSizeOfBranch(unode);
+                if (upos < usz)
+                {
+                    int levels = depth - d;
+                    depth = d;
+                    return levels;
+                }
+            }
+
+            return -1;
+        }
+
+        void setDepth(int depth)
+        {
+            this.depth = depth;
         }
     }
 

@@ -454,8 +454,9 @@ abstract class WaitingState extends HomeState
         Command command = safeCommand.current();
         if (command.saveStatus().compareTo(blockedUntil.unblockedFrom) >= 0)
         {
-            // TODO (expected): improve progress log clearing to guarantee we don't encounter Erased
-            Invariants.expect(command.saveStatus() == SaveStatus.Erased || isRestored(),
+            // TODO (expected): improve progress log clearing to guarantee we don't encounter Erased or Invalidated
+            //   (Invalidated at least can be encountered due to invalidation on load in integration, which doesn't invoke update)
+            Invariants.expect(command.saveStatus().compareTo(SaveStatus.Erased) >= 0 || isRestored(),
                               "Command has met desired criteria (%s) but progress log entry has not been cancelled: %s",
                               blockedUntil.unblockedFrom, command);
             setWaitingDone(owner);

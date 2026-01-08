@@ -102,7 +102,8 @@ public interface Agent extends UncaughtExceptionListener
      */
     long maxConflictsPruneInterval();
 
-    boolean softReject(long unappliedCount, long cumulativeUnappliedAge);
+    default boolean softReject(long unappliedCount, long maxUnappliedAge, long cumulativeUnappliedAge) { return false; }
+    default boolean hardReject(int softRejectCount, int totalCount) { return false; }
 
     /**
      * Create an empty transaction that Accord can use for its own internal transactions.

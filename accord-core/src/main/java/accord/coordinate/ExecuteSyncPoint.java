@@ -151,7 +151,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
                     return;
 
                 case Redundant:
-                    finishWithFailureOverride(new SyncPointErased());
+                    finishOnFailure(new SyncPointErased());
                     return;
 
                 case Waiting:

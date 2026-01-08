@@ -219,6 +219,7 @@ public class Node implements NodeCommandStoreService
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         this.topology = new TopologyManager(topologySorter, this, topologyService, time, timeouts);
         this.durabilityService = new DurabilityService(this);
+
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forAllUnsafe(store -> store.progressLog.maybeNotify()), 1, SECONDS);
         scheduler.recurring(timeouts::maybeNotify, 100, MILLISECONDS);
@@ -271,14 +272,13 @@ public class Node implements NodeCommandStoreService
         try
         {
             TxnId from = TxnId.minForEpoch(epoch);
-            DurableBefore addDurableBefore = DurableBefore.create(ranges, from, from);
-            DurableBefore newDurableBefore = DurableBefore.merge(durableBefore, addDurableBefore);
+            DurableBefore newDurableBefore = durableBefore.update(ranges, from, from);
             // TODO (required): it is possible for this invariant to be breached if topologies are received out of order.
             //  We should not update min past the max known epoch.
-            Invariants.require(newDurableBefore.min.quorumBefore.compareTo(durableBefore.min.quorumBefore) >= 0,
+            Invariants.require(newDurableBefore.min.quorum.compareTo(durableBefore.min.quorum) >= 0,
                     "Previous durable before: %s, new: %s", durableBefore, newDurableBefore);
 
-            minDurableBefore = DurableBefore.merge(minDurableBefore, addDurableBefore);
+            minDurableBefore = minDurableBefore.update(ranges, from, from);
             durableBefore = newDurableBefore;
         }
         finally
@@ -317,7 +317,7 @@ public class Node implements NodeCommandStoreService
 
     public AsyncResult<?> markDurable(Ranges ranges, TxnId majorityBefore, TxnId universalBefore)
     {
-        return markDurable(DurableBefore.create(ranges, majorityBefore, universalBefore));
+        return markDurable(DurableBefore.create(ranges, new DurableBefore.Entry(majorityBefore, universalBefore)));
     }
 
     public AsyncResult<?> markDurable(DurableBefore addDurableBefore)

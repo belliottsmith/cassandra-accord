@@ -30,7 +30,6 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommandStore;
 import accord.primitives.Ranges;
 import accord.primitives.SyncPoint;
-import accord.primitives.TxnId;
 import accord.utils.Timestamped;
 import accord.utils.async.AsyncResults.SettableResult;
 

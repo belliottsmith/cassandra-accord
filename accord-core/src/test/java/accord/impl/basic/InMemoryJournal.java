@@ -38,7 +38,6 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.Journal;
 import accord.api.Result;
-import accord.impl.AbstractReplayer;
 import accord.impl.CommandChange;
 import accord.impl.InMemoryCommandStore;
 import accord.local.Cleanup;

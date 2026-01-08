@@ -68,6 +68,7 @@ import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
+import static accord.api.ProtocolModifiers.Toggles.recoverReads;
 import static accord.api.ProtocolModifiers.Toggles.fastReadExecMayResendTxn;
 import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
@@ -401,20 +402,27 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         {
             if (!isPrivilegedVoteCommitting)
             {
-                stable.informStableOnceQuorum();
-                if (sendOnlyReadStableMessages())
+                if (txnId.isSomeRead() && !recoverReads())
                 {
-                    // send additional stable messages to record the transaction outcome
-                    Commit.Kind kind = commitKind();
-                    if (!candidates.isEmpty())
+                    adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, null, null, null);
+                }
+                else
+                {
+                    stable.informStableOnceQuorum();
+                    if (sendOnlyReadStableMessages())
                     {
-                        for (int i = 0, size = candidates.size() ; i < size ; ++i)
-                            sendStableOnly(candidates.get(i), kind);
-                    }
-                    if (unstableFastReads != null)
-                    {
-                        for (Node.Id to : unstableFastReads)
-                            sendStableOnly(to, kind);
+                        // send additional stable messages to record the transaction outcome
+                        Commit.Kind kind = commitKind();
+                        if (!candidates.isEmpty())
+                        {
+                            for (int i = 0, size = candidates.size() ; i < size ; ++i)
+                                sendStableOnly(candidates.get(i), kind);
+                        }
+                        if (unstableFastReads != null)
+                        {
+                            for (Node.Id to : unstableFastReads)
+                                sendStableOnly(to, kind);
+                        }
                     }
                 }
             }

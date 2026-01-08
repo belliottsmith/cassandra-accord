@@ -716,10 +716,10 @@ public class CommandsForKeyTest
         public Command current() { return current; }
 
         @Override
-        public void invalidate() {}
+        public void markUnsafe() {}
 
         @Override
-        public boolean invalidated() { return false; }
+        public boolean isUnsafe() { return false; }
 
         @Override
         protected void set(Command command)
@@ -1098,12 +1098,6 @@ public class CommandsForKeyTest
         public long maxConflictsPruneInterval()
         {
             return maxConflictsPruneInterval;
-        }
-
-        @Override
-        public boolean softReject(long unappliedCount, long cumulativeUnappliedAge)
-        {
-            return false;
         }
 
         @Override

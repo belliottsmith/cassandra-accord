@@ -69,22 +69,22 @@ public class Catchup
 
             if (!waitingOn.isEmpty())
             {
-                logger.info("{}: catching-up {}", safeStore.commandStore(), durableBefore.foldlWithBounds(waitingOn, (entry, sb, start, end) -> {
+                logger.info("{}: catching-up {}", safeStore.commandStore(), durableBefore.foldl(waitingOn, (entry, sb, p1, p2) -> {
                     if (sb.length() > 0)
                         sb.append(", ");
-                    if (start == null || end == null || entry == null)
+                    if (entry == null)
                     {
-                        sb.append("??(").append(start).append(',').append(end).append(',').append(entry).append(')');
+                        sb.append("??");
                     }
                     else
                     {
-                        TxnId txnId = entry.quorumBefore.withoutNonIdentityFlags();
-                        Range range = start.rangeFactory().newRange(start, end);
+                        TxnId txnId = entry.quorum.withoutNonIdentityFlags();
+                        Range range = entry.toPlainRange();
                         markWaiting(safeStore, txnId, range);
-                        sb.append(range).append(": ").append(entry.quorumBefore);
+                        sb.append(range).append(": ").append(entry.quorum);
                     }
                     return sb;
-                }, new StringBuilder(), alwaysFalse()));
+                }, new StringBuilder(), null, null));
                 safeStore.register(this);
                 return true;
             }
@@ -152,11 +152,11 @@ public class Catchup
 
     static Ranges removeRedundant(Ranges waitingOn, DurableBefore durableBefore, RedundantBefore redundantBefore, BiConsumer<Ranges, Ranges> removedAndRemaining)
     {
-        return durableBefore.foldlWithBounds(waitingOn, (DurableBefore.Entry entry, Ranges ranges, RoutingKey entryStart, RoutingKey entryEnd) -> {
-            Ranges entryRanges = Ranges.of(Range.of(entryStart, entryEnd));
+        return durableBefore.foldl(waitingOn, (DurableBefore.Entry entry, Ranges ranges, Object p1, Object p2) -> {
+            Ranges entryRanges = Ranges.of(entry);
             return redundantBefore.foldlWithBounds(entryRanges, (RedundantBefore.Bounds bounds, Ranges rs, RoutingKey boundStart, RoutingKey boundEnd) -> {
                 TxnId locallyRedundant = bounds.maxBound(LOCALLY_REDUNDANT);
-                if (locallyRedundant.compareTo(entry.quorumBefore) >= 0)
+                if (locallyRedundant.compareTo(entry.quorum) >= 0)
                 {
                     Ranges boundRanges = Ranges.of(Range.of(boundStart, boundEnd));
                     Ranges caughtUp = rs.slice(boundRanges, Minimal);
@@ -168,7 +168,7 @@ public class Catchup
                 }
                 return rs;
             }, ranges, alwaysFalse());
-        }, waitingOn, alwaysFalse());
+        }, waitingOn, null, null);
     }
 
     public static AsyncChain<Void> catchup(Node node)
