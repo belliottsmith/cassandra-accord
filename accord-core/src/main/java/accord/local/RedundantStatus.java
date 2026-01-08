@@ -88,10 +88,12 @@ public class RedundantStatus
          * which then execute in an unordered fashion.
          *
          * See also {@link SafeCommandStore#safeToReadAt()}.
+         * Being UNREADY on one epoch doesn't override another epoch where we have lost ownership
+         * (a sync point may still be waiting for it to apply)
          */
-        UNREADY(true, true, LT, LOCALLY_DEFUNCT),
+        UNREADY(false, true, LT, LOCALLY_DEFUNCT),
 
-        UNUSED(true, true, LT),
+        UNUSED(false, true, LT),
 
         /**
          * A point before which we do not know OUR OWN log

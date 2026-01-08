@@ -20,12 +20,63 @@ package accord.local;
 import accord.api.RoutingKey;
 import accord.primitives.Routables;
 import accord.primitives.Timestamp;
-import accord.primitives.Unseekables;
+import accord.primitives.TxnId;
 import accord.utils.BTreeReducingRangeMap;
+import accord.utils.btree.ReducingBTree;
 
 // TODO (expected): track read/write conflicts separately
-public class MaxConflicts extends BTreeReducingRangeMap<Timestamp>
+public class MaxConflicts extends BTreeReducingRangeMap<MaxConflicts.Entry>
 {
+    public static class Entry extends ReducingBTree.Entry<Entry>
+    {
+        public final Timestamp any, write;
+        public Entry(RoutingKey start, RoutingKey end, Timestamp any, Timestamp write)
+        {
+            super(start, end);
+            this.any = any;
+            this.write = write;
+        }
+
+        public Entry(Timestamp any, Timestamp write)
+        {
+            super(null, null, UnsafeMarker.NULLS);
+            this.any = any;
+            this.write = write;
+        }
+
+        @Override
+        public boolean equalsIgnoreRange(Entry that)
+        {
+            return this.any.equals(that.any) && this.write.equals(that.write);
+        }
+
+        @Override
+        public Entry with(RoutingKey start, RoutingKey end)
+        {
+            return new Entry(start, end, any, write);
+        }
+
+        public Timestamp mergeMax(Timestamp atLeast)
+        {
+            return Timestamp.mergeMax(atLeast, any);
+        }
+
+        public Timestamp mergeMaxWrite(Timestamp atLeast)
+        {
+            return Timestamp.mergeMax(atLeast, write);
+        }
+
+        public static Entry reduce(RoutingKey start, RoutingKey end, Entry a, Entry b)
+        {
+            Timestamp any = Timestamp.mergeMax(a.any, b.any);
+            Timestamp write = Timestamp.mergeMax(a.write, b.write);
+            if (any == a.any && write == a.write && a.equalsRange(start, end))
+                return a;
+            if (any.equals(b.any) && write.equals(b.write) && b.equalsRange(start, end))
+                return b;
+            return new Entry(start, end, any, write);
+        }
+    }
     public static final MaxConflicts EMPTY = new MaxConflicts();
 
     private MaxConflicts()
@@ -38,30 +89,39 @@ public class MaxConflicts extends BTreeReducingRangeMap<Timestamp>
         super(tree);
     }
 
-    Timestamp get(Routables<?> keysOrRanges)
+    Timestamp get(TxnId txnId, Routables<?> keysOrRanges)
     {
-        return foldl(keysOrRanges, Timestamp::mergeMax, Timestamp.NONE);
+        return txnId.isSomeRead() ? getMaxWrite(keysOrRanges) : getMax(keysOrRanges);
     }
 
-    public MaxConflicts update(Unseekables<?> keysOrRanges, Timestamp maxConflict)
+    Timestamp getMaxWrite(Routables<?> keysOrRanges)
+    {
+        return foldl(keysOrRanges, Entry::mergeMaxWrite, Timestamp.NONE);
+    }
+
+    Timestamp getMax(Routables<?> keysOrRanges)
+    {
+        return foldl(keysOrRanges, Entry::mergeMax, Timestamp.NONE);
+    }
+
+    public MaxConflicts update(TxnId txnId, Routables<?> keysOrRanges, Timestamp executeAt)
+    {
+        return update(keysOrRanges, executeAt, txnId.isSomeRead() ? Timestamp.NONE : executeAt);
+    }
+
+    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp all, Timestamp write)
     {
         // note: we use mergeMax to ensure we take the maximum epoch and hlc independently from any conflict
         //  this is particularly essential for propagating unique HLCs, so that bootstrap recipients don't
         //  begin serving reads too early
-        return update(this, keysOrRanges, maxConflict, Timestamp::mergeMax, MaxConflicts::new, Builder::new);
+        return add(this, keysOrRanges, new Entry(all, write), Entry::reduce, MaxConflicts::new);
     }
 
-    public static class Builder extends AbstractBoundariesBuilder<RoutingKey, Timestamp, MaxConflicts>
+    public static class Builder extends BTreeReducingRangeMap.Builder<Entry, MaxConflicts>
     {
-        public Builder(int capacity)
+        public MaxConflicts build()
         {
-            super(capacity);
-        }
-
-        @Override
-        protected MaxConflicts buildInternal(Object[] tree)
-        {
-            return new MaxConflicts(tree);
+            return build(MaxConflicts::new);
         }
     }
 }

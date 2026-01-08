@@ -161,7 +161,7 @@ public abstract class IntKey implements RoutableKey
         }
     }
 
-    public static class Range extends accord.primitives.Range.EndInclusive
+    public static class Range extends accord.primitives.Range
     {
         public Range(Routing start, Routing end)
         {

@@ -205,12 +205,6 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     }
 
     @Override
-    public boolean softReject(long unappliedCount, long cumulativeUnappliedAge)
-    {
-        return false;
-    }
-
-    @Override
     public int cfkPruneInterval()
     {
         return 1;

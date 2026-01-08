@@ -45,7 +45,7 @@ public class TopologyRange
     public void forEach(Consumer<Topology> forEach, long minEpoch, int count)
     {
         if (minEpoch == 0) // Bootstrap
-            minEpoch = this.min;
+            minEpoch = Math.max(1, this.min);
 
         long emptyUpTo = firstNonEmpty == -1 ? current : firstNonEmpty - 1;
         // Report empty epochs

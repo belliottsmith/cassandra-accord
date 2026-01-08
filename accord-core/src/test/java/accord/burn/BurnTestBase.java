@@ -439,6 +439,7 @@ public class BurnTestBase
             timeoutDelays = delayGenerator(rnd, 500, 800, 1000, 10000);
         }
 
+        Toggles.setRecoverReads(true);
         Toggles.setDataStoreDetectsFutureReads(random.nextBoolean());
         Toggles.setFastReadExec(random.pick(FastExec.values()));
         Toggles.setFastWriteExec(random.pick(FastExec.values()));

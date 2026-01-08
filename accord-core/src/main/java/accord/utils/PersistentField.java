@@ -130,6 +130,7 @@ public class PersistentField<Input, Saved>
         }
     }
 
+    static int counter;
     @GuardedBy("mergeLock")
     private void save()
     {
@@ -189,6 +190,7 @@ public class PersistentField<Input, Saved>
                     complete.pollFirst();
                     upd = true;
                 }
+                ++counter;
                 if (upd) set.accept(latest);
                 notifyOnDone.forEach(i -> i.setSuccess(null));
             }

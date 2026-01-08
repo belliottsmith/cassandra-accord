@@ -20,520 +20,314 @@ package accord.utils;
 import accord.api.RoutingKey;
 import accord.primitives.*;
 import accord.utils.btree.BTree;
-import accord.utils.btree.BTreeRemoval;
-import accord.utils.btree.UpdateFunction;
+import accord.utils.btree.ReducingBTree;
+import accord.utils.btree.ReducingBTree.Entry;
 
-import java.util.ArrayList;
-import java.util.Comparator;
+import java.io.Closeable;
+import java.util.Arrays;
 import java.util.Iterator;
-import java.util.List;
+import java.util.Spliterators;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
+
+import javax.annotation.Nonnull;
 
 import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
-import static accord.utils.SortedArrays.Search.FAST;
+import static accord.utils.Invariants.require;
+import static accord.utils.Invariants.requireArgument;
 
-public class BTreeReducingRangeMap<V> extends BTreeReducingIntervalMap<RoutingKey, V>
+/**
+ * Represents a map of ranges where precisely one value is bound to each point in the continuum of ranges,
+ * and a simple function is sufficient to merge values inserted to overlapping ranges.
+ */
+public class BTreeReducingRangeMap<E extends Entry<E>> implements Iterable<E>
 {
+    protected final Object[] tree;
+
     public BTreeReducingRangeMap()
     {
-        super();
+        this(BTree.empty());
     }
 
     protected BTreeReducingRangeMap(Object[] tree)
     {
-        super(tree);
+        this.tree = tree;
     }
 
-    public V foldl(Routables<?> routables, BiFunction<V, V, V> fold, V accumulator)
+    public boolean isEmpty()
     {
-        return foldl(routables, fold, accumulator, ignore -> false);
+        return BTree.isEmpty(tree);
     }
 
-    public <V2> V2 foldl(Routables<?> routables, BiFunction<V, V2, V2> fold, V2 accumulator, Predicate<V2> terminate)
+    public int size()
     {
-        return foldl(routables, (a, b, f, ignore) -> f.apply(a, b), accumulator, fold, null, terminate);
+        return BTree.size(tree);
     }
 
-    public <V2, P1, P2> V2 foldl(Routables<?> routables, QuadFunction<V, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
+    public E get(RoutingKey key)
+    {
+        requireArgument(null != key);
+        return BTree.find(tree, (RoutingKey k, Entry<?> e) -> Entry.compare(k, e), key);
+    }
+
+    public E foldl(BiFunction<E, E, E> reduce)
+    {
+        // TODO (expected): use BTree fold methods
+        require(!isEmpty());
+        Iterator<E> iter = iterator();
+        E result = iter.next();
+        while (iter.hasNext())
+            result = reduce.apply(result, iter.next());
+        return result;
+    }
+
+    public <V2> V2 foldl(BiFunction<E, V2, V2> reduce, V2 accumulator)
+    {
+        // TODO (expected): use BTree fold methods
+        require(!isEmpty());
+        for (E e : this)
+            accumulator = reduce.apply(e, accumulator);
+        return accumulator;
+    }
+
+    @Override
+    public String toString()
+    {
+        return toString(v -> true);
+    }
+
+    public String toString(Predicate<E> include)
+    {
+        if (isEmpty())
+            return "{}";
+
+        StringBuilder builder = new StringBuilder("{");
+
+        for (E e : this)
+        {
+            if (!include.test(e))
+                continue;
+
+            if (builder.length() > 1)
+                builder.append(", ");
+
+            builder.append(e);
+        }
+        return builder.append('}').toString();
+    }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        @SuppressWarnings("unchecked")
+        BTreeReducingRangeMap<E> that = (BTreeReducingRangeMap<E>) o;
+        return BTree.equals(this.tree, that.tree);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return 31 * BTree.hashCode(tree);
+    }
+
+    public E entryAt(int idx)
+    {
+        return BTree.findByIndex(tree, idx);
+    }
+
+    @Nonnull
+    public Iterator<E> iterator()
+    {
+        return BTree.iterator(tree);
+    }
+
+    public Stream<E> stream()
+    {
+        return StreamSupport.stream(Spliterators.spliteratorUnknownSize(iterator(), 0), false);
+    }
+
+    public <V2> V2 foldl(Routables<?> routables, BiFunction<E, V2, V2> fold, V2 accumulator)
+    {
+        return foldl(routables, (a, b, f, ignore) -> f.apply(a, b), accumulator, fold, null);
+    }
+
+    public <V2, P1> V2 foldl(Routables<?> routables, TriFunction<E, V2, P1, V2> fold, V2 accumulator, P1 p1)
+    {
+        return foldl(routables, (v, p, a, f) -> f.apply(v, p, a), accumulator, p1, fold);
+    }
+
+    public <V2, P1, P2> V2 foldl(Routables<?> routables, QuadFunction<E, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2)
     {
         switch (routables.domain())
         {
             default: throw new AssertionError("Unknown domain: " + routables.domain());
-            case Key: return foldl((AbstractKeys<?>) routables, fold, accumulator, p1, p2, terminate);
-            case Range: return foldl((AbstractRanges) routables, fold, accumulator, p1, p2, terminate);
+            case Key: return foldl((AbstractKeys<?>) routables, fold, accumulator, p1, p2);
+            case Range: return foldl((AbstractRanges) routables, fold, accumulator, p1, p2);
         }
     }
 
-    public <V2, P1, P2> V2 foldl(AbstractKeys<?> keys, QuadFunction<V, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
+    public <V2, P1, P2> V2 foldl(AbstractKeys<?> keys, QuadFunction<E, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2)
     {
         if (isEmpty())
             return accumulator;
 
-        int treeSize = BTree.size(tree),
-            keysSize = keys.size();
-
-        int i = keys.find(startAt(0), FAST);
-        if (i < 0) i = -1 - i;
-        else if (isEndInclusive()) ++i;
-
-        while (i < keysSize)
-        {
-            int idx = findIndex(keys.get(i));
-            if (idx < 0) idx = -2 - idx;
-            else if (isEndInclusive()) --idx;
-
-            if (idx >= treeSize - 1)
-                return accumulator;
-
-            int nexti = keys.findNext(i, startAt(idx + 1), FAST);
-            if (nexti < 0) nexti = -1 -nexti;
-            else if (isEndInclusive()) ++nexti;
-
-            Entry<RoutingKey, V> entry = entryAt(idx);
-            if (i != nexti && entry.hasValue() && entry.value() != null)
-            {
-                accumulator = fold.apply(entry.value(), accumulator, p1, p2);
-                if (terminate.test(accumulator))
-                    return accumulator;
-            }
-            i = nexti;
-        }
-        return accumulator;
+        return ReducingBTree.foldl(tree, keys, 0, keys.size(), fold, accumulator, p1, p2);
     }
 
-    public <V2, P1, P2> V2 foldl(AbstractRanges ranges, QuadFunction<V, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
+    public <V2, P1, P2> V2 foldl(AbstractRanges ranges, QuadFunction<E, V2, P1, P2, V2> fold, V2 accumulator, P1 p1, P2 p2)
     {
         if (isEmpty())
             return accumulator;
 
-        int treeSize = BTree.size(tree),
-            rangesSize = ranges.size();
+        return ReducingBTree.foldl(tree, ranges, 0, ranges.size(), fold, accumulator, p1, p2);
+    }
 
-        RoutingKey start = startAt(0);
-        int i = ranges.find(start, FAST);
-        if (i < 0) i = -1 - i;
-        else if (isEndInclusive() && ranges.get(i).end().equals(start)) ++i;
+    public <V2> V2 foldlWithDefault(Routables<?> routables, BiFunction<E, V2, V2> fold, E ifNull, V2 accumulator)
+    {
+        return foldlWithDefault(routables, (a, b, f, ignore) -> f.apply(a, b), ifNull, accumulator, fold, null);
+    }
 
-        while (i < rangesSize)
+    public <V2, P1> V2 foldlWithDefault(Routables<?> routables, TriFunction<E, V2, P1, V2> fold, E ifNull, V2 accumulator, P1 p1)
+    {
+        return foldlWithDefault(routables, (v, p, a, f) -> f.apply(v, p, a), ifNull, accumulator, p1, fold);
+    }
+
+    public <V2, P1, P2> V2 foldlWithDefault(Routables<?> routables, QuadFunction<E, V2, P1, P2, V2> fold, E ifNull, V2 accumulator, P1 p1, P2 p2)
+    {
+        switch (routables.domain())
         {
-            Range range = ranges.get(i++);
-
-            int startIdx = findIndex(range.start());
-            int startPos = startIdx < 0 ? (-1 - startIdx) : startIdx;
-            if (startIdx == treeSize - 1 || startPos == treeSize)
-                return accumulator;  // is last or out of bounds -> we are done
-            if (startIdx < 0) startPos = Math.max(0, startPos - 1); // inclusive
-
-            int endIdx = findIndex(range.end());
-            int endPos = endIdx < 0 ? (-1 - endIdx) : endIdx;
-            if (endPos == 0)
-                continue; // is first or out of bounds -> continue
-            endPos = Math.min(endPos - 1, treeSize - 2); // inclusive
-
-            Iterator<Entry<RoutingKey,V>> iterator =
-                BTree.iterator(tree, startPos, endPos, BTree.Dir.ASC);
-
-            while (iterator.hasNext())
-            {
-                Entry<RoutingKey, V> entry = iterator.next();
-                if (entry.hasValue() && entry.value() != null)
-                {
-                    accumulator = fold.apply(entry.value(), accumulator, p1, p2);
-                    if (terminate.test(accumulator))
-                        return accumulator;
-                }
-            }
-
-            if (endPos >= treeSize - 2)
-                return accumulator;
-
-            RoutingKey nextStart = startAt(endPos + 1);
-            i = ranges.findNext(i, nextStart, FAST);
-            if (i < 0) i = -1 - i;
-            else if (isEndInclusive() && ranges.get(i).end().equals(nextStart)) ++i;
+            default: throw new AssertionError("Unknown domain: " + routables.domain());
+            case Key: return foldlWithDefault((AbstractKeys<?>) routables, fold, ifNull, accumulator, p1, p2);
+            case Range: return foldlWithDefault((AbstractRanges) routables, fold, ifNull, accumulator, p1, p2);
         }
+    }
 
-        return accumulator;
+    // TODO (expected): should foldlWithDefault just have a default result?
+    public <V2, P1, P2> V2 foldlWithDefault(AbstractKeys<?> keys, QuadFunction<E, V2, P1, P2, V2> fold, E ifNull, V2 accumulator, P1 p1, P2 p2)
+    {
+        return ReducingBTree.foldlWithDefault(tree, keys, 0, keys.size(), fold, ifNull, accumulator, p1, p2);
+    }
+
+    public <V2, P1, P2> V2 foldlWithDefault(AbstractRanges ranges, QuadFunction<E, V2, P1, P2, V2> fold, E ifNull, V2 accumulator, P1 p1, P2 p2)
+    {
+        return ReducingBTree.foldlWithDefault(tree, ranges, 0, ranges.size(), fold, ifNull, accumulator, p1, p2);
     }
 
     public int findIndex(RoutableKey key)
     {
-        return BTree.findIndex(tree, EntryComparator.instance(), key);
+        return BTree.<Entry<?>, RoutableKey>findIndex(tree, Entry::compare, key);
     }
 
-    public static <V> BTreeReducingRangeMap<V> create(AbstractRanges ranges, V value)
+    public static <E extends Entry<E>, M> M create(Routables<?> rs, E value, Function<Object[], M> mapConstructor)
+    {
+        return create(rs, value, (r, e) -> e.with(r.start(), r.end()), mapConstructor);
+    }
+
+    public static <V, E extends Entry<E>, M> M create(Routables<?> rs, V value, BiFunction<Range, V, E> entryConstructor, Function<Object[], M> mapConstructor)
     {
         Invariants.requireArgument(value != null, "value is null");
 
-        if (ranges.isEmpty())
-            return new BTreeReducingRangeMap<>();
-
-        return create(ranges, value, BTreeReducingRangeMap.Builder::new);
-    }
-
-    public static <V, M extends BTreeReducingRangeMap<V>> M create(Unseekables<?> keysOrRanges, V value, BoundariesBuilderFactory<RoutingKey, V, M> builder)
-    {
-        switch (keysOrRanges.domain())
+        try (AnyBuilder<E, M> builder = new AnyBuilder<>())
         {
-            default: throw new AssertionError("Unhandled domain: " + keysOrRanges.domain());
-            case Range: return create((AbstractRanges) keysOrRanges, value, builder);
-            case Key: return create((AbstractUnseekableKeys) keysOrRanges, value, builder);
+            for (int i = 0, size = rs.size() ; i < size ; ++i)
+                builder.append(entryConstructor.apply(rs.get(i).toUnseekable().asRange(), value));
+            return builder.build(mapConstructor);
         }
     }
 
-    public static <V, M extends BTreeReducingRangeMap<V>> M create(Seekables<?, ?> keysOrRanges, V value, BoundariesBuilderFactory<RoutingKey, V, M> builder)
+    public static <E extends Entry<E>, M> M add(BTreeReducingRangeMap<E> existing, Routables<?> keysOrRanges, E value,
+                                                   QuadFunction<RoutingKey, RoutingKey, E, E, E> reduce,
+                                                   Function<Object[], M> mapConstructor)
     {
-        switch (keysOrRanges.domain())
-        {
-            default: throw new AssertionError("Unhandled domain: " + keysOrRanges.domain());
-            case Range: return create((AbstractRanges) keysOrRanges, value, builder);
-            case Key: return create((Keys) keysOrRanges, value, builder);
-        }
+        return merge(existing.tree, create(keysOrRanges, value, i -> i), reduce, mapConstructor);
     }
 
-    public static <V, M extends BTreeReducingRangeMap<V>> M create(AbstractRanges ranges, V value, BoundariesBuilderFactory<RoutingKey, V, M> factory)
+    public static <V, E extends Entry<E>, M> M add(BTreeReducingRangeMap<E> existing, Routables<?> keysOrRanges, V value,
+                                                   BiFunction<Range, V, E> entryConstructor,
+                                                   QuadFunction<RoutingKey, RoutingKey, E, E, E> reduce,
+                                                   Function<Object[], M> mapConstructor)
     {
-        Invariants.requireArgument(value != null, "value is null");
-
-        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(ranges.size() * 2);
-        for (Range cur : ranges)
-        {
-            builder.append(cur.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(cur.end(), null, (a, b) -> { throw new IllegalStateException(); });
-        }
-
-        return builder.build();
+        return merge(existing.tree, create(keysOrRanges, value, entryConstructor, i -> i), reduce, mapConstructor);
     }
 
-    public static <V, M extends BTreeReducingRangeMap<V>> M create(AbstractUnseekableKeys keys, V value, BoundariesBuilderFactory<RoutingKey, V, M> factory)
+    public static <E extends Entry<E>, M> M merge(BTreeReducingRangeMap<E> historyLeft, BTreeReducingRangeMap<E> historyRight, QuadFunction<RoutingKey, RoutingKey, E, E, E> reduce, Function<Object[], M> constructor)
     {
-        Invariants.requireArgument(value != null, "value is null");
-
-        AbstractBoundariesBuilder<RoutingKey, V, M> builder = factory.create(keys.size() * 2);
-        for (int i = 0 ; i < keys.size() ; ++i)
-        {
-            Range range = keys.get(i).asRange();
-            builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(range.end(), null, (a, b) -> { throw new IllegalStateException(); });
-        }
-
-        return builder.build();
+        return merge(historyLeft.tree, historyRight.tree, reduce, constructor);
     }
 
-    public static <V, M extends BTreeReducingRangeMap<V>> M create(Keys keys, V value, BoundariesBuilderFactory<RoutingKey, V, M> factory)
+    private static <E extends Entry<E>, M> M merge(Object[] left, Object[] right, QuadFunction<RoutingKey, RoutingKey, E, E, E> reduce, Function<Object[], M> constructor)
     {
-        Invariants.requireArgument(value != null, "value is null");
-
-        RoutingKey prev = keys.get(0).toUnseekable();
-        AbstractBoundariesBuilder<RoutingKey, V, M> builder;
-        {
-            Range range = prev.asRange();
-            builder = factory.create(keys.size() * 2);
-            builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(range.end(), null, (a, b) -> { throw new IllegalStateException(); });
-        }
-
-        for (int i = 1 ; i < keys.size() ; ++i)
-        {
-            RoutingKey unseekable = keys.get(i).toUnseekable();
-            if (unseekable.equals(prev))
-                continue;
-
-            Range range = unseekable.asRange();
-            builder.append(range.start(), value, (a, b) -> { throw new IllegalStateException(); });
-            builder.append(range.end(), null, (a, b) -> { throw new IllegalStateException(); });
-            prev = unseekable;
-        }
-
-        return builder.build();
+        return constructor.apply(ReducingBTree.merge(left, right, reduce));
     }
 
-    public static <V> BTreeReducingRangeMap<V> add(BTreeReducingRangeMap<V> existing, Ranges ranges, V value, BiFunction<V, V, V> reduce)
+    public Ranges ranges(Predicate<E> include)
     {
-        return update(existing, ranges, value, reduce, BTreeReducingRangeMap::new);
+        Range[] ranges = new Range[size()];
+        Iterator<E> iter = iterator();
+        int count = 0;
+        while (iter.hasNext())
+        {
+            E next = iter.next();
+            if (include.test(next))
+                ranges[count++] = next.toPlainRange();
+        }
+        if (count < ranges.length)
+            ranges = Arrays.copyOf(ranges, count);
+        return Ranges.ofSortedAndDeoverlapped(ranges);
     }
 
-    public static BTreeReducingRangeMap<Timestamp> add(BTreeReducingRangeMap<Timestamp> existing, Ranges ranges, Timestamp value)
+
+    public static class AnyBuilder<E extends Entry<E>, M> implements Closeable
     {
-        return add(existing, ranges, value, Timestamp::max);
-    }
+        private BTree.FastBuilder<E> treeBuilder;
+        private E prev;
 
-    public static <V> BTreeReducingRangeMap<V> merge(BTreeReducingRangeMap<V> historyLeft, BTreeReducingRangeMap<V> historyRight, BiFunction<V, V, V> reduce)
-    {
-        return BTreeReducingIntervalMap.merge(historyLeft, historyRight, reduce, BTreeReducingRangeMap.Builder::new);
-    }
-
-    /**
-     *  Update the range map retaining as much of the underlying BTree as possible
-     */
-    public static <M extends BTreeReducingRangeMap<V>, V> M update(
-        M map, Unseekables<?> keysOrRanges, V value, BiFunction<V, V, V> valueResolver,
-        Function<Object[], M> factory, BoundariesBuilderFactory<RoutingKey, V, M> builderFactory)
-    {
-        if (keysOrRanges.isEmpty())
-            return map;
-
-        if (map.isEmpty())
-            return create(keysOrRanges, value, builderFactory);
-
-        return update(map, keysOrRanges, value, valueResolver, factory);
-    }
-
-    private static <M extends BTreeReducingRangeMap<V>, V> M update(
-            M map, Unseekables<?> keysOrRanges, V value, BiFunction<V, V, V> valueResolver, Function<Object[], M> factory)
-    {
-        Accumulator<V> acc = accumulator();
-
-        int treeSize = BTree.size(map.tree);
-        boolean updatedEndEntry = false;
-
-        Range thisRange, nextRange = null;
-        for (int i = 0, rangesSize = keysOrRanges.size(); i < rangesSize; ++i)
+        protected AnyBuilder()
         {
-            thisRange = i == 0 ? keysOrRanges.get(i).toUnseekable().asRange() : nextRange;
-            nextRange = i < rangesSize - 1 ? keysOrRanges.get(i + 1).toUnseekable().asRange() : null;
-
-            assert thisRange != null;
-
-            int startIdx = map.findIndex(thisRange.start());
-            int   endIdx = map.findIndex(thisRange.end());
-
-            int startIns = startIdx >= 0 ? startIdx : -1 - startIdx;
-            int   endIns =   endIdx >= 0 ?   endIdx : -1 - endIdx;
-
-            boolean isRangeOpen = false;
-
-            if (startIdx < 0) // if we start on an existing bound, we don't have to do anything *here*
-            {
-                if (startIns == 0) // insert before first map entry
-                {
-                    acc.add(thisRange.start(), value);
-                    isRangeOpen = true;
-                }
-                else if (startIns == treeSize) // inserting past last map entry
-                {
-                    // when adding past current end, need to update the very last entry from having no value to having value = null
-                    if (!updatedEndEntry)
-                    {
-                        acc.add(map.startAt(treeSize - 1), null);
-                        updatedEndEntry = true;
-                    }
-                    acc.add(thisRange.start(), value);
-                    isRangeOpen = true;
-                }
-                else // start within the current map bounds
-                {
-                    // split the range we start in if our value is higher than the range's
-                    Entry<RoutingKey, V> entry = map.entryAt(startIns - 1);
-                    V supersedes = ifSupersedes(entry, value, valueResolver);
-                    if (supersedes != null)
-                    {
-                        acc.add(thisRange.start(), supersedes);
-                        isRangeOpen = true;
-                    }
-                }
-            }
-
-            if (startIns < endIns)
-            {
-                // start and end are inclusive with BTree iterator
-                Iterator<Entry<RoutingKey, V>> iter = BTree.iterator(map.tree, startIns, endIns - 1, BTree.Dir.ASC);
-                while (iter.hasNext())
-                {
-                    Entry<RoutingKey, V> entry = iter.next();
-                    V supersedes = ifSupersedes(entry, value, valueResolver);
-                    if (supersedes != null)
-                    {
-                        if (isRangeOpen)
-                            acc.remove(entry.start());
-                        else
-                            acc.add(entry.start(), supersedes);
-                    }
-                    isRangeOpen = supersedes != null;
-                }
-            }
-
-            if (endIdx < 0) // if we end on an existing bound, we don't have to do anything
-            {
-                if (endIns == 0) // range ends before first entry in the map
-                {
-                    acc.add(thisRange.end(), null);
-                }
-                else if (endIns == treeSize) // range ends after last entry in the map
-                {
-                    if (nextRange == null)
-                        acc.add(thisRange.end());
-                    else
-                        acc.add(thisRange.end(), null);
-
-                    updatedEndEntry = true;
-                }
-                else // ends between two existing map bounds
-                {
-                    // split the range we end in if our value is higher than the range's
-                    if (isRangeOpen) acc.add(thisRange.end(), map.valueAt(endIns - 1));
-                }
-            }
         }
 
-        Object[] updated = acc.apply(map.tree); acc.reuse();
-        return map.tree == updated
-             ? map
-             : factory.apply(updated);
-    }
-
-    private static final ThreadLocal<Accumulator<?>> accumulator = ThreadLocal.withInitial(Accumulator::new);
-
-    @SuppressWarnings("unchecked")
-    private static <V> Accumulator<V> accumulator()
-    {
-        return (Accumulator<V>) accumulator.get().reuse();
-    }
-
-    private static class Accumulator<V> implements BTree.Builder.QuickResolver<Entry<RoutingKey, V>>
-    {
-        private boolean isClean = true;
-
-        BTree.Builder<Entry<RoutingKey, V>> toAdd;
-        List<RoutingKey> toRemove;
-
-        void remove(RoutingKey key)
+        public AnyBuilder<E, M> append(E entry)
         {
-            isClean = false;
-            if (toRemove == null)
-                toRemove = new ArrayList<>();
-            toRemove.add(key);
-        }
-
-        void add(RoutingKey key)
-        {
-            isClean = false;
-            toAdd().add(Entry.make(key));
-        }
-
-        void add(RoutingKey key, V value)
-        {
-            isClean = false;
-            toAdd().add(Entry.make(key, value));
-        }
-
-        private BTree.Builder<Entry<RoutingKey, V>> toAdd()
-        {
-            if (toAdd == null)
-            {
-                toAdd = BTree.builder(Comparator.naturalOrder());
-                toAdd.setQuickResolver(this);
-            }
-            return toAdd;
-        }
-
-        Object[] apply(Object[] tree)
-        {
-            if (toRemove != null)
-                for (RoutingKey key : toRemove)
-                    tree = BTreeRemoval.remove(tree, EntryComparator.instance(), key);
-
-            if (toAdd != null && !toAdd.isEmpty())
-                tree = BTree.update(tree, toAdd.build(), Comparator.<Entry<RoutingKey, V>>naturalOrder(), UpdateFunction.noOpReplace());
-
-            return tree;
-        }
-
-        @Override
-        public Entry<RoutingKey, V> resolve(Entry<RoutingKey, V> left, Entry<RoutingKey, V> right)
-        {
-            if (left.hasValue() != right.hasValue())
-                return left.hasValue() ? left : right;
-
-            if (!left.hasValue())
-                return left;
-
-            if ((left.value() == null) != (right.value() == null))
-                return left.value() == null ? right : left;
-
-            return right;
-        }
-
-        Accumulator<V> reuse()
-        {
-            if (!isClean)
-            {
-                if (toRemove != null) toRemove.clear();
-                if (toAdd != null) toAdd.reuse();
-                isClean = true;
-            }
+            Invariants.requireArgument(prev == null || entry.start().compareTo(prev.end()) >= 0);
+            if (treeBuilder == null)
+                treeBuilder = BTree.fastBuilder();
+            treeBuilder.add(entry);
+            prev = entry;
             return this;
         }
-    }
 
-    private static <V> V ifSupersedes(Entry<RoutingKey, V> entry, V newValue, BiFunction<V, V, V> resolver)
-    {
-        if (!entry.hasValue())
-            return newValue;
-        V prevValue = entry.value();
-        if (prevValue == null || newValue == null)
-            return prevValue != null ? prevValue : newValue;
-        V result = resolver.apply(prevValue, newValue);
-        return result == prevValue ? null : result;
-    }
-
-    static class Builder<V> extends AbstractBoundariesBuilder<RoutingKey, V, BTreeReducingRangeMap<V>>
-    {
-        protected Builder(int capacity)
+        protected M build(Function<Object[], M> constructor)
         {
-            super(capacity);
+            return constructor.apply(treeBuilder == null ? BTree.empty() : treeBuilder.build());
         }
 
         @Override
-        protected BTreeReducingRangeMap<V> buildInternal(Object[] tree)
+        public void close()
         {
-            return new BTreeReducingRangeMap<>(tree);
+            if (treeBuilder != null)
+            {
+                treeBuilder.close();
+                treeBuilder = null;
+                prev = null;
+            }
         }
     }
 
     /**
      * A non-validating builder that expects all entries to be in correct order. For implementations' ser/de logic.
      */
-    public static class RawBuilder<V, M>
+    public abstract static class Builder<E extends Entry<E>, M> extends AnyBuilder<E, M>
     {
-        protected final boolean inclusiveEnds;
-        protected final int capacity;
+        public abstract M build();
+    }
 
-        private BTree.Builder<Entry<RoutingKey, V>> treeBuilder;
-        private boolean lastStartAppended;
-
-        public RawBuilder(boolean inclusiveEnds, int capacity)
-        {
-            this.inclusiveEnds = inclusiveEnds;
-            this.capacity = capacity;
-        }
-
-        public RawBuilder<V, M> append(RoutingKey start, V value)
-        {
-            return append(Entry.make(start, value));
-        }
-
-        public RawBuilder<V, M> append(RoutingKey start)
-        {
-            return append(Entry.make(start));
-        }
-
-        public RawBuilder<V, M> append(Entry<RoutingKey, V> entry)
-        {
-            Invariants.require(!lastStartAppended);
-            if (treeBuilder == null)
-                (treeBuilder = BTree.builder(Comparator.naturalOrder(), capacity + 1)).auto(false);
-            treeBuilder.add(entry);
-            lastStartAppended = !entry.hasValue();
-            return this;
-        }
-
-        public final M build(BiFunction<Boolean, Object[], M> constructor)
-        {
-            Invariants.require(lastStartAppended || treeBuilder == null);
-            return constructor.apply(inclusiveEnds, treeBuilder == null ? BTree.empty() : treeBuilder.build());
-        }
+    public static boolean isWellFormed(BTreeReducingRangeMap<?> map)
+    {
+        return ReducingBTree.isWellFormed(map.tree);
     }
 }

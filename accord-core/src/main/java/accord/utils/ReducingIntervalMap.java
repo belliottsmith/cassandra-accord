@@ -381,7 +381,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         if (left != null) left = builder.slice(start, end, left);
         if (right != null) right = builder.slice(start, end, right);
-        return left == null ? right : right == null ? left : builder.reduce(left, right);
+        return left == null ? right : right == null ? left : builder.slice(start, end, builder.reduce(left, right));
     }
 
     RangeIterator intersecting(K start, K end)

@@ -100,7 +100,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
             {
                 default: throw new UnhandledEnum(nack.kind);
                 case Redundant:
-                    finishWithFailureOverride(new Redundant(txnId, scope.homeKey(), executeAt));
+                    finishOnFailure(new Redundant(txnId, scope.homeKey(), executeAt));
                     break;
                 case Rejected:
                     recordFailure(from, Preempted.preempted(node.agent(), txnId, scope.homeKey()));

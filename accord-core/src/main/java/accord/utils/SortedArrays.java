@@ -41,7 +41,6 @@ import javax.annotation.Nullable;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.ArrayBuffers.uncached;
 import static accord.utils.Invariants.illegalState;
-import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FAST;
 
 // TODO (low priority, efficiency): improvements:
@@ -1348,7 +1347,7 @@ public class SortedArrays
      */
     public static <T1, T2 extends Comparable<? super T1>> int exponentialSearch(T1[] in, int from, int to, T2 find)
     {
-        return exponentialSearch(in, from, to, find, Comparable::compareTo, FAST);
+        return exponentialSearch(in, from, to, find, (T2 t2, T1 t1) -> t2.compareTo(t1), FAST);
     }
 
     public enum Search
@@ -1387,13 +1386,13 @@ public class SortedArrays
      *  FLOOR:      the entry preceding {@code find}, i.e. -2 - insertPos
      */
     @Inline
-    public static <T1, T2> int exponentialSearch(T2[] in, int from, int to, T1 find, AsymmetricComparator<T1, T2> comparator, Search op)
+    public static <T1, T2> int exponentialSearch(T1[] in, int from, int to, T2 find, AsymmetricComparator<? super T2, ? super T1> comparator, Search op)
     {
         int step = 0;
         loop: while (from + step < to)
         {
             int i = from + step;
-            int c = comparator.compare(find, in[i]);
+            int c = comparator.compare(find, (T1)in[i]);
             if (c < 0)
             {
                 to = i;
@@ -1423,6 +1422,59 @@ public class SortedArrays
             step = step * 2 + 1; // jump in perfect binary search increments
         }
         return binarySearch(in, from, to, find, comparator, op);
+    }
+
+    /**
+     * Given a sorted array and an item to locate, use exponentialSearch to find a position in the array containing the item,
+     * or if not present an index relative to the item's position were it to be inserted. exponentialSearch offers greater
+     * efficiency than binarySearch when recursing over a list sequentially, finding matches within it.
+     *
+     * If multiple entries match, return either:
+     *  FAST: the first we encounter
+     *  FLOOR: the highest matching array index
+     *  CEIL: the lowest matching array index
+     *
+     * If no entries match, similar to Arrays.binarySearch return either:
+     *  FAST, CEIL: the entry following {@code find}, i.e. -1 - insertPos (== Arrays.binarySearch)
+     *  FLOOR:      the entry preceding {@code find}, i.e. -2 - insertPos
+     */
+    @Inline
+    public static <T1, T2> int exponentialSearchWithCast(Object[] in, int from, int to, T2 find, AsymmetricComparator<? super T2, ? super T1> comparator, Search op)
+    {
+        int step = 0;
+        loop: while (from + step < to)
+        {
+            int i = from + step;
+            int c = comparator.compare(find, (T1)in[i]);
+            if (c < 0)
+            {
+                to = i;
+                break;
+            }
+            if (c > 0)
+            {
+                from = i + 1;
+            }
+            else
+            {
+                switch (op)
+                {
+                    case FAST:
+                        return i;
+
+                    case CEIL:
+                        if (step == 0)
+                            return from;
+                        to = i + 1; // could in theory avoid one extra comparison in this case, but would uglify things
+                        break loop;
+
+                    case FLOOR:
+                        from = i;
+                }
+            }
+            step = step * 2 + 1; // jump in perfect binary search increments
+        }
+        return binarySearchWithCast(in, from, to, find, comparator, op);
     }
 
     /**
@@ -1482,13 +1534,50 @@ public class SortedArrays
      *  FLOOR:      the entry preceding {@code find}, i.e. -2 - insertPos
      */
     @Inline
-    public static <T1, T2> int binarySearch(T2[] in, int from, int to, T1 find, AsymmetricComparator<T1, T2> comparator, Search op)
+    public static <T1, T2> int binarySearchWithCast(Object[] in, int from, int to, T2 find, AsymmetricComparator<T2, T1> comparator, Search op)
     {
         int found = -1;
         while (from < to)
         {
             int i = (from + to) >>> 1;
-            int c = comparator.compare(find, in[i]);
+            int c = comparator.compare(find, (T1)in[i]);
+            if (c < 0)
+            {
+                to = i;
+            }
+            else if (c > 0)
+            {
+                from = i + 1;
+            }
+            else
+            {
+                switch (op)
+                {
+                    default: throw new IllegalStateException();
+                    case FAST:
+                        return i;
+
+                    case CEIL:
+                        to = found = i;
+                        break;
+
+                    case FLOOR:
+                        found = i;
+                        from = i + 1;
+                }
+            }
+        }
+        return found >= 0 ? found : -1 - to;
+    }
+
+    @Inline
+    public static <T1, T2> int binarySearch(T1[] in, int from, int to, T2 find, AsymmetricComparator<T2, T1> comparator, Search op)
+    {
+        int found = -1;
+        while (from < to)
+        {
+            int i = (from + to) >>> 1;
+            int c = comparator.compare(find, (T1)in[i]);
             if (c < 0)
             {
                 to = i;

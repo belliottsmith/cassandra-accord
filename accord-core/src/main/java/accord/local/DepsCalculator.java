@@ -81,7 +81,7 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     //  in this case we can decide immediately if we have a unique hlc as we don't run the risk of other keys inserting some arbitrary timestamp
     //  [1] probably unsafe to use Accepted with ballot > 0, as there could be a timestamp battle, and the timestamp we see might not be the one that gets decided.
     private final long now;
-    private long unappliedAge;
+    private long sumUnappliedAge, maxUnappliedAge;
     private int unappliedCount;
     private long maxAppliedHlc;
 
@@ -102,7 +102,10 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
         if (status.compareTo(APPLIED) < 0)
         {
             unappliedCount += 1;
-            unappliedAge += Math.max(0, now - depId.hlc());
+            long age = Math.max(0, now - depId.hlc());
+            sumUnappliedAge += age;
+            if (age > maxUnappliedAge)
+                maxUnappliedAge = age;
         }
     }
 
@@ -129,7 +132,7 @@ public class DepsCalculator extends Deps.Builder implements CommandSummaries.Act
     public Timestamp executeAt(SafeCommand safeCommand, Node node)
     {
         Timestamp executeAt = safeCommand.current().executeAt();
-        if (unappliedCount > 0 && node.agent().softReject(unappliedCount, unappliedAge))
+        if (unappliedCount > 0 && node.agent().softReject(unappliedCount, maxUnappliedAge, sumUnappliedAge))
             executeAt = executeAt.addFlag(Timestamp.Flag.SOFT_REJECT);
         return executeAt;
     }

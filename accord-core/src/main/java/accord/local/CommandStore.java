@@ -453,13 +453,15 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         if (executeAt == null) return;
         if (prev != null && prev.executeAt() != null && prev.executeAt().compareToStrict(executeAt) >= 0 && !force) return;
         executeAt = executeAt.flattenUniqueHlc(); // this is what guarantees a bootstrap recipient can compute uniqueHlc safely
-        MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.participants().hasTouched(), executeAt);
+        MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.txnId(), updated.participants().hasTouched(), executeAt);
+        if (Invariants.isParanoid())
+            Invariants.require(updatedMaxConflicts.getMax(updated.participants().hasTouched()).compareTo(executeAt) >= 0);
         updateMaxConflicts(executeAt, updatedMaxConflicts);
     }
 
     protected void updateMaxConflicts(Ranges ranges, Timestamp executeAt)
     {
-        updateMaxConflicts(executeAt, maxConflicts.update(ranges, executeAt));
+        updateMaxConflicts(executeAt, maxConflicts.update(ranges, executeAt, executeAt));
     }
 
     protected void updateMaxConflicts(NavigableMap<? extends Timestamp, Ranges> map)
@@ -471,7 +473,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
             Timestamp at = e.getKey();
             if (at.compareTo(Timestamp.NONE) > 0)
             {
-                updated = updated.update(e.getValue(), at);
+                updated = updated.update(e.getValue(), at, at);
                 max = Timestamp.max(max, at);
             }
         }
@@ -489,7 +491,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
             Timestamp pruneBefore = pruneHlc > 0 ? Timestamp.fromValues(executeAt.epoch(), pruneHlc, executeAt.node) : null;
             Ranges ranges = rangesForEpoch.all();
             if (pruneBefore != null)
-                updatedMaxConflicts = updatedMaxConflicts.update(ranges, pruneBefore);
+                updatedMaxConflicts = updatedMaxConflicts.update(ranges, pruneBefore, pruneBefore);
 
             int prunedSize = updatedMaxConflicts.size();
             if (initialSize > 100 && prunedSize == initialSize)
@@ -558,12 +560,15 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
         boolean isExpired = safeStore.agent().rejectPreAccept(safeStore.node(), txnId) && !txnId.isSyncPoint();
         if (rejectBefore != null && !isExpired)
-            isExpired = rejectBefore.rejects(txnId, keys);
+        {
+            boolean rejects = rejectBefore.rejects(txnId, keys);
+            isExpired = rejects;
+        }
 
         if (isExpired)
             return node.uniqueTimestamp(txnId).asRejected();
 
-        Timestamp min = TxnId.mergeMax(txnId, maxConflicts.get(keys));
+        Timestamp min = TxnId.mergeMax(txnId, maxConflicts.get(txnId, keys));
         if (permitFastPath && txnId == min && txnId.epoch() >= node.epoch())
             return txnId;
 
@@ -573,9 +578,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     /**
      * We expect keys to be sliced to those owned by the replica in the coordination epoch
      */
-    public final Timestamp maxConflict(Routables<?> keys)
+    public final Timestamp maxConflict(TxnId txnId, Routables<?> keys)
     {
-        return maxConflicts.get(keys);
+        return maxConflicts.get(txnId, keys);
     }
 
     @Override
@@ -901,7 +906,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     protected void upsertedRedundantBefore(SafeCommandStore safeStore, RedundantBefore added)
     {
         TxnId clearWaitingBefore = redundantBefore.minShardAndLocallyAppliedBefore();
-        TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.quorumBefore);
+        TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.quorum);
         progressLog.clearBefore(safeStore, clearWaitingBefore, clearAllBefore);
         listeners.clearBefore(clearWaitingBefore);
     }
@@ -1270,7 +1275,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public void updateMinHlc(long minHlc)
     {
         Timestamp timestamp = Timestamp.fromValues(rangesForEpoch.epochs[rangesForEpoch.epochs.length - 1], minHlc, 0, node.id());
-        MaxConflicts updated = maxConflicts.update(rangesForEpoch.all(), timestamp);
+        MaxConflicts updated = maxConflicts.update(rangesForEpoch.all(), timestamp, timestamp);
         unsafeSetMaxConflicts(updated);
     }
 

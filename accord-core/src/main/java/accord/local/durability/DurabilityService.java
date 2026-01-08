@@ -175,7 +175,7 @@ public class DurabilityService implements TopologyListener
         if (canUseDurableBefore)
         {
             boolean isAlreadyMet = node.durableBefore().foldlWithDefault(request.ranges, (e, b, min, remote) -> {
-                return b && min.compareTo(remote == SyncRemote.All ? e.universalBefore : e.quorumBefore) <= 0;
+                return b && min.compareTo(remote == SyncRemote.All ? e.universal : e.quorum) <= 0;
             }, Entry.NONE, true, request.min, request.require.remote);
 
             if (isAlreadyMet)

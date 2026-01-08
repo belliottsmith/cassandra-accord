@@ -30,7 +30,6 @@ import accord.primitives.Route;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.utils.Functions;
 
 import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalState;

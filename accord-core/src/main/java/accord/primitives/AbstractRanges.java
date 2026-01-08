@@ -29,6 +29,7 @@ import com.google.common.collect.Iterators;
 import accord.api.Key;
 import accord.api.RoutingKey;
 import accord.utils.ArrayBuffers.ObjectBuffers;
+import accord.utils.AsymmetricComparator;
 import accord.utils.IndexedFoldToLong;
 import accord.utils.IndexedTriFold;
 import accord.utils.Invariants;
@@ -272,6 +273,11 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
         return SortedArrays.exponentialSearch(ranges, thisIndex, size(), find, Range::compareIntersecting, search);
     }
 
+    public final int findNext(int thisIndex, int thisLimit, Range find, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(ranges, thisIndex, thisLimit, find, Range::compareIntersecting, search);
+    }
+
     public final int find(RoutingKey find, SortedArrays.Search search)
     {
         return SortedArrays.binarySearch(ranges, 0, size(), find, (k, r) -> -r.compareTo(k), search);
@@ -280,6 +286,11 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     public final int findNext(int thisIndex, RoutingKey find, SortedArrays.Search search)
     {
         return SortedArrays.exponentialSearch(ranges, thisIndex, size(), find, (k, r) -> -r.compareTo(k), search);
+    }
+
+    public final int findNext(int thisIndex, int thisLimit, RoutingKey find, AsymmetricComparator<RoutingKey, Range> comparator, SortedArrays.Search search)
+    {
+        return SortedArrays.exponentialSearch(ranges, thisIndex, thisLimit, find, comparator, search);
     }
 
     public Ranges toRanges()

@@ -243,6 +243,10 @@ public class ProtocolModifiers
         public static boolean recoverPartialAcceptPhaseIfNoFastPath() { return recoverPartialAcceptPhaseIfNoFastPath; }
         public static void setRecoverPartialAcceptPhaseIfNoFastPath(boolean newSyncPointsRecoverPartialAcceptPhase) {recoverPartialAcceptPhaseIfNoFastPath = newSyncPointsRecoverPartialAcceptPhase; }
 
+        private static boolean recoverReads = false;
+        public static boolean recoverReads() { return recoverReads; }
+        public static void setRecoverReads(boolean newRecoverReads) { recoverReads = newRecoverReads; }
+
         private static boolean filterDuplicateDependenciesFromAcceptReply = true;
         public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
         public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }

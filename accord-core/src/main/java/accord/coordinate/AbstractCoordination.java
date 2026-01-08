@@ -116,9 +116,19 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         finishAndInvokeCallback(success, null);
     }
 
-    void finishWithFailureOverride(Throwable failure)
+    protected void finishWithFailure(Throwable failure)
     {
-        finishAndInvokeCallback(null, FailureAccumulator.append(failure, this.failure()));
+        finishAndInvokeCallback(null, failure);
+    }
+
+    protected void finishOnFailure(Throwable failure)
+    {
+        finishWithFailure(FailureAccumulator.append(failure, this.failure()));
+    }
+
+    void finishOnFailure()
+    {
+        finishWithFailure(FailureAccumulator.fail(node.agent(), this.failure(), txnId, Route.tryCastToRoute(scope())));
     }
 
     void finishOnExaustion()
@@ -126,15 +136,10 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         finishOnFailure();
     }
 
-    void finishOnFailure()
-    {
-        finishAndInvokeCallback(null, FailureAccumulator.fail(node.agent(), this.failure(), txnId, Route.tryCastToRoute(scope())));
-    }
-
     void awaitEpochExactToFinish(long epoch, Runnable runnable)
     {
         setFinishing();
-        node.withEpochExact(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), Rethrowable::rethrowable, () -> {
+        node.withEpochExact(epoch, executor, (ignore, failure) -> finishOnFailure(failure), Rethrowable::rethrowable, () -> {
             runnable.run();
             Invariants.require(isDone(), "%s", this);
         });
@@ -143,7 +148,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     void awaitEpochAtLeastToFinish(long epoch, Runnable runnable)
     {
         setFinishing();
-        node.withEpochAtLeast(epoch, executor, (ignore, failure) -> finishWithFailureOverride(failure), Rethrowable::rethrowable, () -> {
+        node.withEpochAtLeast(epoch, executor, (ignore, failure) -> finishOnFailure(failure), Rethrowable::rethrowable, () -> {
             runnable.run();
             Invariants.require(isDone(), "%s", this);
         });
@@ -153,7 +158,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     {
         setFinishing();
         await.begin((success, fail) -> {
-            if (fail != null) finishWithFailureOverride(fail);
+            if (fail != null) finishOnFailure(fail);
             else Invariants.require(isDone(), "%s", this);
         });
     }
@@ -320,7 +325,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         if (isDone())
             return false;
 
-        finishWithFailureOverride(Aborted.aborted(txnId, Route.tryCastToRoute(scope())));
+        finishOnFailure(Aborted.aborted(txnId, Route.tryCastToRoute(scope())));
         return true;
     }
 

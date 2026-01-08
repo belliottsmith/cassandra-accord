@@ -82,21 +82,21 @@ public class InMemorySafeCommand extends SafeCommand implements SafeState<Comman
     }
 
     @Override
-    public void invalidate()
+    public void markUnsafe()
     {
         lazy = INVALIDATED;
         original = INIT;
     }
 
     @Override
-    public boolean invalidated()
+    public boolean isUnsafe()
     {
         return lazy == INVALIDATED;
     }
 
     private void touch()
     {
-        if (invalidated())
+        if (isUnsafe())
             throw illegalState("Cannot access invalidated " + this);
         if (lazy != null)
         {

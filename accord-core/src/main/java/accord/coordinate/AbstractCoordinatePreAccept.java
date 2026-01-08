@@ -64,7 +64,7 @@ abstract class AbstractCoordinatePreAccept<Result, Reply extends accord.messages
         }
         catch (TopologyException t)
         {
-            finishWithFailureOverride(t);
+            finishOnFailure(t);
             return;
         }
         if (mismatch == null) onPreAccepted();

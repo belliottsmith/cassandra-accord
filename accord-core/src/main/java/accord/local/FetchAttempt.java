@@ -35,7 +35,6 @@ import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
 import static accord.primitives.Routables.Slice.Minimal;
-import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalState;
 
 abstract class FetchAttempt implements DataStore.FetchRanges, BiConsumer<Object, Throwable>

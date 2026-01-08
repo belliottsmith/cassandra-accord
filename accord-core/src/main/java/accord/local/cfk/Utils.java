@@ -23,6 +23,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.local.cfk.CommandsForKey.Unmanaged;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -279,7 +280,7 @@ class Utils
         int j;
         if (prevTxn.executeAt == prevTxn)
         {
-            j = SortedArrays.exponentialSearch(byId, minSearchIndex, byId.length, prevTxn, TxnInfo::compareTo, FAST);
+            j = SortedArrays.<TxnInfo, TxnInfo>exponentialSearch(byId, minSearchIndex, byId.length, prevTxn, TxnInfo::compareTo, FAST);
             minSearchIndex = 1 + j;
         }
         else
@@ -497,43 +498,43 @@ class Utils
         return cachedTxnIds().completeAndDiscard(buffer, count);
     }
 
-    static TxnId[] selectUnmanaged(CommandsForKey.Unmanaged[] unmanageds, int start, int end)
+    static TxnId[] selectUnmanaged(Unmanaged[] unmanageds, int start, int end)
     {
         Invariants.requireArgument(end >= start);
         TxnId[] notifyNotWaiting = new TxnId[end - start];
         for (int i = start ; i < end ; ++i)
         {
-            CommandsForKey.Unmanaged unmanaged = unmanageds[i];
+            Unmanaged unmanaged = unmanageds[i];
             TxnId txnId = unmanaged.txnId;
             notifyNotWaiting[i - start] = txnId;
         }
         return notifyNotWaiting;
     }
 
-    static CommandsForKey.Unmanaged[] removeUnmanaged(CommandsForKey.Unmanaged[] unmanageds, int start, int end)
+    static Unmanaged[] removeUnmanaged(Unmanaged[] unmanageds, int start, int end)
     {
-        CommandsForKey.Unmanaged[] newUnmanageds = new CommandsForKey.Unmanaged[unmanageds.length - (end - start)];
+        Unmanaged[] newUnmanageds = new Unmanaged[unmanageds.length - (end - start)];
         System.arraycopy(unmanageds, 0, newUnmanageds, 0, start);
         System.arraycopy(unmanageds, end, newUnmanageds, start, unmanageds.length - end);
         return newUnmanageds;
     }
 
-    static int findCommit(CommandsForKey.Unmanaged[] unmanageds, Timestamp exclusive)
+    static int findCommit(Unmanaged[] unmanageds, Timestamp exclusive)
     {
-        return -1 - SortedArrays.exponentialSearch(unmanageds, 0, unmanageds.length, exclusive, (f, v) -> {
+        return -1 - SortedArrays.<Unmanaged, Timestamp>exponentialSearch(unmanageds, 0, unmanageds.length, exclusive, (f, v) -> {
             if (v.pending != COMMIT) return -1;
             return f.compareTo(v.waitingUntil) > 0 ? 1 : -1;
         }, FAST);
     }
 
-    static int findFirstApply(CommandsForKey.Unmanaged[] unmanageds)
+    static int findFirstApply(Unmanaged[] unmanageds)
     {
-        return -1 - SortedArrays.binarySearch(unmanageds, 0, unmanageds.length, null, (f, v) -> v.pending == COMMIT ? 1 : -1, FAST);
+        return -1 - SortedArrays.<Unmanaged, Object>binarySearch(unmanageds, 0, unmanageds.length, null, (f, v) -> v.pending == COMMIT ? 1 : -1, FAST);
     }
 
-    static int findApply(CommandsForKey.Unmanaged[] unmanageds, int start, Timestamp inclusive)
+    static int findApply(Unmanaged[] unmanageds, int start, Timestamp inclusive)
     {
-        return -1 - SortedArrays.binarySearch(unmanageds, start, unmanageds.length, inclusive, (f, v) -> {
+        return -1 - SortedArrays.<Unmanaged, Timestamp>binarySearch(unmanageds, start, unmanageds.length, inclusive, (f, v) -> {
             return f.compareTo(v.waitingUntil) >= 0 ? 1 : -1;
         }, FAST);
     }

@@ -23,7 +23,6 @@ import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
 
-import accord.local.Node;
 import accord.local.Node.Id;
 import accord.primitives.Routable.Domain;
 import accord.primitives.Txn.Kind;
@@ -37,6 +36,7 @@ import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.Any;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.primitives.TxnId.MediumPath.NoMediumPath;
 import static accord.utils.Invariants.illegalArgument;
 
@@ -183,7 +183,18 @@ public class TxnId extends Timestamp
     public static final TxnId[] NO_TXNIDS = new TxnId[0];
 
     public static final TxnId NONE = new TxnId(0, 0, Id.NONE);
-    public static final TxnId MAX = new TxnId(Long.MAX_VALUE, Long.MAX_VALUE, Id.MAX);
+    public static final TxnId MAX;
+    static
+    {
+        Kind[] kinds = Kind.values();
+        Kind maxKind = kinds[kinds.length - 1];
+        Domain[] domains = Domain.values();
+        Domain maxDomain = domains[domains.length - 1];
+        Cardinality[] cardinalities = Cardinality.values();
+        Cardinality maxCardinality = cardinalities[cardinalities.length - 1];
+        MAX = new TxnId(MAX_EPOCH, Long.MAX_VALUE, MAX_FLAGS & ~KIND_AND_DOMAIN_FLAGS & ~maxCardinality.bit(),
+                        maxKind, maxDomain, maxCardinality, Id.MAX);
+    }
 
     public static TxnId fromBits(long msb, long lsb, Id node)
     {
