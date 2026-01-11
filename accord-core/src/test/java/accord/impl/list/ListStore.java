@@ -164,20 +164,12 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
         }
     }
 
-    private Scheduler.Scheduled scheduled;
-
-    /**
-     * Logical fsync-like operation: anything written to the store prior to the invocation of this method
-     * must be durable once the AsyncResult completes successfully. That is, a restart of the node must
-     * restore the DataStore to a state on or after the point at which snapshot was invoked.
-     */
-    @Override
-    public void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore onSuccess)
+    public void ensureDurable(CommandStore commandStore, RedundantBefore onSuccess, int flags)
     {
         if (commandStore.node().isReplaying())
             return;
         snapshot(false).invoke((success, fail) -> {
-            if (fail == null) commandStore.execute((PreLoadContext.Empty)()->"Report DataStore Durable", safeStore -> safeStore.upsertRedundantBefore(onSuccess));
+            if (fail == null) commandStore.execute((PreLoadContext.Empty)()->"Report DataStore Durable", safeStore -> safeStore.reportDurable(onSuccess, flags));
         });
     }
 
