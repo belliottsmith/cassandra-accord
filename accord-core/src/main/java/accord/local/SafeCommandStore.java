@@ -561,6 +561,10 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
      */
 
     public abstract void upsertRedundantBefore(RedundantBefore addRedundantBefore);
+    public void reportDurable(RedundantBefore addRedundantBefore, int flags)
+    {
+        upsertRedundantBefore(addRedundantBefore);
+    }
 
     protected void unsafeSetRedundantBefore(RedundantBefore newRedundantBefore)
     {

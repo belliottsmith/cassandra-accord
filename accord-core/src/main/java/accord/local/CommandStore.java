@@ -538,7 +538,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         safeStore.upsertRedundantBefore(addNow);
         RedundantBefore addOnDataStoreDurable = RedundantBefore.create(ranges, txnId, LOCALLY_DURABLE_TO_DATA_STORE_ONLY);
         RedundantBefore addOnCommandStoreDurable = RedundantBefore.create(ranges, txnId, LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY);
-        dataStore.ensureDurable(this, ranges, addOnDataStoreDurable);
+        dataStore.ensureDurable(this, ranges, addOnDataStoreDurable, 0);
         ensureDurable(ranges, addOnCommandStoreDurable);
     }
 
@@ -878,7 +878,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         if (globalSyncId.is(HLC_BOUND) || !requiresUniqueHlcs())
         {
             RedundantBefore addOnDataStoreDurable = RedundantBefore.create(slicedRanges, globalSyncId, GC_BEFORE_AND_LOCALLY_DURABLE);
-            dataStore.ensureDurable(this, slicedRanges, addOnDataStoreDurable);
+            dataStore.ensureDurable(this, slicedRanges, addOnDataStoreDurable, 0);
         }
     }
 
