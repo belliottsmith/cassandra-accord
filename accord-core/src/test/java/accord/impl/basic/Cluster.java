@@ -751,7 +751,7 @@ public class Cluster
 
                 Journal.TopologyUpdate lastUpdate = null;
                 {
-                    Iterator<? extends Journal.TopologyUpdate> iter = journal.replayTopologies().iterator();
+                    Iterator<? extends Journal.TopologyUpdate> iter = journal.loadTopologies().iterator();
                     while (iter.hasNext())
                     {
                         Journal.TopologyUpdate update = iter.next();

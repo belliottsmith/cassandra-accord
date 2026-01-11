@@ -62,8 +62,16 @@ public interface Journal
     Command.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
-    List<? extends TopologyUpdate> replayTopologies();
+    List<? extends TopologyUpdate> loadTopologies();
     void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush);
+
+    RedundantBefore loadRedundantBefore(int store);
+    NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int store);
+    NavigableMap<Timestamp, Ranges> loadSafeToRead(int store);
+    CommandStores.RangesForEpoch loadRangesForEpoch(int store);
+    void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
+
+    Persister<DurableBefore, DurableBefore> durableBeforePersister();
 
     void purge(CommandStores commandStores, EpochSupplier minEpoch);
 
@@ -72,16 +80,7 @@ public interface Journal
      * any exceptions during replay.
      */
     boolean replay(CommandStores commandStores, Object param);
-
-    RedundantBefore loadRedundantBefore(int store);
-    NavigableMap<TxnId, Ranges> loadBootstrapBeganAt(int store);
-    NavigableMap<Timestamp, Ranges> loadSafeToRead(int store);
-    CommandStores.RangesForEpoch loadRangesForEpoch(int store);
-
-    Persister<DurableBefore, DurableBefore> durableBeforePersister();
-
-    void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
-
+    
     class TopologyUpdate
     {
         public final Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores;

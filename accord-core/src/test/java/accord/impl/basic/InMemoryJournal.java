@@ -252,7 +252,7 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public List<TopologyUpdate> replayTopologies()
+    public List<TopologyUpdate> loadTopologies()
     {
         return new ArrayList<>(topologyUpdates);
     }

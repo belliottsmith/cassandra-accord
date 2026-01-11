@@ -141,9 +141,21 @@ public interface DataStore
     FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges callback, FetchKind kind);
 
     /**
+     * Logical fsync-like operation: anything within the provided ranges written to the store prior to the
+     * invocation of this method must be durable once the AsyncResult completes successfully. That is, a restart of the node must
+     * restore the DataStore to a state on or after the point at which snapshot was invoked.
+     *
+     * TODO (desired): clunky to pass integer flags around; is there a neater implementation-agnostic alternative?
+     */
+    default void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore reportOnSuccess, int flags)
+    {
+        ensureDurable(commandStore, reportOnSuccess, flags);
+    }
+
+    /**
      * Logical fsync-like operation: anything written to the store prior to the invocation of this method
      * must be durable once the AsyncResult completes successfully. That is, a restart of the node must
      * restore the DataStore to a state on or after the point at which snapshot was invoked.
      */
-    void ensureDurable(CommandStore commandStore, Ranges ranges, RedundantBefore reportOnSuccess);
+    void ensureDurable(CommandStore commandStore, RedundantBefore reportOnSuccess, int flags);
 }
