@@ -915,25 +915,40 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     public void setMode(ModeFlag flag)
     {
         commandStore.execute((PreLoadContext.Empty)() -> "Set ProgressLog ModeFlag", safeStore -> {
-            modeFlags |= TinyEnumSet.encode(flag);
-            if (flag == ModeFlag.HOME_EXPECTS_LOCALLY_APPLIED)
-            {
-                for (TxnState state : BTree.<TxnState>iterable(stateMap))
-                {
-                    // clear the home state and let normal processing decide what to do
-                    if (state.homePhase() == Done)
-                        state.set(safeStore, this, Undecided, Queued);
-                }
-            }
+            setModeExclusive(safeStore, flag);
         });
+    }
+
+    public boolean setModeExclusive(SafeCommandStore safeStore, ModeFlag flag)
+    {
+        int encoded = TinyEnumSet.encode(flag);
+        if ((modeFlags & encoded) == encoded)
+            return false;
+
+        modeFlags |= TinyEnumSet.encode(flag);
+        if (flag == ModeFlag.HOME_EXPECTS_LOCALLY_APPLIED)
+        {
+            for (TxnState state : BTree.<TxnState>iterable(stateMap))
+            {
+                // clear the home state and let normal processing decide what to do
+                if (state.homePhase() == Done)
+                    state.set(safeStore, this, Undecided, Queued);
+            }
+        }
+        return true;
     }
 
     @VisibleForImplementation
     public void unsetMode(ModeFlag flag)
     {
         commandStore.executeMaybeImmediately(() -> {
-            modeFlags &= ~TinyEnumSet.encode(flag);
+            unsetModeExclusive(flag);
         });
+    }
+
+    public void unsetModeExclusive(ModeFlag flag)
+    {
+        modeFlags &= ~TinyEnumSet.encode(flag);
     }
 
     boolean isCatchingUp()
