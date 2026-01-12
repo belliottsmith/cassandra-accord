@@ -404,7 +404,7 @@ public class RemoteListenersTest
         }
 
         @Override
-        public Journal.Replayer replayer()
+        public Journal.Replayer replayer(AbstractReplayer.Mode mode)
         {
             throw new UnsupportedOperationException();
         }

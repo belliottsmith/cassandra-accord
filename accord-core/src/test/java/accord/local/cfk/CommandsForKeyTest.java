@@ -49,6 +49,7 @@ import accord.api.Read;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.Update;
+import accord.impl.AbstractReplayer;
 import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultLocalListeners.DefaultNotifySink;
 import accord.impl.DefaultRemoteListeners;
@@ -993,7 +994,7 @@ public class CommandsForKeyTest
             return true;
         }
 
-        public Journal.Replayer replayer()
+        public Journal.Replayer replayer(AbstractReplayer.Mode mode)
         {
             throw new UnsupportedOperationException();
         }

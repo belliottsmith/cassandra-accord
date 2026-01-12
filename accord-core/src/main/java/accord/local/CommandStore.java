@@ -35,6 +35,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
+import accord.impl.AbstractReplayer;
 import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedMap;
@@ -222,7 +223,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         return id;
     }
 
-    public abstract Journal.Replayer replayer();
+    public abstract Journal.Replayer replayer(AbstractReplayer.Mode mode);
     // expected to invoke safeStore.upsertRedundantBefore at some future point, when the commandStore state is durably persisted
     protected abstract void ensureDurable(Ranges ranges, RedundantBefore onCommandStoreDurable);
 

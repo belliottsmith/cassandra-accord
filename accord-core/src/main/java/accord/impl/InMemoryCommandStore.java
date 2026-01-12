@@ -1234,7 +1234,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         hasResumedBootstraps = false;
     }
 
-    public Journal.Replayer replayer()
+    public Journal.Replayer replayer(AbstractReplayer.Mode mode)
     {
         return new CommandReplayer(this);
     }

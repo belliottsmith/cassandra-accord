@@ -1236,17 +1236,22 @@ public class Commands
         boolean acceptInternal(SafeCommandStore safeStore)
         {
             SafeCommand waitingSafe = safeStore.get(waitingId);
+            PartialDeps partialDeps;
+            {
+                Command waiting = waitingSafe.current();
+                if (waiting.saveStatus().compareTo(Applying) >= 0)
+                    return false;
+
+                partialDeps = waiting.partialDeps();
+                Invariants.require(partialDeps != null, "Trying to execute command without partialDeps: %s", waiting);
+            }
+
             SafeCommand depSafe = null;
             if (loadDepId != null)
             {
                 depSafe = safeStore.ifInitialised(loadDepId);
                 if (depSafe == null) // TODO (required): slice to waiting.participants().waitsOn? can simplify method
-                {
-                    Command waiting = waitingSafe.current();
-                    if (waiting.saveStatus().compareTo(Applying) >= 0)
-                        return false; // nothing to do
-                    depSafe = initialiseOrRemoveDependency(safeStore, waitingSafe, loadDepId, waiting.partialDeps().participants(loadDepId));
-                }
+                    depSafe = initialiseOrRemoveDependency(safeStore, waitingSafe, loadDepId, partialDeps.participants(loadDepId));
             }
 
             while (true)
@@ -1257,7 +1262,7 @@ public class Commands
 
                 if (depSafe == null)
                 {
-                    WaitingOn waitingOn = waiting.asCommitted().waitingOn();
+                    WaitingOn waitingOn = waiting.waitingOn();
                     TxnId directlyBlockedOn = waitingOn.nextWaitingOn();
                     if (directlyBlockedOn == null)
                     {
@@ -1300,7 +1305,7 @@ public class Commands
                     if (depExecution.compareTo(WaitingToExecute) < 0 && dep.participants().owns().isEmpty())
                     {
                         // TODO (desired): slightly costly to invert a large partialDeps collection
-                        participants = waiting.partialDeps().participants(dep.txnId());
+                        participants = partialDeps.participants(dep.txnId());
                         Participants<?> waitsOn = participants.intersecting(waiting.participants().stillWaitsOn(), Minimal);
 
                         depSafe = maybeCleanupRedundantDependency(safeStore, waitingSafe, depSafe, waitsOn);
@@ -1352,7 +1357,7 @@ public class Commands
                         case CleaningUp:
                             updateDependencyAndMaybeExecute(safeStore, waitingSafe, depSafe, false);
                             waiting = waitingSafe.current();
-                            Invariants.require(waiting.saveStatus().compareTo(Applying) >= 0 || !waiting.asCommitted().waitingOn().isWaitingOn(dep.txnId()));
+                            Invariants.require(waiting.saveStatus().compareTo(Applying) >= 0 || !waiting.waitingOn().isWaitingOn(dep.txnId()));
                             depSafe = null;
                     }
                 }
