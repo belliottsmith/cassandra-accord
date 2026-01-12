@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.Journal;
 import accord.api.Result;
+import accord.impl.AbstractReplayer;
 import accord.impl.CommandChange;
 import accord.impl.InMemoryCommandStore;
 import accord.local.Cleanup;
@@ -70,6 +71,7 @@ import org.agrona.collections.Int2ObjectHashMap;
 import static accord.api.Journal.Load.ALL;
 import static accord.api.Journal.Load.MINIMAL;
 import static accord.api.Journal.Load.MINIMAL_WITH_DEPS;
+import static accord.impl.AbstractReplayer.Mode.PART_NON_DURABLE;
 import static accord.impl.CommandChange.Field;
 import static accord.impl.CommandChange.Field.ACCEPTED;
 import static accord.impl.CommandChange.Field.CLEANUP;
@@ -632,7 +634,7 @@ public class InMemoryJournal implements Journal
             Map<TxnId, List<Diff>> diffs = new TreeMap<>();
 
             InMemoryCommandStore commandStore = (InMemoryCommandStore) commandStores.forId(commandStoreId);
-            Replayer replayer = commandStore.replayer();
+            Replayer replayer = commandStore.replayer(PART_NON_DURABLE);
 
             for (Map.Entry<TxnId, Diffs> e : diffEntry.getValue().entrySet())
                 diffs.put(e.getKey(), e.getValue().sorted(true));

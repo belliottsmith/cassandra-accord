@@ -86,6 +86,15 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
         return i >= 0 && i < size && heap[i] == node;
     }
 
+    protected boolean removeIfContains(N node)
+    {
+        int i = node.heapIndex;
+        if (i < 0 || i >= heap.length || heap[i] != node)
+            return false;
+        removeInternal(i, node);
+        return true;
+    }
+
     /**
      * remove; can be used as a simple list
      */
@@ -93,6 +102,11 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
     {
         int i = node.heapIndex;
         Invariants.requireArgument(i >= 0 && i < heap.length && heap[i] == node);
+        removeInternal(i, node);
+    }
+
+    private void removeInternal(int i, N node)
+    {
         if (size > 1)
         {
             N tail = (N) heap[--size];
