@@ -269,7 +269,7 @@ public class Topology
 
     public Topology cloneEquivalentWithEpoch(long epoch)
     {
-        return new Topology(epoch, removed, hardRemoved, stale, shards);
+        return new Topology(null, epoch, shards, ranges, removed, hardRemoved, stale, nodes, nodeLookup, ranges, supersetIndexes);
     }
 
     @Override

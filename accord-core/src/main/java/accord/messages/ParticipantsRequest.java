@@ -131,7 +131,6 @@ public abstract class ParticipantsRequest<P extends Participants<?>, R extends R
         if (i == mi)
             return topologies.oldestEpoch();
 
-
         Ranges latest;
         {
             Topology mostRecent = topologies.get(i - 1);
