@@ -94,7 +94,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
     final DurabilityResult partialResult;
     final DurabilityTracker tracker;
     final int attempt;
-    boolean reportedQuorum, reportedMinorityQuorum;
+    boolean reportedQuorum, reportedMinorityQuorum, knownToSelf;
     long retryInFutureEpoch;
 
     protected ExecuteSyncPoint(Node node, SequentialAsyncExecutor executor, Topologies topologies, PartialSyncPoint syncPoint, int attempt, DurabilityResults callback)
@@ -155,6 +155,8 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
                     return;
 
                 case Waiting:
+                    if (from.equals(node.id()))
+                        knownToSelf = true;
             }
         }
         else
@@ -258,7 +260,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
 
     DurabilityResult current()
     {
-        DurabilityResult cur = new DurabilityResult(syncPoint, tracker.results(node.id()), failure());
+        DurabilityResult cur = new DurabilityResult(syncPoint, tracker.results(node.id(), knownToSelf), failure());
         if (partialResult == null)
             return cur;
         return partialResult.min(cur);

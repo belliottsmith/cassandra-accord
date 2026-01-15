@@ -1101,6 +1101,12 @@ public class CommandsForKeyTest
         }
 
         @Override
+        public boolean softReject(long unappliedCount, long cumulativeUnappliedAge)
+        {
+            return false;
+        }
+
+        @Override
         public Txn emptySystemTxn(Txn.Kind kind, Domain domain)
         {
             throw new UnsupportedOperationException();

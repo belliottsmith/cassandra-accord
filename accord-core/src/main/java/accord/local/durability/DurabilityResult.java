@@ -74,6 +74,6 @@ public class DurabilityResult
             if (require.isSatisfiedBy(l))
                 rs = rs.with(Ranges.of(s.rangeFactory().newRange(s, e)));
             return rs;
-        }, Ranges.EMPTY, ignore -> false);
+        }, Ranges.EMPTY);
     }
 }

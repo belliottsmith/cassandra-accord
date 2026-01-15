@@ -110,6 +110,12 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     }
 
     @Override
+    public boolean softReject(long unappliedCount, long cumulativeUnappliedAge)
+    {
+        return false;
+    }
+
+    @Override
     public int cfkPruneInterval()
     {
         return 1;

@@ -138,7 +138,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
             case Retired:
                 ExecuteFlags flags;
                 Deps deps;
-                try (DepsCalculator calculator = new DepsCalculator())
+                try (DepsCalculator calculator = new DepsCalculator(txnId))
                 {
                     deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
                     if (deps == null)

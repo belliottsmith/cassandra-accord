@@ -18,6 +18,7 @@
 
 package accord.local;
 
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
@@ -113,6 +114,7 @@ public class Node implements NodeCommandStoreService
 {
     public static class Id implements Comparable<Id>
     {
+        private static final ConcurrentHashMap<Id, Id> interned = new ConcurrentHashMap<>();
         public static final Id NONE = new Id(0);
         public static final Id MAX = new Id(Integer.MAX_VALUE);
 
@@ -150,6 +152,11 @@ public class Node implements NodeCommandStoreService
         public String toString()
         {
             return Integer.toString(id);
+        }
+
+        public Id intern()
+        {
+            return interned.computeIfAbsent(this, Function.identity());
         }
     }
 

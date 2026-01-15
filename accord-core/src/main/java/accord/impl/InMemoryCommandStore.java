@@ -363,7 +363,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                 if (fail == null)
                 {
                     execute((Empty)() -> "Report CommandStore Durable", safeStore -> {
-                        safeStore.upsertRedundantBefore(onCommandStoreDurable);
+                        safeStore.reportDurable(onCommandStoreDurable, 0);
                     });
                 }
             });
@@ -831,9 +831,9 @@ public abstract class InMemoryCommandStore extends CommandStore
                 return commandsForRanges;
 
             Invariants.require(context.loadKeysFor() != WRITE);
-            // TODO (now): reuse existing loader
             MaxDecidedRX maxDecidedRX = commandStore().unsafeGetMaxDecidedRX();
-            SummaryLoader loader = SummaryLoader.loader(redundantBefore(), maxDecidedRX, context);
+            SummaryLoader loader = cfrLoad != null ? cfrLoad.loader
+                                                   : SummaryLoader.loader(redundantBefore(), maxDecidedRX, context);
 
             TreeMap<Timestamp, Summary> loaded = new TreeMap<>();
             commandStore().commandsForRanges.populateMinFutureRx(loader);

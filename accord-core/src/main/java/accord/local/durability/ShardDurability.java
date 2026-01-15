@@ -316,7 +316,7 @@ public class ShardDurability
                         sb.append("]:");
                         sb.append(entry);
                         return sb;
-                    }, new StringBuilder(), ignore -> false).toString();
+                    }, new StringBuilder()).toString();
                 logger.debug("{}", report);
             }
             else if (min.equals(cycleMin))

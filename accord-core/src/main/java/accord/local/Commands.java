@@ -779,14 +779,18 @@ public class Commands
             return false;
         }
 
-        WaitingOn waitingOn = command.asCommitted().waitingOn();
+        WaitingOn waitingOn = command.waitingOn();
         if (waitingOn.isWaiting())
         {
-            if (alwaysNotifyListeners)
-                safeStore.notifyListeners(safeCommand, command);
+            if (!removeRedundantDependencies(safeStore, safeCommand) || waitingOn.isWaiting())
+            {
+                if (alwaysNotifyListeners)
+                    safeStore.notifyListeners(safeCommand, command);
 
-            if (notifyWaitingOn && waitingOn.isWaitingOnCommand())
-                adapter.notifyWaiting(safeStore, safeCommand);
+                if (notifyWaitingOn && waitingOn.isWaitingOnCommand())
+                    adapter.notifyWaiting(safeStore, safeCommand);
+            }
+
             return false;
         }
 
@@ -836,8 +840,8 @@ public class Commands
     protected static Update updateWaitingOn(SafeCommandStore safeStore, ICommand waiting, Timestamp executeAt, WaitingOn.Update initialise)
     {
         RedundantBefore redundantBefore = safeStore.redundantBefore();
-        TxnId minWaitingOnTxnId = initialise.minWaitingOnTxnId();
-        if (minWaitingOnTxnId != null && redundantBefore.hasLocallyRedundantDependencies(initialise.minWaitingOnTxnId(), executeAt, waiting.participants().waitsOn()))
+        TxnId minWaitingOnTxnId = initialise.minWaitingOnTxn();
+        if (minWaitingOnTxnId != null && redundantBefore.hasLocallyRedundantDependencies(initialise.minWaitingOnTxn(), executeAt, waiting.participants().waitsOn()))
             redundantBefore.removeRedundantDependencies(waiting.participants().waitsOn(), initialise);
 
         initialise.forEachWaitingOnId(safeStore, initialise, waiting, executeAt, (store, upd, w, exec, i) -> {
@@ -856,7 +860,6 @@ public class Commands
 
             if (safeCfk.current().hasUniqueHlcAndIsReadyToExecute(cmd.txnId(), cmd.executeAt(), cmd.partialDeps()))
                 upd.removeWaitingOnKey(i);
-
         });
 
         return initialise;
@@ -922,7 +925,7 @@ public class Commands
             Participants<?> waitsOn = participants.intersecting(waiting.participants().stillWaitsOn(), Minimal);
             RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, waitsOn);
 
-            if (status.all(LOCALLY_DEFUNCT))
+            if (waitsOn.isEmpty() || status.all(LOCALLY_DEFUNCT))
                 return false;
 
             throw illegalState("We have a dependency (" + dependency + ") to wait on, but have already finished waiting (" + waiting + ")");
@@ -949,7 +952,7 @@ public class Commands
             Command pred = predecessor.current();
             if (pred.hasBeen(PreCommitted))
             {
-                TxnId nextWaitingOn = command.waitingOn().nextWaitingOn();
+                TxnId nextWaitingOn = command.waitingOn().nextWaitingOnTxn();
                 if (nextWaitingOn != null && nextWaitingOn.equals(pred.txnId()) && !pred.hasBeen(PreApplied))
                     safeStore.progressLog().waiting(CanApply, safeStore, predecessor, null, null, null);
             }
@@ -1253,6 +1256,10 @@ public class Commands
                 if (depSafe == null) // TODO (required): slice to waiting.participants().waitsOn? can simplify method
                     depSafe = initialiseOrRemoveDependency(safeStore, waitingSafe, loadDepId, partialDeps.participants(loadDepId));
             }
+            else
+            {
+                removeRedundantDependencies(safeStore, waitingSafe);
+            }
 
             while (true)
             {
@@ -1263,7 +1270,7 @@ public class Commands
                 if (depSafe == null)
                 {
                     WaitingOn waitingOn = waiting.waitingOn();
-                    TxnId directlyBlockedOn = waitingOn.nextWaitingOn();
+                    TxnId directlyBlockedOn = waitingOn.nextWaitingOnTxn();
                     if (directlyBlockedOn == null)
                     {
                         if (waitingOn.isWaiting())
@@ -1527,20 +1534,47 @@ public class Commands
         }
     }
 
-    static void removeRedundantDependencies(SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable TxnId redundant)
+    static boolean removeRedundantDependencies(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
-        Command.Committed current = safeCommand.current().asCommitted();
+        Update update = maybeRemoveRedundantDependencies(safeStore, safeCommand);
+        if (update == null)
+            return false;
 
-        RedundantBefore redundantBefore = safeStore.redundantBefore();
-        Update update = new Update(current.waitingOn);
-        TxnId minWaitingOnTxnId = update.minWaitingOnTxnId();
-        if (minWaitingOnTxnId != null && redundantBefore.hasLocallyRedundantDependencies(update.minWaitingOnTxnId(), current.executeAt(), current.participants().waitsOn()))
-            redundantBefore.removeRedundantDependencies(current.participants().waitsOn(), update);
-
-        // if we are a range transaction, being redundant for this transaction does not imply we are redundant for all transactions
-        if (redundant != null)
-            update.removeWaitingOn(redundant);
         safeCommand.updateWaitingOn(safeStore, update);
+        return true;
+    }
+
+    static boolean removeRedundantDependencies(SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable TxnId redundant)
+    {
+        Update update = maybeRemoveRedundantDependencies(safeStore, safeCommand);
+
+        if (redundant != null)
+        {
+            if (update == null)
+                update = new Update(safeCommand.current().waitingOn());
+            update.removeWaitingOn(redundant);
+        }
+
+        if (update == null)
+            return false;
+
+        safeCommand.updateWaitingOn(safeStore, update);
+        return true;
+    }
+
+    private static Update maybeRemoveRedundantDependencies(SafeCommandStore safeStore, SafeCommand safeCommand)
+    {
+        RedundantBefore redundantBefore = safeStore.redundantBefore();
+        Command command = safeCommand.current();
+        WaitingOn waitingOn = command.waitingOn();
+        TxnId minWaitingOnTxnId = waitingOn.minWaitingOnTxn();
+        Participants<?> waitsOn = command.participants().waitsOn();
+        if (minWaitingOnTxnId == null || !redundantBefore.hasLocallyRedundantDependencies(minWaitingOnTxnId, command.executeAt(), waitsOn))
+            return null;
+
+        Update update = new Update(waitingOn);
+        redundantBefore.removeRedundantDependencies(waitsOn, update);
+        return update;
     }
 
     static void removeNoLongerOwnedDependency(SafeCommandStore safeStore, SafeCommand safeCommand, @Nonnull TxnId wasOwned)

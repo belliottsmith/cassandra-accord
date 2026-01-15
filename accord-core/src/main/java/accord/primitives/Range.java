@@ -432,7 +432,7 @@ public abstract class Range implements Comparable<RoutableKey>, Unseekable, Seek
         return (startInclusive() ? "[" : "(") + start().printableSuffix() + "," + end().printableSuffix() + (endInclusive() ? ']' : ')');
     }
 
-    public static Range create(RoutingKey start, RoutingKey end)
+    public static Range of(RoutingKey start, RoutingKey end)
     {
         return start.rangeFactory().newRange(start, end);
     }

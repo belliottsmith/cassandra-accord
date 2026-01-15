@@ -38,6 +38,7 @@ import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.primitives.Ranges.EMPTY;
 import static accord.utils.ArrayBuffers.cachedRanges;
+import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FAST;
@@ -930,7 +931,7 @@ public abstract class AbstractRanges implements Iterable<Range>, Routables<Range
     @Inline
     public final <P1, P2, V> V foldl(AbstractRanges intersect, IndexedTriFold<P1, P2, Range, V> fold, P1 p1, P2 p2, V accumulator)
     {
-        return Routables.foldl(this, intersect, fold, p1, p2, accumulator, i -> false);
+        return Routables.foldl(this, intersect, fold, p1, p2, accumulator, alwaysFalse());
     }
 
     public Range[] unsafeRanges()

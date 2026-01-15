@@ -28,6 +28,7 @@ import javax.annotation.Nonnull;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.Flag.SHARD_BOUND;
+import static accord.primitives.Timestamp.Flag.SOFT_REJECT;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.utils.Invariants.illegalArgument;
 
@@ -62,9 +63,14 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     public enum Flag
     {
         /**
-         * To be used only by executeAt responses during PreAccept. Can never be taken at the same time as REJECTED.
+         * To be used only by executeAt responses during PreAccept. Can never be taken at the same time as UNSTABLE.
          */
         REJECTED(0x0800),
+
+        /**
+         * To be used only by executeAt responses during PreAccept. Can never be taken at the same time as HLC_BOUND.
+         */
+        SOFT_REJECT(0x0400),
 
         /**
          * To be used only by TxnId inside of Dep collections. Can never be taken at the same time as REJECTED.
@@ -97,7 +103,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     /**
      * The set of flags we want to retain as we merge timestamps (e.g. when taking mergeMax).
      */
-    static final int MERGE_FLAGS = REJECTED.bit | UNSTABLE.bit | HLC_BOUND.bit | SHARD_BOUND.bit;
+    static final int MERGE_FLAGS = REJECTED.bit | SOFT_REJECT.bit | UNSTABLE.bit | HLC_BOUND.bit | SHARD_BOUND.bit;
     public static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF00FFL;
     public static final int IDENTITY_FLAGS = 0x00000000_000000FF;
     public static final int NON_IDENTITY_FLAGS_SHIFT = Integer.bitCount(IDENTITY_FLAGS);
@@ -275,6 +281,11 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return addFlags(flag.bit);
     }
 
+    public Timestamp removeFlag(Flag flag)
+    {
+        return removeFlags(this, flag.bit, Timestamp::fromBits);
+    }
+
     public final Timestamp addFlags(Timestamp merge)
     {
         return addFlags(this, merge, Timestamp::new);
@@ -293,6 +304,14 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     static <T extends Timestamp> T addFlags(T to, int addFlags, RawFactory<T> factory)
     {
         long newLsb = to.lsb | addFlags;
+        if (to.lsb == newLsb)
+            return to;
+        return factory.create(to.msb, newLsb, to.node);
+    }
+
+    static <T extends Timestamp> T removeFlags(T to, int addFlags, RawFactory<T> factory)
+    {
+        long newLsb = to.lsb & ~addFlags;
         if (to.lsb == newLsb)
             return to;
         return factory.create(to.msb, newLsb, to.node);

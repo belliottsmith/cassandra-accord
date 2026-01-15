@@ -361,7 +361,7 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     private final Int2ObjectHashMap<Ranges> pendingFetches = new Int2ObjectHashMap<>();
 
     @Override
-    public FetchResult fetch(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges delegate, FetchKind kind)
+    public FetchResult image(Node node, SafeCommandStore safeStore, Ranges ranges, SyncPoint syncPoint, FetchRanges delegate)
     {
         int storeId = safeStore.commandStore().id();
         synchronized (this)
@@ -426,6 +426,12 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
         }
         coordinator.start();
         return coordinator.result();
+    }
+
+    @Override
+    public FetchResult sync(Node node, SafeCommandStore safeStore, Map<TxnId, Ranges> atLeast, FetchRanges callback)
+    {
+        throw new UnsupportedOperationException();
     }
 
     static Timestamped<int[]> merge(Timestamped<int[]> a, Timestamped<int[]> b)

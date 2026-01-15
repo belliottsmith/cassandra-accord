@@ -27,6 +27,7 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
 import accord.local.RedundantBefore;
+import accord.local.RedundantStatus;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
@@ -42,11 +43,13 @@ import static accord.impl.AbstractReplayer.Replay.TO_COMMAND_STORE;
 import static accord.impl.AbstractReplayer.Replay.TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_COMMAND_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
+import static accord.local.RedundantStatus.Property.LOG_UNAVAILABLE;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.PreApplied;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.utils.Functions.alwaysFalse;
 
 public abstract class AbstractReplayer implements Journal.Replayer
 {
@@ -83,7 +86,7 @@ public abstract class AbstractReplayer implements Journal.Replayer
         this.mode = mode;
         Invariants.require(redundantBefore.ranges(Objects::nonNull).containsAll(commandStore.unsafeGetRangesForEpoch().all()));
         if (mode != Mode.ALL)
-            minReplay = redundantBefore.foldl((b, v) -> TxnId.nonNullOrMin(v, replayBound(b)), minReplay, ignore -> false);
+            minReplay = redundantBefore.foldl((b, v) -> TxnId.nonNullOrMin(v, replayBound(b)), minReplay, alwaysFalse());
         this.minReplay = TxnId.noneIfNull(minReplay);
     }
 
@@ -100,22 +103,26 @@ public abstract class AbstractReplayer implements Journal.Replayer
         {
             default: throw new UnhandledEnum(mode);
             case ALL: return TO_BOTH;
-            case NON_DURABLE: return redundantBefore.foldl(search, (b, v, id) -> v.atMost(replay(b, id)), TO_BOTH, txnId, i -> false);
-            case PART_NON_DURABLE: return redundantBefore.foldl(search, (b, v, id) -> v.atLeast(replay(b, id)), NONE, txnId, i -> false);
+            case NON_DURABLE: return redundantBefore.foldl(search, (b, v, id) -> v.atMost(replay(b, id)), TO_BOTH, txnId, alwaysFalse());
+            case PART_NON_DURABLE: return redundantBefore.foldl(search, (b, v, id) -> v.atLeast(replay(b, id)), NONE, txnId, alwaysFalse());
         }
     }
 
     private static TxnId replayBound(RedundantBefore.Bounds bounds)
     {
-        return bounds.maxBoundBoth(LOCALLY_DURABLE_TO_COMMAND_STORE, LOCALLY_DURABLE_TO_DATA_STORE);
+        return TxnId.max(bounds.maxBound(LOG_UNAVAILABLE), bounds.maxBoundBoth(LOCALLY_DURABLE_TO_COMMAND_STORE, LOCALLY_DURABLE_TO_DATA_STORE));
     }
 
     private static Replay replay(RedundantBefore.Bounds bounds, TxnId txnId)
     {
+        RedundantStatus status = bounds.get(txnId, null);
+        if (status.any(LOG_UNAVAILABLE))
+            return NONE;
+
         Replay replay = NONE;
-        if (bounds.maxBound(LOCALLY_DURABLE_TO_COMMAND_STORE).compareTo(txnId) <= 0)
+        if (!status.all(LOCALLY_DURABLE_TO_COMMAND_STORE))
             replay = TO_COMMAND_STORE;
-        if (bounds.maxBound(LOCALLY_DURABLE_TO_DATA_STORE).compareTo(txnId) <= 0)
+        if (!status.all(LOCALLY_DURABLE_TO_DATA_STORE))
             replay = replay.atLeast(TO_DATA_STORE);
         return replay;
     }

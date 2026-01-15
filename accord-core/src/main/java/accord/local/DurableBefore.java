@@ -37,6 +37,7 @@ import accord.utils.async.AsyncResults;
 import static accord.primitives.Status.Durability.HasOutcome.None;
 import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.primitives.Status.Durability.HasOutcome.Universal;
+import static accord.utils.Functions.alwaysFalse;
 
 public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 {
@@ -213,7 +214,7 @@ public class DurableBefore extends ReducingRangeMap<DurableBefore.Entry>
 
     public long maxEpoch()
     {
-        return foldl((e, v) -> TxnId.max(v, TxnId.max(e.quorumBefore, e.universalBefore)), TxnId.NONE, i -> false).epoch();
+        return foldl((e, v) -> TxnId.max(v, TxnId.max(e.quorumBefore, e.universalBefore)), TxnId.NONE, alwaysFalse()).epoch();
     }
 
     private static HasOutcome notDurableIfNull(HasOutcome status)
