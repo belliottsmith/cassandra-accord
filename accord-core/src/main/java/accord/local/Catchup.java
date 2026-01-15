@@ -19,9 +19,10 @@
 package accord.local;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 import org.slf4j.Logger;
@@ -43,7 +44,9 @@ import accord.utils.async.AsyncResults.SettableResult;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
+import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.utils.Functions.alwaysFalse;
 
 public class Catchup
 {
@@ -81,7 +84,7 @@ public class Catchup
                         sb.append(range).append(": ").append(entry.quorumBefore);
                     }
                     return sb;
-                }, new StringBuilder(), ignore -> false));
+                }, new StringBuilder(), alwaysFalse()));
                 safeStore.register(this);
                 return true;
             }
@@ -124,25 +127,9 @@ public class Catchup
                     logger.info("{}: {} are retired (or stale)", safeStore.commandStore(), retiredOrStale);
             }
 
-            newWaitingOn = durableBefore.foldlWithBounds(newWaitingOn, (DurableBefore.Entry entry, Ranges ranges, RoutingKey entryStart, RoutingKey entryEnd) -> {
-                Ranges entryRanges = Ranges.of(Range.create(entryStart, entryEnd));
-                return redundantBefore.foldlWithBounds(entryRanges, (RedundantBefore.Bounds bounds, Ranges rs, RoutingKey boundStart, RoutingKey boundEnd) -> {
-                    TxnId locallyApplied = bounds.maxBound(LOCALLY_APPLIED);
-                    if (locallyApplied.compareTo(entry.quorumBefore) >= 0)
-                    {
-                        Ranges boundRanges = Ranges.of(Range.create(boundStart, boundEnd));
-                        Ranges caughtUp = rs.slice(boundRanges, Minimal);
-                        if (!caughtUp.isEmpty())
-                        {
-                            rs = rs.without(boundRanges);
-                            logger.info("{}: caught-up with quorum for {}; {} remaining", safeStore.commandStore(), caughtUp, rs);
-                        }
-                    }
-                    return rs;
-                }, ranges, ignore -> false);
-            }, newWaitingOn, ignore -> false);
-
-            waitingOn = newWaitingOn;
+            waitingOn = removeRedundant(newWaitingOn, durableBefore, redundantBefore, (caughtUp, remaining) -> {
+                logger.info("{}: caught-up with quorum for {}; {} remaining", safeStore.commandStore(), caughtUp, remaining);
+            });
         }
 
         @Override
@@ -163,19 +150,55 @@ public class Catchup
         }
     }
 
+    static Ranges removeRedundant(Ranges waitingOn, DurableBefore durableBefore, RedundantBefore redundantBefore, BiConsumer<Ranges, Ranges> removedAndRemaining)
+    {
+        return durableBefore.foldlWithBounds(waitingOn, (DurableBefore.Entry entry, Ranges ranges, RoutingKey entryStart, RoutingKey entryEnd) -> {
+            Ranges entryRanges = Ranges.of(Range.of(entryStart, entryEnd));
+            return redundantBefore.foldlWithBounds(entryRanges, (RedundantBefore.Bounds bounds, Ranges rs, RoutingKey boundStart, RoutingKey boundEnd) -> {
+                TxnId locallyRedundant = bounds.maxBound(LOCALLY_REDUNDANT);
+                if (locallyRedundant.compareTo(entry.quorumBefore) >= 0)
+                {
+                    Ranges boundRanges = Ranges.of(Range.of(boundStart, boundEnd));
+                    Ranges caughtUp = rs.slice(boundRanges, Minimal);
+                    if (!caughtUp.isEmpty())
+                    {
+                        rs = rs.without(boundRanges);
+                        removedAndRemaining.accept(caughtUp, rs);
+                    }
+                }
+                return rs;
+            }, ranges, alwaysFalse());
+        }, waitingOn, alwaysFalse());
+    }
+
     public static AsyncChain<Void> catchup(Node node)
     {
+        return catchup(node, Arrays.asList(node.commandStores().all()));
+    }
+
+    public static AsyncChain<Void> catchup(Node node, List<CommandStore> commandStores)
+    {
         return FetchDurableBefore.catchup(node).flatMap(durableBefore -> {
-            List<AsyncResult<Void>> results = new CopyOnWriteArrayList<>();
-            return node.commandStores().forAll("Catchup", safeStore -> {
-                CommandStoreListener listener = new CommandStoreListener(durableBefore);
-                if (listener.register(safeStore))
-                    results.add(listener);
-            }).flatMap(ignore -> {
-                List<AsyncResult<Void>> list = new ArrayList<>(results);
-                if (list.isEmpty())
+            List<AsyncChain<CommandStoreListener>> chains = new ArrayList<>();
+            for (CommandStore commandStore : commandStores)
+            {
+                chains.add(commandStore.chain((PreLoadContext.Empty)() -> "Catchup", safeStore -> {
+                    CommandStoreListener listener = new CommandStoreListener(durableBefore);
+                    if (listener.register(safeStore))
+                        return listener;
+                    return null;
+                }));
+            }
+            return AsyncChains.allOf(chains).flatMap(listeners -> {
+                List<AsyncResult<Void>> registered = new ArrayList<>(listeners.size());
+                for (CommandStoreListener listener : listeners)
+                {
+                    if (listener != null)
+                        registered.add(listener);
+                }
+                if (registered.isEmpty())
                     return AsyncChains.success(null);
-                return AsyncResults.reduce(list, Reduce.toNull()).chain();
+                return AsyncResults.reduce(registered, Reduce.toNull()).chain();
             });
         });
     }

@@ -79,7 +79,7 @@ public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeral
 
         Deps deps;
         ExecuteFlags flags;
-        try (DepsCalculator calculator = new DepsCalculator())
+        try (DepsCalculator calculator = new DepsCalculator(txnId))
         {
              deps = calculator.calculate(safeStore, txnId, participants, minEpoch, Timestamp.MAX, false);
              flags = calculator.executeFlags(txnId);

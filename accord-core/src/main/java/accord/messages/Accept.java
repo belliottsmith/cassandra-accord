@@ -216,7 +216,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
                 Deps deps;
                 if (calculateDeps())
                 {
-                    try (DepsCalculator calculator = new DepsCalculator())
+                    try (DepsCalculator calculator = new DepsCalculator(executeAt))
                     {
                         deps = calculator.calculate(safeStore, txnId, participants, minEpoch, executeAt, true);
                         if (deps == null)

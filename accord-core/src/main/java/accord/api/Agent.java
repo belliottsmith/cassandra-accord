@@ -78,6 +78,8 @@ public interface Agent extends UncaughtExceptionListener
      *
      * The number of entries before the candidate prune point that we require before we try to prune.
      * This only works to reduce the time wasted pruning when there is limited benefit.
+     *
+     * TODO (desired): come up with a better pruning method
      */
     int cfkPruneInterval();
 
@@ -95,8 +97,12 @@ public interface Agent extends UncaughtExceptionListener
      * Controls pruning of MaxConflicts
      *
      * Every n updates, max conflicts is pruned to the delta, where n is the value returned by this method
+     *
+     * TODO (expected): this isn't a very clean way to prune max conflicts - should be done by size of collection / update rate
      */
     long maxConflictsPruneInterval();
+
+    boolean softReject(long unappliedCount, long cumulativeUnappliedAge);
 
     /**
      * Create an empty transaction that Accord can use for its own internal transactions.

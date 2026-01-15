@@ -28,6 +28,7 @@ import java.util.function.IntFunction;
 import java.util.function.Predicate;
 
 import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.SortedArrays.Search.FAST;
 import static accord.utils.SortedArrays.exponentialSearch;
 
@@ -45,6 +46,8 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             return new ReducingRangeMap<>(starts, values);
         }
     }
+
+    public static final ReducingRangeMap EMPTY = new ReducingRangeMap();
 
     public ReducingRangeMap()
     {
@@ -66,9 +69,19 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         return foldl(routables, (a, b, f, ignore) -> f.apply(a, b), accumulator, fold, null, terminate);
     }
 
+    public <V2> V2 foldlWithBounds(Routables<?> routables, QuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator)
+    {
+        return foldlWithBounds(routables, fold, accumulator, alwaysFalse());
+    }
+
     public <V2> V2 foldlWithBounds(Routables<?> routables, QuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator, Predicate<V2> terminate)
     {
         return foldl(routables, (a, b, f, self, i, j, k) -> f.apply(a, b, k < 0 ? null : self.starts[k], self.starts[k+1]), accumulator, fold, this, terminate);
+    }
+
+    public <R extends Routable, V2> V2 foldlWithInputAndBounds(Routables<R> routables, IndexedRangeQuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator)
+    {
+        return foldlWithInputAndBounds(routables, fold, accumulator, alwaysFalse());
     }
 
     public <R extends Routable, V2> V2 foldlWithInputAndBounds(Routables<R> routables, IndexedRangeQuadFunction<V, V2, RoutingKey, RoutingKey, V2> fold, V2 accumulator, Predicate<V2> terminate)
@@ -114,6 +127,11 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
     public <V2, P1> V2 foldlWithDefault(Routables<?> routables, TriFunction<V, V2, P1, V2> fold, V defaultValue, V2 accumulator, P1 p1, Predicate<V2> terminate)
     {
         return foldlWithDefault(routables, (a, b, f, p) -> f.apply(a, b, p), defaultValue, accumulator, fold, p1, terminate);
+    }
+
+    public <V2, P1, P2> V2 foldlWithDefault(Routables<?> routables, QuadFunction<V, V2, P1, P2, V2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2)
+    {
+        return foldlWithDefault(routables, fold, defaultValue, accumulator, p1, p2, alwaysFalse());
     }
 
     public <V2, P1, P2> V2 foldlWithDefault(Routables<?> routables, QuadFunction<V, V2, P1, P2, V2> fold, V defaultValue, V2 accumulator, P1 p1, P2 p2, Predicate<V2> terminate)
@@ -164,6 +182,11 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
             j = nextj;
         }
         return accumulator;
+    }
+
+    public <A, P1, P2> A foldl(QuadFunction<V, A, P1, P2, A> fold, A accumulator, P1 p1, P2 p2)
+    {
+        return foldl(fold, accumulator, p1, p2, alwaysFalse());
     }
 
     public <A, P1, P2> A foldl(QuadFunction<V, A, P1, P2, A> fold, A accumulator, P1 p1, P2 p2, Predicate<A> terminate)
@@ -486,7 +509,7 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         for (int i = 0 ; i < values.length ; ++i)
         {
             if (include.test(values[i]))
-                ranges[count++] = Range.create(starts[i], starts[i+1]);
+                ranges[count++] = Range.of(starts[i], starts[i + 1]);
         }
         if (count < ranges.length)
             ranges = Arrays.copyOf(ranges, count);
@@ -495,13 +518,19 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
 
     public <V2> ReducingRangeMap<V2> map(Function<V, V2> map, IntFunction<V2[]> allocator)
     {
+        return map(map, allocator, (ReducingRangeMap<V2>) ReducingRangeMap.EMPTY, ReducingRangeMap::new);
+    }
+
+    // TODO (desired): this doesn't merge equivalent but non-equal V2 values
+    public <V2, M extends ReducingRangeMap<V2>> M map(Function<V, V2> map, IntFunction<V2[]> allocator, M empty, BiFunction<RoutingKey[], V2[], M> factory)
+    {
         RoutingKey[] starts = null;
         V2[] output = allocator.apply(values.length);
         int count = 0;
         for (int i = 0 ; i < values.length ; ++i)
         {
             V2 next = map.apply(values[i]);
-            if (count == 0 ? next == null : (Objects.equals(next, output[i - 1])))
+            if (count == 0 ? next == null : (Objects.equals(next, output[count - 1])))
             {
                 if (starts == null)
                 {
@@ -519,9 +548,8 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         {
             if (starts != null)
             {
-                starts[count] = this.starts[this.starts.length - 1];
-                if (output[count - 1] == null)
-                    --count;
+                if (output[count - 1] == null) --count;
+                else starts[count] = this.starts[this.starts.length - 1];
 
                 starts = Arrays.copyOf(starts, count + 1);
                 output = Arrays.copyOf(output, count);
@@ -534,8 +562,8 @@ public class ReducingRangeMap<V> extends ReducingIntervalMap<RoutingKey, V>
         }
 
         if (count == 0)
-            return new ReducingRangeMap<>();
+            return empty;
 
-        return new ReducingRangeMap<>(starts, output);
+        return factory.apply(starts, output);
     }
 }

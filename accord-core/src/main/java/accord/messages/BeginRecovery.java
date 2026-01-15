@@ -171,12 +171,12 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         }
 
         boolean supersedingRejects;
-        Deps earlierNoWait, earlierWait;
+        Deps simpleNoWait, simpleWait;
         Deps laterCoordRejects;
         if (command.hasBeen(AcceptedMedium) || !recoverFastPath())
         {
             supersedingRejects = true;
-            earlierNoWait = earlierWait = Deps.NONE;
+            simpleNoWait = simpleWait = Deps.NONE;
             laterCoordRejects = Deps.NONE;
         }
         else
@@ -185,8 +185,8 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
             {
                 safeStore.visit(participants.owns(), txnId, txnId.witnessedBy(), visitor);
                 supersedingRejects = visitor.supersedingRejects;
-                earlierNoWait = visitor.simpleNoWait == null ? Deps.NONE : visitor.simpleNoWait.build();
-                earlierWait = visitor.simpleWait == null ? Deps.NONE : visitor.simpleWait.build();
+                simpleNoWait = visitor.simpleNoWait == null ? Deps.NONE : visitor.simpleNoWait.build();
+                simpleWait = visitor.simpleWait == null ? Deps.NONE : visitor.simpleWait.build();
                 laterCoordRejects = visitor.supersedingCoordRejects == null ? Deps.NONE : visitor.supersedingCoordRejects.build();
             }
         }
@@ -198,7 +198,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         Result result = command.result();
         Participants<?> coordinatorAcceptsFastPath = saveStatus.known.hasPrivilegedVote() ? participants.owns() : null;
         boolean acceptsFastPath = acceptsFastPath(txnId, participants, saveStatus, executeAt);
-        return new RecoverOk(txnId, saveStatus.status, accepted, executeAt, deps, earlierWait, earlierNoWait, laterCoordRejects, acceptsFastPath, coordinatorAcceptsFastPath, supersedingRejects, writes, result);
+        return new RecoverOk(txnId, saveStatus.status, accepted, executeAt, deps, simpleWait, simpleNoWait, laterCoordRejects, acceptsFastPath, coordinatorAcceptsFastPath, supersedingRejects, writes, result);
     }
 
     private boolean recoverFastPath()
@@ -389,7 +389,6 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                          * and did not witness us as part of their pre-accept round, as this means that we CANNOT have taken
                          * the fast path. This is central to safe recovery, as if every transaction that executes later has
                          * witnessed us we are safe to propose the pre-accept timestamp regardless, whereas if any transaction
-                         * has not witnessed us we can safely invalidate (us).
                          */
                         return markSupersedingRejects();
 

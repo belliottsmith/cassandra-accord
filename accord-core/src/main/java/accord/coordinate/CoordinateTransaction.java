@@ -70,6 +70,7 @@ import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Accept.Kind.SLOW;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.mergeMaxAndFlags;
+import static accord.primitives.Timestamp.Flag.SOFT_REJECT;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.topology.SelectShards.LIVE;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -141,7 +142,22 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             node.agent().coordinatorEvents().onRejected(txnId);
             return;
         }
-        else if (tracker.hasFastPathAccepted())
+
+        if (executeAt.is(SOFT_REJECT))
+        {
+            // count soft rejects, and hard reject if too many
+            long count = oks.foldlNonNullValues((ok, v) -> ok.witnessedAt.is(SOFT_REJECT) ? v + 1 : v, 0L);
+            // TODO (expected): make this configurable
+            if (count >= Math.max(2, (oks.size() + 3)/4))
+            {
+                proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, executeAt, finishAndTakeCallback());
+                node.agent().coordinatorEvents().onRejected(txnId);
+                return;
+            }
+            executeAt = executeAt.removeFlag(SOFT_REJECT);
+        }
+
+        if (tracker.hasFastPathAccepted())
         {
             Deps deps = mergeFastOrMediumDeps(oks);
             if (deps != null)
@@ -278,39 +294,26 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch());
             SafeCommand safeCommand = safeStore.get(txnId, participants);
 
-            ExecuteFlags flags;
+            Timestamp executeAt;
             Deps deps;
-            if (txnId.is(PrivilegedCoordinatorWithDeps))
+            ExecuteFlags flags;
+            try (DepsCalculator calculator = new DepsCalculator(txnId))
             {
-                try (DepsCalculator calculator = new DepsCalculator())
-                {
-                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
-                    if (deps == null)
-                        return PreAcceptNack.INSTANCE;
-                    flags = calculator.executeFlags(txnId);
-                }
-
-                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, deps, true);
-                if (outcome != Success)
+                deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
+                if (deps == null)
                     return PreAcceptNack.INSTANCE;
-            }
-            else
-            {
-                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, null, true);
+
+                boolean hasCoordinatorVote = txnId.hasPrivilegedCoordinator();
+                Deps coordinatorDeps = txnId.is(PrivilegedCoordinatorWithDeps) ? deps : null;
+                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, coordinatorDeps, hasCoordinatorVote);
                 if (outcome != Success)
                     return PreAcceptNack.INSTANCE;
 
-                try (DepsCalculator calculator = new DepsCalculator())
-                {
-                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
-                    if (deps == null)
-                        return PreAcceptNack.INSTANCE;
-                    flags = calculator.executeFlags(txnId);
-                }
+                executeAt = calculator.executeAt(safeCommand, node);
+                flags = calculator.executeFlags(txnId);
             }
 
-            Command command = safeCommand.current();
-            return new PreAcceptOk(txnId, command.executeAt(), deps, flags);
+            return new PreAcceptOk(txnId, executeAt, deps, flags);
         }
 
         @Override

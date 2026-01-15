@@ -467,18 +467,18 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
             case Unknown:
             {
                 // should all be PreAccept
-                Deps earlierWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleWait);
-                Deps earlierNoWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleNoWait);
-                earlierWait = earlierWait.without(earlierNoWait);
+                Deps simpleWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleWait);
+                Deps simpleNoWait = Deps.merge(okList, okList.size(), List::get, ok -> ok.simpleNoWait);
+                simpleWait = simpleWait.without(simpleNoWait);
                 Deps laterWitnessedCoordRejects = Deps.merge(oks, oks.domainSize(), (map, i) -> selectCoordinatorReplies(map.getKey(i), map.getValue(i)), Function.identity());
 
-                if (!earlierWait.isEmpty() || !laterWitnessedCoordRejects.isEmpty())
+                if (!simpleWait.isEmpty() || !laterWitnessedCoordRejects.isEmpty())
                 {
                     // If there exist commands that were proposed a later execution time than us that have not witnessed us,
                     // we have to be certain these commands have not successfully committed without witnessing us (thereby
                     // ruling out a fast path decision for us and changing our recovery decision).
                     // So, we wait for these commands to commit and recompute supersedingRejects for them.
-                    awaitToFinish(AsyncChains.reduce(awaitSimple(node, earlierWait, HasCommittedDeps),
+                    awaitToFinish(AsyncChains.reduce(awaitSimple(node, simpleWait, HasCommittedDeps),
                                                      awaitSupersedingCoord(node, laterWitnessedCoordRejects, CommittedOrNotFastPathCommit, extraCoordVotes),
                                                      InferredFastPath::merge)
                                              .invokeIfSuccess((inferred) -> {

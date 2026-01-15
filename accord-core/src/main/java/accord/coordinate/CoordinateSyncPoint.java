@@ -60,6 +60,7 @@ import static accord.messages.Apply.Kind.Maximal;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.mergeMaxAndFlags;
+import static accord.primitives.Timestamp.Flag.SOFT_REJECT;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.primitives.TxnId.Cardinality.cardinality;
 import static accord.topology.SelectShards.ALL;

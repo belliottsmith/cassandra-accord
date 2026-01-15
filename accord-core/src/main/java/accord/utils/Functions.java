@@ -21,6 +21,7 @@ package accord.utils;
 import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 public class Functions
 {
@@ -91,4 +92,20 @@ public class Functions
         return result;
     }
 
+    public static <T> Predicate<T> alwaysFalse()
+    {
+        return ignore -> false;
+    }
+    public static Predicate<Boolean> identityPredicate() { return v -> v; }
+
+    public static <I, O extends I> long foldlNonNull(I[] array, FoldToLong<O> foldl, long zero)
+    {
+        long result = zero;
+        for (I in : array)
+        {
+            if (in != null)
+                result = foldl.apply((O)in, result);
+        }
+        return result;
+    }
 }

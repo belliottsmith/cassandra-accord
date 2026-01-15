@@ -287,6 +287,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     protected void update(Command prev, Command updated, boolean force)
     {
+        progressLog().update(this, prev, updated, force);
         updateExclusiveSyncPoint(prev, updated, force);
         updateMaxConflicts(prev, updated, force);
         if (updated.txnId().is(Range))
@@ -478,10 +479,12 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         {
             updateUnmanagedCommandsForKey(safeStore, execute.keys(), txnId, mode);
         }
+
+        Consumer<SafeCommandStore> registerTransitive = !next.txnId().is(Range) || !next.txnId().is(VisibilitySyncPoint) ? null : registerTransitiveRangeDeps(safeStore.commandStore(), txnId, next);
         if (execute == context)
         {
-            if (next.txnId().is(Range) && next.txnId().is(VisibilitySyncPoint))
-                registerTransitiveRangeDeps(safeStore, txnId, next);
+            if (registerTransitive != null)
+                registerTransitive.accept(safeStore);
         }
         else
         {
@@ -491,8 +494,8 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             safeStore = safeStore;
             CommandStore unsafeStore = safeStore.commandStore();
             AsyncChain<Void> submit = unsafeStore.chain(context, safeStore0 -> { updateUnmanagedCommandsForKey(safeStore0, safeStore0.context().keys() , txnId, mode); });
-            if (next.txnId().is(Range))
-                submit = submit.flatMap(success -> unsafeStore.chain(PreLoadContext.contextFor(txnId, "Register Transitive Dependencies"), safeStore0 -> { registerTransitiveRangeDeps(safeStore0, txnId, next); }));
+            if (registerTransitive != null)
+                submit = submit.flatMap(success -> unsafeStore.chain(PreLoadContext.contextFor(txnId, "Register Transitive Dependencies"), registerTransitive));
             submit.begin(safeStore.commandStore().agent);
         }
     }
@@ -506,35 +509,40 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
     }
 
-    private static void registerTransitiveRangeDeps(SafeCommandStore safeStore, TxnId syncId, Command syncCommand)
+    private static Consumer<SafeCommandStore> registerTransitiveRangeDeps(CommandStore commandStore, TxnId syncId, Command syncCommand)
     {
         if (!syncId.is(VisibilitySyncPoint))
-            return;
+            return null;
 
-        CommandStore commandStore = safeStore.commandStore();
         Ranges touches = syncCommand.participants().touches().toRanges();
         Ranges waitingOn = commandStore.isWaitingOnVisibility(syncId, touches);
         if (waitingOn.isEmpty())
-            return;
+            return null;
 
-        List<AsyncChain<Void>> async = new ArrayList<>();
-        RangeDeps rangeDeps = syncCommand.partialDeps().rangeDeps;
-        rangeDeps.forEachUniqueTxnId(waitingOn, null, (ignore, txnIdWithFlags) -> {
-            TxnId txnId = txnIdWithFlags.withoutNonIdentityFlags();
-            PreLoadContext context = PreLoadContext.contextFor(txnId, "Register Transitive Range Deps");
-            Ranges ranges = rangeDeps.ranges(txnId);
-            if (safeStore.canExecuteWith(context)) registerTransitive(safeStore, txnId, ranges);
-            else async.add(safeStore.commandStore().chain(context, safeStore0 -> {
-                registerTransitive(safeStore0, txnId, ranges);
-            }));
-        });
+        commandStore.markingVisible(syncId, waitingOn);
+        return safeStore -> {
+            List<AsyncChain<Void>> async = new ArrayList<>();
+            RangeDeps rangeDeps = syncCommand.partialDeps().rangeDeps;
+            rangeDeps.forEachUniqueTxnId(waitingOn, null, (ignore, txnIdWithFlags) -> {
+                TxnId txnId = txnIdWithFlags.withoutNonIdentityFlags();
+                PreLoadContext context = PreLoadContext.contextFor(txnId, "Register Transitive Range Deps");
+                Ranges ranges = rangeDeps.ranges(txnId);
+                if (safeStore.canExecuteWith(context)) registerTransitive(safeStore, txnId, ranges);
+                else async.add(safeStore.commandStore().chain(context, safeStore0 -> {
+                    registerTransitive(safeStore0, txnId, ranges);
+                }));
+            });
 
-        AsyncChains.chain(() -> commandStore.markingVisible(syncId, waitingOn))
-                   .flatMap(ignore -> AsyncChains.reduce(async, Reduce.toNull(), null))
-                   .begin((success, fail) -> {
-                       if (fail == null) commandStore.execute((PreLoadContext.Empty)() -> "Mark Synced", (Consumer<? super SafeCommandStore>)  safeStore0 -> commandStore.markVisible(safeStore0, syncId, waitingOn), commandStore.agent());
-                       else commandStore.execute((PreLoadContext.Empty)() -> "Unmark Syncing", (Consumer<? super SafeCommandStore>)  safeStore0 -> commandStore.cancelMarkingVisible(syncId, waitingOn), commandStore.agent);
-                   });
+            AsyncChains.reduce(async, Reduce.toNull(), null)
+                       .begin((success, fail) -> {
+                           if (fail == null) commandStore.execute((PreLoadContext.Empty)() -> "Mark Synced", (Consumer<? super SafeCommandStore>)  safeStore0 -> commandStore.markVisible(safeStore0, syncId, waitingOn), commandStore.agent());
+                           else
+                           {
+                               // TODO (required): reset ensureReadyToCoordinate state
+                               commandStore.execute((PreLoadContext.Empty)() -> "Unmark Syncing", (Consumer<? super SafeCommandStore>)  safeStore0 -> commandStore.cancelMarkingVisible(syncId, waitingOn), commandStore.agent);
+                           }
+                       });
+        };
     }
 
     private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Ranges witnessedBy)

@@ -282,6 +282,9 @@ public abstract class Command implements ICommand
         return route == null ? null : route.homeKey();
     }
 
+    // TODO (expected): rename to e.g. timestamp(),
+    //  and introduce executeAt() that first ensures it is >= precommitted,
+    //  and applyAt() that confirms >= PreApplied
     @Override
     public final Timestamp executeAt() { return executeAt; }
 
@@ -971,16 +974,28 @@ public abstract class Command implements ICommand
             return index >= 0 && waitingOn.get(index);
         }
 
-        public TxnId nextWaitingOn()
+        public TxnId nextWaitingOnTxn()
         {
-            int i = nextWaitingOnIndex();
+            int i = nextWaitingOnTxnIndex();
             return i < 0 ? null : txnId(i);
         }
 
-        private int nextWaitingOnIndex()
+        private int nextWaitingOnTxnIndex()
         {
             int directRangeTxnIdCount = directRangeDeps.txnIdCount();
             return waitingOn.prevSetBit(directRangeTxnIdCount);
+        }
+
+        public TxnId minWaitingOnTxn()
+        {
+            int index = minWaitingOnTxnIndex();
+            return index < 0 ? null : txnId(index);
+        }
+
+        public int minWaitingOnTxnIndex()
+        {
+            int directRangeTxnIdCount = directRangeDeps.txnIdCount();
+            return waitingOn.nextSetBitBefore(0, directRangeTxnIdCount);
         }
 
         @Override
@@ -1102,7 +1117,7 @@ public abstract class Command implements ICommand
                         Ranges removed = all.without(ranges.rangesAtIndex(i));
                         while (txnIdx >= 0 && rDeps.txnId(txnIdx).epoch() >= epoch)
                         {
-                            if (!rDeps.txnId(txnIdx).isSyncPoint() && initialise.isWaitingOnDirectRangeTxnIdx(txnIdx))
+                            if (!rDeps.txnId(txnIdx).isSyncPoint() && initialise.isWaitingOnTxnIndex(txnIdx))
                             {
                                 Ranges rs = rDeps.ranges(txnIdx).slice(all, Slice.Minimal);
                                 if (removed.containsAll(rs))
@@ -1177,7 +1192,7 @@ public abstract class Command implements ICommand
 
             public boolean hasUpdatedDirectDependency(WaitingOn prev)
             {
-                int i = prev.nextWaitingOnIndex();
+                int i = prev.nextWaitingOnTxnIndex();
                 return i >= 0 && !waitingOn.get(i);
             }
 
@@ -1207,19 +1222,19 @@ public abstract class Command implements ICommand
                 return !waitingOn.isEmpty();
             }
 
-            public TxnId minWaitingOnTxnId()
+            public TxnId minWaitingOnTxn()
             {
-                int index = minWaitingOnTxnIdx();
+                int index = minWaitingOnTxnIndex();
                 return index < 0 ? null : txnId(index);
             }
 
-            public int minWaitingOnTxnIdx()
+            public int minWaitingOnTxnIndex()
             {
                 int directRangeTxnIdCount = directRangeDeps.txnIdCount();
                 return waitingOn.nextSetBitBefore(0, directRangeTxnIdCount);
             }
 
-            public boolean isWaitingOnDirectRangeTxnIdx(int idx)
+            public boolean isWaitingOnTxnIndex(int idx)
             {
                 Invariants.requireIndex(idx, directRangeDeps.txnIdCount());
                 return waitingOn.get(idx);

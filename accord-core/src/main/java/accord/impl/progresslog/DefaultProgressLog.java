@@ -225,8 +225,9 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     }
 
     @Override
-    public void update(SafeCommandStore safeStore, TxnId txnId, Command before, Command after, boolean force)
+    public void update(SafeCommandStore safeStore, Command before, Command after, boolean force)
     {
+        TxnId txnId = after.txnId();
         if (!txnId.isVisible())
             return;
 

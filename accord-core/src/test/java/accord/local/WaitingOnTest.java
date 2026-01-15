@@ -94,7 +94,7 @@ class WaitingOnTest
 
     private static void validateNextWaitingOn(WaitingOn waitingOn)
     {
-        TxnId nextWaitingOn = waitingOn.nextWaitingOn();
+        TxnId nextWaitingOn = waitingOn.nextWaitingOnTxn();
         List<TxnId> waitingOnTxns = waitingOnTxns(waitingOn);
         TxnId maxTxn = waitingOnTxns.stream().max(Comparator.naturalOrder()).orElse(null);
         TxnId minTxn = waitingOnTxns.stream().min(Comparator.naturalOrder()).orElse(null);
@@ -103,10 +103,10 @@ class WaitingOnTest
                   .isEqualTo(maxTxn);
 
         WaitingOn.Update update = new WaitingOn.Update(waitingOn);
-        Assertions.assertThat(update.minWaitingOnTxnId())
+        Assertions.assertThat(update.minWaitingOnTxn())
                   .describedAs("Update.minWaitingOnTxnId did not match expected")
                   .isEqualTo(minTxn);
-        Assertions.assertThat(update.minWaitingOnTxnIdx())
+        Assertions.assertThat(update.minWaitingOnTxnIndex())
                   .describedAs("Update.minWaitingOnTxnIdx did not match expected")
                   .isEqualTo(minTxn == null ? -1 : waitingOn.indexOf(minTxn));
     }

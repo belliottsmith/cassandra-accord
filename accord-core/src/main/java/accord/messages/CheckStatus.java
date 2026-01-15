@@ -495,12 +495,12 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
 
         public Known maxKnown()
         {
-            return map.foldl(MinAndMaxKnown::nonNullOrMax, Nothing, i -> false);
+            return map.foldl(MinAndMaxKnown::nonNullOrMax, Nothing);
         }
 
         public Known maxKnown(Unseekables<?> query)
         {
-            return map.foldl(query, MinAndMaxKnown::nonNullOrMax, Nothing, i -> false);
+            return map.foldl(query, MinAndMaxKnown::nonNullOrMax, Nothing);
         }
 
         /**
@@ -508,7 +508,7 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
          */
         public Known minMaxKnown(Unseekables<?> query)
         {
-            return map.foldlWithDefault(query, MinAndMaxKnown::nonNullOrMinMax, MinAndMaxKnown.Nothing, null, i -> false);
+            return map.foldlWithDefault(query, MinAndMaxKnown::nonNullOrMinMax, MinAndMaxKnown.Nothing, null);
         }
 
         /**
@@ -517,7 +517,7 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
          */
         public Known minKnown(Unseekables<?> query)
         {
-            Known known = map.foldlWithDefault(query, MinAndMaxKnown::nonNullOrMin, MinAndMaxKnown.Nothing, null, i -> false);
+            Known known = map.foldlWithDefault(query, MinAndMaxKnown::nonNullOrMin, MinAndMaxKnown.Nothing, null);
             return known == null ? Nothing : known;
         }
 

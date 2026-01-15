@@ -724,7 +724,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             results.add(shard.store.startUnsafeBootstrap(node, shard.ranges.all(), snapshot.global.epoch(), Sync));
         return AsyncResults.allOf(results).flatMap(list -> {
             return AsyncChains.reduce(list.stream()
-                                             .flatMap(b -> Stream.of(b.reads.chain(), b.coordinate.chain()))
+                                             .map(b -> b.reads.chain())
                                              .collect(Collectors.toList()),
                                       Reduce.toNull()).beginAsResult();
         });

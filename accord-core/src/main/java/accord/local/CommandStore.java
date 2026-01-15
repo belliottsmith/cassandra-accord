@@ -72,8 +72,10 @@ import accord.utils.async.Cancellable;
 import accord.utils.async.AsyncResults.SettableResult;
 import org.agrona.collections.LongHashSet;
 
+import static accord.api.DataStore.FetchKind.Sync;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.UNREADY;
+import static accord.local.durability.DurabilityService.SyncLocal.KnownToSelf;
 import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Image;
@@ -193,6 +195,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         final Ranges allRanges;
         Ranges waitingOn, waitingOnDurable;
 
+        // for testing only
+        volatile boolean invalid;
+
         WaitingOnVisibility(SettableResult<Void> whenDone, Ranges ranges)
         {
             this.whenDone = whenDone;
@@ -243,6 +248,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         maxDecidedRX = MaxDecidedRX.EMPTY;
         safeToRead = emptySafeToRead();
         listeners.clear();
+        waitingOnVisibility.values().forEach(w -> w.invalid = true);
         waitingOnVisibility.clear();
     }
 
@@ -651,6 +657,12 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
     }
 
+    public AsyncResult<?> rebootstrap(Node node)
+    {
+        RangesForEpoch rfe = unsafeGetRangesForEpoch();
+        return startUnsafeBootstrap(node, rfe.all(), rfe.epochAtIndex(rfe.size() - 1), Sync);
+    }
+
     private EpochReady epochReadyAfterBootstrap(Ranges newRanges, long epoch, AsyncResult<EpochReady> bootstrap)
     {
         return epochReadyAfterBootstrap(newRanges, epoch, EpochReady.wrap(epoch, bootstrap));
@@ -783,37 +795,40 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
             WaitingOnVisibility prev = waitingOnVisibility.putIfAbsent(epoch, sync);
             Invariants.require(prev == null);
         }
-        ensureReadyToCoordinate(epoch, ranges);
+        ensureReadyToCoordinate(epoch, ranges, sync);
         return whenDone;
     }
 
-    private void ensureReadyToCoordinate(long epoch, Ranges ranges)
+    private void ensureReadyToCoordinate(long epoch, Ranges ranges, WaitingOnVisibility waiting)
     {
-        TxnId minForEpoch = TxnId.minForEpoch(epoch);
-        node.durability().close("[" + this + " Epoch " + epoch + ']', VisibilitySyncPoint, minForEpoch, ranges, 1, TimeUnit.HOURS)
+        TxnId min = TxnId.nonNullOrMax(TxnId.minForEpoch(epoch), redundantBefore.max(ranges, b -> b == null ? TxnId.NONE : b.maxBound(RedundantStatus.Property.LOG_UNAVAILABLE)));
+        node.durability().close("[" + this + " Epoch " + epoch + ']', VisibilitySyncPoint, min, ranges, KnownToSelf, 1, TimeUnit.HOURS)
             .invoke((success, fail) -> {
-                if (fail != null)
-                {
-                    Ranges notRetired = redundantBefore.removeRetired(ranges);
-                    Ranges retired = ranges.without(notRetired);
-                    Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, notRetired);
+                if (waiting.invalid)
+                    return;
 
-                    if (!retired.isEmpty())
-                    {
-                        logger.info("Failed to close epoch {} for ranges {} on store {}, but some are retired; marking these as synced.", epoch, ranges, id, fail);
-                        execute((Empty)() -> "Mark Retired Ranges Synced", safeStore -> {
-                            markVisibleInternal(safeStore, epoch, retired, "(Retired)");
-                        }, agent);
-                    }
-                    else if (remaining.isEmpty())
-                    {
-                        logger.info("Failed to close epoch {} for ranges {} on store {}, but none remaining. Aborting.", epoch, ranges, id, fail);
-                    }
-                    if (!remaining.isEmpty())
-                    {
-                        logger.warn("Failed to close epoch {} for ranges {} on store {}. Retrying.", epoch, remaining, id, fail);
-                        node.someExecutor().execute(() -> ensureReadyToCoordinate(epoch, remaining));
-                    }
+                Ranges notRetired = redundantBefore.removeLocallyRetired(ranges);
+                Ranges retired = ranges.without(notRetired);
+                Ranges remaining = redundantBefore.removeWitnessed(min, notRetired);
+
+                if (!retired.isEmpty())
+                {
+                    logger.info("{}, Failed to close epoch {} for ranges {}, but some are retired; marking these as synced.", this, epoch, ranges, fail);
+                    execute((Empty)() -> "Mark Retired Ranges Synced", safeStore -> {
+                        markVisibleInternal(safeStore, epoch, retired, "(Retired)");
+                    }, agent);
+                }
+                else if (remaining.isEmpty())
+                {
+                    if (fail != null)
+                        logger.info("{}, Failed to close epoch {} for ranges {}, but none remaining. Aborting.", this, epoch, ranges, fail);
+                }
+
+                if (!remaining.isEmpty())
+                {
+                    if (fail != null) logger.warn("{} Failed to close epoch {} for ranges {}. Retrying.", this, epoch, remaining, fail);
+                    else logger.error("{} DurabilityRequest completed successfully, but still awaiting visibility for ranges: {} on epoch {}. Retrying.", this, remaining, epoch);
+                    node.someExecutor().execute(() -> ensureReadyToCoordinate(epoch, remaining, waiting));
                 }
             });
     }

@@ -69,6 +69,7 @@ import static accord.local.durability.DurabilityService.SyncRemote.All;
 import static accord.local.durability.DurabilityService.SyncRemote.Quorum;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
+import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.btree.IntervalBTree.InclusiveEndHelper.endWithStart;
 import static accord.utils.btree.IntervalBTree.InclusiveEndHelper.startWithEnd;
 import static accord.utils.btree.IntervalBTree.InclusiveEndHelper.startWithStart;
@@ -537,7 +538,7 @@ public class DurabilityQueue
             {
                 if (success == null) achieved = Ranges.EMPTY;
                 else if (success.min.remote == All) achieved = ranges;
-                else achieved = success.achieved.foldlWithBounds((p, r, s, e) -> p.remote == All ? r.with(Ranges.of(s.rangeFactory().newRange(s, e))) : r, Ranges.EMPTY, ignore -> false);
+                else achieved = success.achieved.foldlWithBounds((p, r, s, e) -> p.remote == All ? r.with(Ranges.of(s.rangeFactory().newRange(s, e))) : r, Ranges.EMPTY);
                 isDone = achieved.containsAll(ranges);
             }
             else

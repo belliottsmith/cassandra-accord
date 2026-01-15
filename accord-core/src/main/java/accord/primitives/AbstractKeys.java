@@ -41,6 +41,7 @@ import accord.utils.SortedArrays;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
 import static accord.primitives.Routable.Domain.Key;
+import static accord.utils.Functions.alwaysFalse;
 
 @SuppressWarnings("rawtypes")
 // TODO (desired, efficiency): check that foldl call-sites are inlined and optimised by HotSpot
@@ -311,7 +312,7 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
     @Inline
     public final <P1, P2, V> V foldl(AbstractRanges intersect, IndexedTriFold<P1, P2, K, V> fold, P1 p1, P2 p2, V accumulator)
     {
-        return Routables.foldl(this, intersect, fold, p1, p2, accumulator, i -> false);
+        return Routables.foldl(this, intersect, fold, p1, p2, accumulator, alwaysFalse());
     }
 
     @Inline
@@ -326,7 +327,7 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         Routables.foldl(this, rs, (p, ignore, k, consumer, i) -> {
             consumer.accept(p, k, i);
             return consumer;
-        }, p1, null, forEach, i -> false);
+        }, p1, null, forEach, alwaysFalse());
     }
 
     @Inline
@@ -335,7 +336,7 @@ public abstract class AbstractKeys<K extends RoutableKey> implements Iterable<K>
         Routables.foldl(this, rs, (p, ignore, k, consumer, i) -> {
             consumer.accept(p, k, i);
             return consumer;
-        }, p1, null, forEach, i -> false);
+        }, p1, null, forEach, alwaysFalse());
     }
 
     @Inline

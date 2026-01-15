@@ -1377,7 +1377,7 @@ public class Cluster
             RoutingKey blockedOnKey = waitingOn.lastWaitingOnKey();
             if (blockedOnKey == null)
             {
-                blockedOnId = waitingOn.nextWaitingOn();
+                blockedOnId = waitingOn.nextWaitingOnTxn();
                 Invariants.require(!command.txnId().equals(blockedOnId));
                 if (blockedOnId != null)
                     blockedVia = command.partialDeps().participants(blockedOnId);
