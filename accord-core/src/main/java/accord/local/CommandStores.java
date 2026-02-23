@@ -18,7 +18,15 @@
 
 package accord.local;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.HashMap;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -30,7 +38,6 @@ import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
@@ -46,6 +53,16 @@ import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.CommandStore.EpochUpdateHolder;
+import accord.primitives.AbstractRanges;
+import accord.primitives.AbstractUnseekableKeys;
+import accord.primitives.EpochSupplier;
+import accord.primitives.Participants;
+import accord.primitives.Range;
+import accord.primitives.Ranges;
+import accord.primitives.RoutingKeys;
+import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.utils.IndexedQuadConsumer;
@@ -932,7 +949,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return mapReduce(snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
     }
 
-    /* Do all reads and writes go through this? */
     public <O> AsyncChain<O> mapReduce(StoreSelector selector, MapReduceCommandStores<?, O> mapReduceConsume)
     {
         Snapshot snapshot = current;
