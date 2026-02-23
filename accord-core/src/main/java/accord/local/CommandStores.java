@@ -18,14 +18,7 @@
 
 package accord.local;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.Iterator;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
@@ -37,6 +30,7 @@ import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
@@ -52,16 +46,6 @@ import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.local.CommandStore.EpochUpdateHolder;
-import accord.primitives.AbstractRanges;
-import accord.primitives.AbstractUnseekableKeys;
-import accord.primitives.EpochSupplier;
-import accord.primitives.Participants;
-import accord.primitives.Range;
-import accord.primitives.Ranges;
-import accord.primitives.RoutingKeys;
-import accord.primitives.Timestamp;
-import accord.primitives.TxnId;
-import accord.primitives.Unseekables;
 import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.utils.IndexedQuadConsumer;
@@ -577,6 +561,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         final Int2IntHashMap byId;
         private final int[] indexForRange;
         final SearchableRangeList lookupByRange;
+        final Map<Integer, LargeBitSet> overlappingCommandStores;
 
         public Snapshot(ShardHolder[] shards, Topology local, Topology global)
         {
@@ -625,6 +610,21 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 indexForRange[i] = rangesAndIndexes[i].index;
             }
             lookupByRange = SearchableRangeList.build(ranges);
+
+            overlappingCommandStores = new HashMap<>();
+            for (ShardHolder shard : shards)
+            {
+                overlappingCommandStores.put(shard.store.id, new LargeBitSet(shards.length));
+                for (Map.Entry<Integer, LargeBitSet> entry : overlappingCommandStores.entrySet())
+                {
+                    Integer id = entry.getKey();
+                    if (!shard.ranges().all().overlapping(shards[byId.get(id)].ranges.all()).isEmpty())
+                    {
+                        overlappingCommandStores.get(shard.store.id).set(id);
+                        entry.getValue().set(shard.store.id);
+                    }
+                }
+            }
         }
 
         // This method exists to ensure we do not hold references to command stores
@@ -759,6 +759,14 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 shard.store.epochUpdateHolder.remove(epoch, shard.ranges, removeRanges);
                 bootstrapUpdates.add(shard.store.unbootstrap(epoch, removeRanges));
             }
+
+            Ranges regainedRanges = shard.ranges().all().overlapping(added);
+            if (!regainedRanges.isEmpty())
+            {
+                shard.store.markUnsafeToRead(regainedRanges);
+                shard.store.markAsRetired(regainedRanges);
+            }
+
             // TODO (desired): only sync affected shards
             Ranges ranges = shard.ranges().currentRanges();
             // ranges can be empty when ranges are lost or consolidated across epochs.
@@ -924,17 +932,45 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return mapReduce(snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
     }
 
+    /* Do all reads and writes go through this? */
     public <O> AsyncChain<O> mapReduce(StoreSelector selector, MapReduceCommandStores<?, O> mapReduceConsume)
     {
         Snapshot snapshot = current;
         Iterator<CommandStore> stores = selector.select(snapshot);
         AsyncChain<O> chain = null;
+        LargeBitSet bitSet = new LargeBitSet(snapshot.shards.length);
         while (stores.hasNext())
         {
-            AsyncChain<O> next = mapReduceConsume.applyAsync(stores.next());
+            CommandStore store = stores.next();
+            bitSet.set(store.id());
+            AsyncChain<O> next = mapReduceConsume.applyAsync(store);
             if (next != null)
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
+
+        // Check that we are not querying two command stores for the same range
+        for (Map.Entry<Integer, LargeBitSet> entry : snapshot.overlappingCommandStores.entrySet())
+        {
+            List<Integer> overlapping = new ArrayList<>();
+            LargeBitSet overlappingCommandStores = entry.getValue();
+            for (int i = overlappingCommandStores.firstSetBit(); i >= 0 ; i = overlappingCommandStores.nextSetBit(i + 1, -1))
+            {
+                if (bitSet.get(i))
+                    overlapping.add(i);
+            }
+
+            Ranges range = Ranges.EMPTY;
+            for (Integer id : overlapping)
+            {
+                Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.byId(id).rangesForEpoch.all());
+                if (!range.overlapping(touchedKeys).isEmpty())
+                {
+                    throw illegalState("We should not query the same range from two different command stores.");
+                }
+                range = range.with(mapReduceConsume.keys().overlapping(snapshot.byId(id).rangesForEpoch.all()).toRanges());
+            }
+        }
+
         return chain == null ? AsyncChains.success(null) : chain;
     }
 

@@ -187,6 +187,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      * But they may still be ordered for other key ranges they participate in.
      */
     private NavigableMap<Timestamp, Ranges> safeToRead = emptySafeToRead();
+    private Ranges retiredRanges =  Ranges.EMPTY;
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
     @Nullable private RejectBefore rejectBefore;
 
@@ -401,8 +402,19 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      */
     final void unsafeSetSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
     {
+        for (Map.Entry<Timestamp, Ranges> entry : newSafeToRead.entrySet())
+        {
+            Ranges rangeExcluded = entry.getValue().without(this.retiredRanges);
+            logger.info("{} is excluded from newSafeToRead because it is in the retired range", rangeExcluded);
+        }
+
         node.updateStamp();
         this.safeToRead = newSafeToRead;
+    }
+
+    final void unsafeAddToRetiredRanges(Ranges newRetiredRange)
+    {
+        this.retiredRanges = newRetiredRange.union(MERGE_ADJACENT, this.retiredRanges);
     }
 
     protected final void unsafeClearSafeToRead()
@@ -1179,6 +1191,13 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
                 safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
             }, agent);
         }
+    }
+
+    final void markAsRetired(Ranges ranges)
+    {
+        execute((Empty) () -> "Mark Range As Retired", safeStore -> {
+            safeStore.addToRetiredRanges(ranges);
+        }, agent);
     }
 
     public final DataStore unsafeGetDataStore()

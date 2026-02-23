@@ -384,6 +384,11 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         commandStore().unsafeSetSafeToRead(newSafeToRead);
     }
 
+    public void addToRetiredRanges(Ranges newRetiredRange)
+    {
+        commandStore().unsafeAddToRetiredRanges(newRetiredRange);
+    }
+
     public void setRangesForEpoch(CommandStores.RangesForEpoch rangesForEpoch)
     {
         commandStore().unsafeSetRangesForEpoch(rangesForEpoch);
