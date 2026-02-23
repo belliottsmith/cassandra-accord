@@ -967,23 +967,19 @@ public abstract class CommandStores implements AsyncExecutorFactory
         // Check that we are not querying two command stores for the same range
         for (Map.Entry<Integer, LargeBitSet> entry : snapshot.overlappingCommandStores.entrySet())
         {
-            List<Integer> overlapping = new ArrayList<>();
+            Ranges range = Ranges.EMPTY;
             LargeBitSet overlappingCommandStores = entry.getValue();
             for (int i = overlappingCommandStores.firstSetBit(); i >= 0 ; i = overlappingCommandStores.nextSetBit(i + 1, -1))
             {
                 if (bitSet.get(i))
-                    overlapping.add(i);
-            }
-
-            Ranges range = Ranges.EMPTY;
-            for (Integer id : overlapping)
-            {
-                Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.byId(id).rangesForEpoch.all());
-                if (!range.overlapping(touchedKeys).isEmpty())
                 {
-                    throw illegalState("We should not query the same range from two different command stores.");
+                    Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.byId(i).rangesForEpoch.all());
+
+                    if (!range.overlapping(touchedKeys).isEmpty())
+                        throw illegalState("We should not query the same range from two different command stores.");
+
+                    range = range.with(mapReduceConsume.keys().overlapping(snapshot.byId(i).rangesForEpoch.all()).toRanges());
                 }
-                range = range.with(mapReduceConsume.keys().overlapping(snapshot.byId(id).rangesForEpoch.all()).toRanges());
             }
         }
 
