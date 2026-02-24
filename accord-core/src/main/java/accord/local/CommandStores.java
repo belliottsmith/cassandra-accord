@@ -973,12 +973,12 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 if (bitSet.get(i))
                 {
-                    Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.byId(i).rangesForEpoch.all());
+                    Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.byId(i).unsafeGetRangesForEpoch().all());
 
                     if (!range.overlapping(touchedKeys).isEmpty())
                         throw illegalState("We should not query the same range from two different command stores.");
 
-                    range = range.with(mapReduceConsume.keys().overlapping(snapshot.byId(i).rangesForEpoch.all()).toRanges());
+                    range = range.with(touchedKeys.toRanges());
                 }
             }
         }
