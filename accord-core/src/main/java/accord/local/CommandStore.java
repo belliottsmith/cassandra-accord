@@ -402,10 +402,13 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      */
     final void unsafeSetSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
     {
-        for (Map.Entry<Timestamp, Ranges> entry : newSafeToRead.entrySet())
+        if (newSafeToRead != null)
         {
-            Ranges rangeExcluded = entry.getValue().without(this.retiredRanges);
-            logger.info("{} is excluded from newSafeToRead because it is in the retired range", rangeExcluded);
+            for (Map.Entry<Timestamp, Ranges> entry : newSafeToRead.entrySet())
+            {
+                Ranges rangeExcluded = entry.getValue().without(this.retiredRanges);
+                logger.info("{} is excluded from newSafeToRead because it is in the retired range", rangeExcluded);
+            }
         }
 
         node.updateStamp();
