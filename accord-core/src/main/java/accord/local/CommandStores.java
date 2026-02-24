@@ -636,7 +636,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 for (int j = i+1; j < shards.length; j++)
                 {
-                    if (!shards[i].ranges().all().overlapping(shards[j].ranges().all()).isEmpty())
+                    if (!shards[i].ranges().all().slice(shards[j].ranges().all(), Minimal).isEmpty())
                     {
                         overlappingCommandStores.get(shards[i].store.id()).set(shards[j].store.id());
                         overlappingCommandStores.get(shards[j].store.id()).set(shards[i].store.id());
@@ -778,7 +778,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 bootstrapUpdates.add(shard.store.unbootstrap(epoch, removeRanges));
             }
 
-            Ranges regainedRanges = shard.ranges().all().overlapping(added);
+            Ranges regainedRanges = shard.ranges().all().slice(added, Minimal);
             if (!regainedRanges.isEmpty())
             {
                 shard.store.markUnsafeToRead(regainedRanges);
@@ -974,9 +974,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 if (bitSet.get(i))
                 {
-                    Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.byId(i).rangesForEpoch.all());
+                    Ranges touchedKeys = mapReduceConsume.keys().toRanges().slice(snapshot.byId(i).rangesForEpoch.all(), Minimal);
 
-                    if (!range.overlapping(touchedKeys).isEmpty())
+                    if (!range.slice(touchedKeys, Minimal).isEmpty())
                         throw illegalState("We should not query the same range from two different command stores.");
 
                     range = range.with(touchedKeys.toRanges());
