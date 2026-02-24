@@ -197,6 +197,7 @@ public class TopologyManager
             if (epoch > active.currentEpoch)
                 ranges = pending.retired(ranges, epoch);
             ranges = active.retired(ranges, epoch);
+            notify();
         }
         if (!ranges.isEmpty())
         {
