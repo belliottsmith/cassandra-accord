@@ -629,16 +629,17 @@ public abstract class CommandStores implements AsyncExecutorFactory
             lookupByRange = SearchableRangeList.build(ranges);
 
             overlappingCommandStores = new HashMap<>();
-            for (ShardHolder shard : shards)
+            for (int i = 0; i < shards.length; i++)
+                overlappingCommandStores.put(i, new LargeBitSet(shards.length));
+
+            for (int i = 0; i < shards.length; i++)
             {
-                overlappingCommandStores.put(shard.store.id, new LargeBitSet(shards.length));
-                for (Map.Entry<Integer, LargeBitSet> entry : overlappingCommandStores.entrySet())
+                for (int j = i+1; j < shards.length; j++)
                 {
-                    Integer id = entry.getKey();
-                    if (!shard.ranges().all().overlapping(shards[byId.get(id)].ranges.all()).isEmpty())
+                    if (!shards[i].ranges().all().overlapping(shards[j].ranges().all()).isEmpty())
                     {
-                        overlappingCommandStores.get(shard.store.id).set(id);
-                        entry.getValue().set(shard.store.id);
+                        overlappingCommandStores.get(i).set(j);
+                        overlappingCommandStores.get(j).set(i);
                     }
                 }
             }
@@ -973,7 +974,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 if (bitSet.get(i))
                 {
-                    Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.byId(i).unsafeGetRangesForEpoch().all());
+                    Unseekables<?> touchedKeys = mapReduceConsume.keys().overlapping(snapshot.shards[i].ranges().all());
 
                     if (!range.overlapping(touchedKeys).isEmpty())
                         throw illegalState("We should not query the same range from two different command stores.");
