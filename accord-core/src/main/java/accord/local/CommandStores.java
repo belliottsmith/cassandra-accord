@@ -629,8 +629,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
             lookupByRange = SearchableRangeList.build(ranges);
 
             overlappingCommandStores = new HashMap<>();
-            for (ShardHolder shard : shards)
-                overlappingCommandStores.put(shard.store.id(), new LargeBitSet(shards.length));
+            for (int i = 0; i < shards.length ; i++)
+                overlappingCommandStores.put(i, new LargeBitSet(shards.length));
 
             for (int i = 0; i < shards.length; i++)
             {
@@ -638,8 +638,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 {
                     if (!shards[i].ranges().all().slice(shards[j].ranges().all(), Minimal).isEmpty())
                     {
-                        overlappingCommandStores.get(shards[i].store.id()).set(shards[j].store.id());
-                        overlappingCommandStores.get(shards[j].store.id()).set(shards[i].store.id());
+                        overlappingCommandStores.get(i).set(j);
+                        overlappingCommandStores.get(j).set(i);
                     }
                 }
             }
@@ -959,7 +959,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         while (stores.hasNext())
         {
             CommandStore store = stores.next();
-            bitSet.set(store.id());
+            bitSet.set(snapshot.byId.get(store.id()));
             AsyncChain<O> next = mapReduceConsume.applyAsync(store);
             if (next != null)
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
@@ -974,7 +974,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 if (bitSet.get(i))
                 {
-                    Ranges touchedKeys = mapReduceConsume.keys().toRanges().slice(snapshot.byId(i).rangesForEpoch.all(), Minimal);
+                    Ranges touchedKeys = mapReduceConsume.keys().toRanges().slice(snapshot.shards[i].ranges().all(), Minimal);
 
                     if (!range.slice(touchedKeys, Minimal).isEmpty())
                         throw illegalState("We should not query the same range from two different command stores.");
