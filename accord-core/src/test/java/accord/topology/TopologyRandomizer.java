@@ -416,7 +416,7 @@ public class TopologyRandomizer
     private boolean validToReassignRange(Topology current, Shard[] nextShards, Map<Id, Ranges> previouslyReplicated)
     {
         Topology next = new Topology(current.epoch + 1, nextShards);
-        Map<Id, Ranges> additions = TopologyManager.getAdditions(current, next);
+        Map<Id, Ranges> additions = Topology.computeNodeAdditions(current, next);
 
         for (Map.Entry<Id, Ranges> entry : additions.entrySet())
         {
@@ -492,7 +492,7 @@ public class TopologyRandomizer
 
         Topology nextTopology = new Topology(current.epoch + 1, newShards);
 
-        Map<Id, Ranges> nextAdditions = TopologyManager.getAdditions(current, nextTopology);
+        Map<Id, Ranges> nextAdditions = Topology.computeNodeAdditions(current, nextTopology);
         for (Map.Entry<Id, Ranges> entry : nextAdditions.entrySet())
         {
             previouslyReplicated.merge(entry.getKey(), entry.getValue(), (a, b) -> a.union(MERGE_ADJACENT, b));

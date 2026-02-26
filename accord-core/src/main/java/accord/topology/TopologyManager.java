@@ -197,7 +197,6 @@ public class TopologyManager
             if (epoch > active.currentEpoch)
                 ranges = pending.retired(ranges, epoch);
             ranges = active.retired(ranges, epoch);
-            notify();
         }
         if (!ranges.isEmpty())
         {
@@ -286,62 +285,6 @@ public class TopologyManager
     protected Executor executor()
     {
         return Runnable::run;
-    }
-
-    public static Map<Id, Ranges> getAdditions(Topology current, Topology next)
-    {
-        Map<Id, Ranges> additions = new HashMap<>();
-        for (Id node : next.nodes())
-        {
-            Ranges prev = current.rangesForNode(node);
-            if (prev == null) prev = Ranges.EMPTY;
-
-            Ranges added = next.rangesForNode(node).without(prev);
-            if (added.isEmpty())
-                continue;
-
-            additions.put(node, added);
-        }
-        return additions;
-    }
-
-    public List<Long> epochsWeAreRegainingRangesFor(Topology curr, Topology next)
-    {
-        ArrayList<Long> epochs = new ArrayList<>();
-
-        synchronized (this)
-        {
-            Map<Id, Ranges> additions = getAdditions(curr, next);
-            for (Map.Entry<Id, Ranges> entry : additions.entrySet())
-            {
-                for (ActiveEpoch activeEpoch : this.active) {
-                    if (activeEpoch.all().rangesForNode(entry.getKey()).intersects(entry.getValue()))
-                        epochs.add(activeEpoch.epoch());
-                }
-            }
-        }
-
-        return epochs;
-    }
-
-    public void blockUntilAllEpochsRetired(List<Long> epochs)
-    {
-        try
-        {
-            int index = 0;
-            synchronized (this)
-            {
-                while (index != epochs.size())
-                {
-                    for (int i = index; i < epochs.size(); i++)
-                        if (this.active.get(epochs.get(i)).allRetired())
-                            index += 1;
-                    wait();
-                }
-            }
-        } catch (Throwable t) {
-            logger.error("Uncaught exception", t);
-        }
     }
 
     public void reportTopology(Topology topology)
