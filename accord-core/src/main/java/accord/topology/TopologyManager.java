@@ -18,11 +18,8 @@
 
 package accord.topology;
 
-import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.Map;
-import java.util.HashMap;
-import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +28,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
+import accord.primitives.Routables;
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +53,8 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.NestedAsyncResult;
+
+import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 
 /**
  * Manages topology state changes and update bookkeeping
@@ -310,6 +310,56 @@ public class TopologyManager
             listener.onReceived(topology);
 
         updateActive();
+    }
+
+    public static class regainingEpochRange
+    {
+        public final long epoch;
+        public final Ranges range;
+
+        public regainingEpochRange(long epoch, Ranges range)
+        {
+            this.epoch = epoch;
+            this.range = range;
+        }
+
+        public long epoch()
+        {
+            return epoch;
+        }
+
+        public Ranges range()
+        {
+            return range;
+        }
+    }
+
+    @Nullable
+    public regainingEpochRange epochAndRangeToBeRetired(Topology curr, Topology next)
+    {
+        Map<Id, Ranges> additions = Topology.computeNodeAdditions(curr, next);
+        long greatestEpoch = -1;
+        Ranges range = Ranges.EMPTY;
+
+        synchronized (this)
+        {
+            for (Map.Entry<Id, Ranges> entry : additions.entrySet())
+            {
+                for (ActiveEpoch activeEpoch : this.active) {
+                    if (activeEpoch.all().rangesForNode(entry.getKey()).intersects(entry.getValue()) && greatestEpoch < activeEpoch.epoch())
+                    {
+                        greatestEpoch = activeEpoch.epoch();
+                        range = range.union(MERGE_ADJACENT, activeEpoch.all().rangesForNode(entry.getKey()).slice(entry.getValue(), Routables.Slice.Minimal));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (greatestEpoch != -1)
+            return new regainingEpochRange(greatestEpoch, range);
+
+        return null;
     }
 
     private final AtomicBoolean updatingActive = new AtomicBoolean();
