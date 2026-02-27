@@ -357,7 +357,7 @@ public class TopologyManager
         }
 
         if (greatestEpoch != -1)
-            return new regainingEpochRange(greatestEpoch, range);
+            return new RegainingEpochRange(greatestEpoch, range);
 
         return null;
     }
