@@ -312,12 +312,12 @@ public class TopologyManager
         updateActive();
     }
 
-    public static class regainingEpochRange
+    public static class RegainingEpochRange
     {
         public final long epoch;
         public final Ranges range;
 
-        public regainingEpochRange(long epoch, Ranges range)
+        public RegainingEpochRange(long epoch, Ranges range)
         {
             this.epoch = epoch;
             this.range = range;
@@ -335,7 +335,7 @@ public class TopologyManager
     }
 
     @Nullable
-    public regainingEpochRange epochAndRangeToBeRetired(Topology curr, Topology next)
+    public RegainingEpochRange epochAndRangeToBeRetired(Topology curr, Topology next)
     {
         Map<Id, Ranges> additions = Topology.computeNodeAdditions(curr, next);
         long greatestEpoch = -1;
