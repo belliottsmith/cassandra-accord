@@ -965,6 +965,13 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
+        Invariants.require(checkQueryDisjointRangesAcrossCommandStores(snapshot, bitSet, mapReduceConsume.keys().toRanges()));
+
+        return chain == null ? AsyncChains.success(null) : chain;
+    }
+
+    public boolean checkQueryDisjointRangesAcrossCommandStores(Snapshot snapshot, LargeBitSet commandStoresSeen, Ranges queryRange)
+    {
         // Check that we are not querying two command stores for the same range
         for (Map.Entry<Integer, LargeBitSet> entry : snapshot.overlappingCommandStores.entrySet())
         {
@@ -972,19 +979,19 @@ public abstract class CommandStores implements AsyncExecutorFactory
             LargeBitSet overlappingCommandStores = entry.getValue();
             for (int i = overlappingCommandStores.firstSetBit(); i >= 0 ; i = overlappingCommandStores.nextSetBit(i + 1, -1))
             {
-                if (bitSet.get(i))
+                if (commandStoresSeen.get(i))
                 {
-                    Ranges touchedKeys = mapReduceConsume.keys().toRanges().slice(snapshot.shards[i].ranges().all(), Minimal);
+                    Ranges touchedKeys = queryRange.slice(snapshot.shards[i].ranges().all(), Minimal);
 
                     if (!range.slice(touchedKeys, Minimal).isEmpty())
-                        throw illegalState("We should not query the same range from two different command stores.");
+                        return false;
 
                     range = range.with(touchedKeys.toRanges());
                 }
             }
         }
 
-        return chain == null ? AsyncChains.success(null) : chain;
+        return true;
     }
 
     public <O> O mapReduceUnsafe(StoreSelector selector, Function<CommandStore, O> map, BiFunction<O, O, O> reduce, O accumulator)
