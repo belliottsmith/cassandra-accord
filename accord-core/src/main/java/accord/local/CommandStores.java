@@ -965,23 +965,23 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
-        Invariants.require(checkQueryDisjointRangesAcrossCommandStores(snapshot, bitSet, mapReduceConsume.keys().toRanges()));
+        Invariants.require(checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges()));
 
         return chain == null ? AsyncChains.success(null) : chain;
     }
 
-    public boolean checkQueryDisjointRangesAcrossCommandStores(Snapshot snapshot, LargeBitSet commandStoresSeen, Ranges queryRange)
+    public static boolean checkQueryDisjointRangesAcrossCommandStores(Map<Integer, LargeBitSet> overlappingCommandStores, ShardHolder[] shards, LargeBitSet commandStoresSeen, Ranges queryRange)
     {
         // Check that we are not querying two command stores for the same range
-        for (Map.Entry<Integer, LargeBitSet> entry : snapshot.overlappingCommandStores.entrySet())
+        for (Map.Entry<Integer, LargeBitSet> entry : overlappingCommandStores.entrySet())
         {
             Ranges range = Ranges.EMPTY;
-            LargeBitSet overlappingCommandStores = entry.getValue();
-            for (int i = overlappingCommandStores.firstSetBit(); i >= 0 ; i = overlappingCommandStores.nextSetBit(i + 1, -1))
+            LargeBitSet overlappingCommandStore = entry.getValue();
+            for (int i = overlappingCommandStore.firstSetBit(); i >= 0 ; i = overlappingCommandStore.nextSetBit(i + 1, -1))
             {
                 if (commandStoresSeen.get(i))
                 {
-                    Ranges touchedKeys = queryRange.slice(snapshot.shards[i].ranges().all(), Minimal);
+                    Ranges touchedKeys = queryRange.slice(shards[i].ranges().all(), Minimal);
 
                     if (!range.slice(touchedKeys, Minimal).isEmpty())
                         return false;
