@@ -634,7 +634,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
             for (int i = 0; i < shards.length; i++)
             {
-                for (int j = i+1; j < shards.length; j++)
+                for (int j = i; j < shards.length; j++)
                 {
                     if (!shards[i].ranges().all().slice(shards[j].ranges().all(), Minimal).isEmpty())
                     {
