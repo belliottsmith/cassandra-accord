@@ -987,7 +987,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
-        if (checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges(), StoreIterator.getMinEpoch()))
+        if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges(), StoreIterator.getMinEpoch()))
             throw new IllegalStateException();
 
         return chain == null ? AsyncChains.success(null) : chain;
