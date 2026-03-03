@@ -765,7 +765,7 @@ public class Node implements NodeCommandStoreService
     public AsyncChain<Void> updateMinHlc(long minHlc)
     {
         // TODO (required): command stores that are not ready due to bootstrap need to refresh their min HLC on bootstrap completion
-        StoreSelector selector = snapshot -> Stream.of(snapshot.shards).map(sh -> sh.store).iterator();
+        StoreSelector selector = snapshot -> new CommandStores.StoreIterator(Stream.of(snapshot.shards).map(sh -> sh.store).iterator(), null);
         return commandStores().mapReduce(selector, new MapReduceCommandStores<>(RoutingKeys.EMPTY)
         {
             @Override public Void reduce(Void o1, Void o2) { return null; }

@@ -110,9 +110,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
             @Override
             public StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
             {
-                return snapshot -> StoreFinder.find(snapshot, participants)
+                return snapshot -> new StoreIterator(StoreFinder.find(snapshot, participants)
                                               .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch())
-                                              .iterator(snapshot);
+                                              .iterator(snapshot), txnId.epoch());
             }
         }
 
@@ -125,7 +125,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public interface StoreSelector extends LatentStoreSelector
     {
         default StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants) { return this; }
-        Iterator<CommandStore> select(Snapshot snapshot);
+        StoreIterator select(Snapshot snapshot);
     }
 
     public static class IncludingSpecificStoreSelector implements StoreSelector
@@ -144,14 +144,35 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 StoreFinder finder = StoreFinder.find(snapshot, participants)
                                                 .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch());
                 finder.set(snapshot.byId.get(storeId));
-                return finder.iterator(snapshot);
+                return new StoreIterator(finder.iterator(snapshot), txnId.epoch());
             };
         }
 
         @Override
-        public Iterator<CommandStore> select(Snapshot snapshot)
+        public StoreIterator select(Snapshot snapshot)
         {
-            return Collections.singletonList(snapshot.byId(storeId)).iterator();
+            return new StoreIterator(Collections.singletonList(snapshot.byId(storeId)).iterator(), null);
+        }
+    }
+
+    public static class StoreIterator
+    {
+        public final Iterator<CommandStore> StoreIterator;
+        public final Long minEpoch;
+
+        public StoreIterator(Iterator<CommandStore> StoreIterator, @Nullable Long minEpoch)
+        {
+            this.StoreIterator = StoreIterator;
+            this.minEpoch = minEpoch;
+        }
+
+        public Iterator<CommandStore> getStoreIterator()
+        {
+            return StoreIterator;
+        }
+
+        public Long getMinEpoch() {
+            return minEpoch;
         }
     }
 
@@ -176,7 +197,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             return snapshot -> {
                 StoreFinder finder = StoreFinder.find(snapshot, unseekables);
                 finder.filter(snapshot, unseekables, minEpoch, maxEpoch);
-                return finder.iterator(snapshot);
+                return new StoreIterator(finder.iterator(snapshot), minEpoch);
             };
         }
 
@@ -878,7 +899,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public AsyncChain<Void> forAll(String reason, Consumer<SafeCommandStore> forEach)
     {
-        return mapReduce(snapshot -> Stream.of(snapshot.shards).map(shard -> shard.store).iterator(), new MapReduceCommandStores<>(RoutingKeys.EMPTY)
+        return mapReduce(snapshot -> new StoreIterator(Stream.of(snapshot.shards).map(shard -> shard.store).iterator(), null), new MapReduceCommandStores<>(RoutingKeys.EMPTY)
         {
             @Override public Void reduce(Void o1, Void o2) { return null; }
             @Override public TxnId primaryTxnId() { return null; }
@@ -947,13 +968,14 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public <O> AsyncChain<O> mapReduce(IntStream commandStoreIds, MapReduceCommandStores<?, O> mapReduce)
     {
-        return mapReduce(snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
+        return mapReduce(snapshot -> new StoreIterator(commandStoreIds.mapToObj(snapshot::byId).iterator(), null), mapReduce);
     }
 
     public <O> AsyncChain<O> mapReduce(StoreSelector selector, MapReduceCommandStores<?, O> mapReduceConsume)
     {
         Snapshot snapshot = current;
-        Iterator<CommandStore> stores = selector.select(snapshot);
+        StoreIterator StoreIterator = selector.select(snapshot);
+        Iterator<CommandStore> stores = StoreIterator.getStoreIterator();
         AsyncChain<O> chain = null;
         LargeBitSet bitSet = new LargeBitSet(snapshot.shards.length);
         while (stores.hasNext())
@@ -965,12 +987,13 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
-        Invariants.require(checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges()));
+        if (checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges(), StoreIterator.getMinEpoch()))
+            throw new IllegalStateException();
 
         return chain == null ? AsyncChains.success(null) : chain;
     }
 
-    public static boolean checkQueryDisjointRangesAcrossCommandStores(Map<Integer, LargeBitSet> overlappingCommandStores, ShardHolder[] shards, LargeBitSet commandStoresSeen, Ranges queryRange)
+    public static boolean checkQueryDisjointRangesAcrossCommandStores(Map<Integer, LargeBitSet> overlappingCommandStores, ShardHolder[] shards, LargeBitSet commandStoresSeen, Ranges queryRange, Long minEpoch)
     {
         // Check that we are not querying two command stores for the same range
         for (Map.Entry<Integer, LargeBitSet> entry : overlappingCommandStores.entrySet())
@@ -981,7 +1004,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 if (commandStoresSeen.get(i))
                 {
-                    Ranges touchedKeys = queryRange.slice(shards[i].ranges().all(), Minimal);
+                    Ranges touchedKeys = queryRange.slice(shards[i].ranges().allSince(minEpoch), Minimal);
 
                     if (!range.slice(touchedKeys, Minimal).isEmpty())
                         return false;
@@ -997,7 +1020,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public <O> O mapReduceUnsafe(StoreSelector selector, Function<CommandStore, O> map, BiFunction<O, O, O> reduce, O accumulator)
     {
         Snapshot snapshot = current;
-        Iterator<CommandStore> stores = selector.select(snapshot);
+        Iterator<CommandStore> stores = selector.select(snapshot).getStoreIterator();
         while (stores.hasNext())
         {
             O next = map.apply(stores.next());
