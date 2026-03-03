@@ -163,7 +163,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         public StoreIterator(Iterator<CommandStore> StoreIterator, @Nullable Long minEpoch)
         {
             this.StoreIterator = StoreIterator;
-            this.minEpoch = minEpoch;
+            this.minEpoch = (minEpoch == null) ? 0L : minEpoch;
         }
 
         public Iterator<CommandStore> getStoreIterator()
