@@ -803,7 +803,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             if (!regainedRanges.isEmpty())
             {
                 shard.store.markUnsafeToRead(regainedRanges);
-                shard.store.markAsRetired(regainedRanges);
+                shard.store.markAsRegained(regainedRanges);
             }
 
             // TODO (desired): only sync affected shards
