@@ -38,6 +38,7 @@ import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.topology.TopologyException;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
@@ -988,10 +989,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         }
 
         if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges(), StoreIterator.getMinEpoch()))
-        {
-            logger.info("Reject query as it tries to query {} in more than one CommandStore", mapReduceConsume.keys().toRanges().toString());
-            return AsyncChains.failure(null);
-        }
+            return AsyncChains.failure(new RuntimeException("Tried to query more than one CommandStore for the same range"));
 
         return chain == null ? AsyncChains.success(null) : chain;
     }
