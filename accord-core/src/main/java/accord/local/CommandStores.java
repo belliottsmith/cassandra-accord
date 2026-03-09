@@ -158,18 +158,18 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public static class StoreIterator
     {
-        public final Iterator<CommandStore> StoreIterator;
+        public final Iterator<CommandStore> storeIterator;
         public final Long minEpoch;
 
-        public StoreIterator(Iterator<CommandStore> StoreIterator, @Nullable Long minEpoch)
+        public StoreIterator(Iterator<CommandStore> storeIterator, @Nullable Long minEpoch)
         {
-            this.StoreIterator = StoreIterator;
+            this.storeIterator = storeIterator;
             this.minEpoch = (minEpoch == null) ? 0L : minEpoch;
         }
 
         public Iterator<CommandStore> getStoreIterator()
         {
-            return StoreIterator;
+            return storeIterator;
         }
 
         public Long getMinEpoch() {
@@ -975,8 +975,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public <O> AsyncChain<O> mapReduce(StoreSelector selector, MapReduceCommandStores<?, O> mapReduceConsume)
     {
         Snapshot snapshot = current;
-        StoreIterator StoreIterator = selector.select(snapshot);
-        Iterator<CommandStore> stores = StoreIterator.getStoreIterator();
+        StoreIterator storeIterator = selector.select(snapshot);
+        Iterator<CommandStore> stores = storeIterator.getStoreIterator();
         AsyncChain<O> chain = null;
         LargeBitSet bitSet = new LargeBitSet(snapshot.shards.length);
         while (stores.hasNext())
@@ -988,7 +988,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
-        if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges(), StoreIterator.getMinEpoch()))
+        if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges(), storeIterator.getMinEpoch()))
             return AsyncChains.failure(new RuntimeException("Tried to query more than one CommandStore for the same range"));
 
         return chain == null ? AsyncChains.success(null) : chain;
