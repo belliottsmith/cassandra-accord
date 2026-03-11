@@ -40,7 +40,6 @@ import javax.annotation.Nullable;
 
 import accord.api.*;
 import accord.topology.*;
-import accord.utils.btree.BTreeMap;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
@@ -785,7 +784,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         List<Supplier<EpochReady>> bootstrapUpdates = new ArrayList<>();
         List<ShardHolder> result = new ArrayList<>(prev.shards.length + added.size());
-        Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges = new Int2ObjectHashMap<>();
+        Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges = prev.previouslyOwnedRanges;
 
         for (ShardHolder shard : prev.shards)
         {
