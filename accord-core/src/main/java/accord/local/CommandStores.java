@@ -795,9 +795,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 // TODO (required): This is updating the a non-volatile field in the previous Snapshot, why modify it at all, even with volatile the guaranteed visibility is weak even with mutual exclusion
                 shard.ranges = shard.ranges().withRanges(newTopology.epoch(), current.without(subtracted));
-                if (shard.ranges.ranges[shard.ranges.size() - 1].isEmpty())
+                if (current.without(subtracted).isEmpty())
                 {
-                    shard.retirementEpoch = shard.ranges.epochs[shard.ranges.size() - 1] - 1;
+                    shard.retirementEpoch = shard.ranges().epochs[shard.ranges.size() - 1] - 1;
                 }
                 shard.store.epochUpdateHolder.remove(epoch, shard.ranges, removeRanges);
                 bootstrapUpdates.add(shard.store.unbootstrap(epoch, removeRanges));
