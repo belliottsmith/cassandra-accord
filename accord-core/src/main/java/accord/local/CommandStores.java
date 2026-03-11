@@ -1017,11 +1017,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 RangesForEpoch rangesForEpoch = e.getValue();
 
-                for (int i = 0; i < rangesForEpoch.size(); i++)
-                {
-                    if (rangesForEpoch.epochs[i] >= storeIterator.getMinEpoch() && rangesForEpoch.ranges[i].intersects(mapReduceConsume.keys()))
-                        return AsyncChains.failure(new RuntimeException("Tried to query CommandStore that has already been deleted"));
-                }
+                if (rangesForEpoch.allSince(storeIterator.getMinEpoch()).intersects(mapReduceConsume.keys()))
+                    return AsyncChains.failure(new RuntimeException("Query sent for deleted CommandStore"));
             }
 
         if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, snapshot.previouslyOwnedRanges, mapReduceConsume.keys().toRanges(), storeIterator.getMinEpoch()))
@@ -1041,7 +1038,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 if (commandStoresSeen.get(i))
                 {
-                    Ranges touchedKeys = shards[i].ranges().epochs[shards[i].ranges().size()-1] >= minEpoch ? queryRange.slice(shards[i].ranges().allSince(minEpoch), Minimal) : Ranges.EMPTY;
+                    Ranges touchedKeys = queryRange.slice(shards[i].ranges().allSince(minEpoch), Minimal);
 
                     if (!range.slice(touchedKeys, Minimal).isEmpty())
                         return false;
@@ -1053,7 +1050,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             // Can only overlap with ranges of CommandStores that we traverse
             for (Map.Entry<Integer, RangesForEpoch> e : previouslyOwnedRanges.entrySet())
             {
-                Ranges touchedKeys = e.getValue().epochs[e.getValue().size()-1] >= minEpoch ? queryRange.slice(e.getValue().allSince(minEpoch), Minimal) : Ranges.EMPTY;
+                Ranges touchedKeys = queryRange.slice(e.getValue().allSince(minEpoch), Minimal);
                 if (!range.slice(touchedKeys, Minimal).isEmpty())
                     return false;
             }
