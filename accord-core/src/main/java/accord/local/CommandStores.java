@@ -38,21 +38,14 @@ import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.topology.TopologyException;
+import accord.api.*;
+import accord.topology.*;
+import accord.utils.btree.BTreeMap;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.Agent;
-import accord.api.AsyncExecutorFactory;
-import accord.api.AsyncExecutor;
-import accord.topology.EpochReady;
-import accord.api.DataStore;
-import accord.api.Journal;
-import accord.api.LocalListeners;
-import accord.api.ProgressLog;
-import accord.api.RoutingKey;
 import accord.local.CommandStore.EpochUpdateHolder;
 import accord.primitives.AbstractRanges;
 import accord.primitives.AbstractUnseekableKeys;
@@ -64,8 +57,6 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
-import accord.topology.Shard;
-import accord.topology.Topology;
 import accord.utils.IndexedQuadConsumer;
 import accord.utils.IndexedRangeQuadConsumer;
 import accord.utils.Invariants;
@@ -318,6 +309,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     {
         public final CommandStore store;
         RangesForEpoch ranges;
+        Long retirementEpoch;
 
         ShardHolder(CommandStore store)
         {
@@ -328,6 +320,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         {
             this.store = store;
             this.ranges = ranges;
+            this.retirementEpoch = null;
         }
 
         public ShardHolder withStoreUnsafe(CommandStore store)
@@ -601,10 +594,11 @@ public abstract class CommandStores implements AsyncExecutorFactory
         private final int[] indexForRange;
         final SearchableRangeList lookupByRange;
         final Map<Integer, LargeBitSet> overlappingCommandStores;
+        Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges;
 
-        public Snapshot(ShardHolder[] shards, Topology local, Topology global)
+        public Snapshot(ShardHolder[] shards, Topology local, Topology global, Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges)
         {
-            super(asMap(shards), global);
+            super(asMap(shards, previouslyOwnedRanges), global);
             this.local = local;
             this.shards = shards;
             this.byId = new Int2IntHashMap(shards.length, Hashing.DEFAULT_LOAD_FACTOR, -1);
@@ -665,6 +659,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
                     }
                 }
             }
+
+            this.previouslyOwnedRanges = previouslyOwnedRanges;
         }
 
         // This method exists to ensure we do not hold references to command stores
@@ -673,11 +669,12 @@ public abstract class CommandStores implements AsyncExecutorFactory
             return new Journal.TopologyUpdate(commandStores, global);
         }
 
-        private static Int2ObjectHashMap<CommandStores.RangesForEpoch> asMap(ShardHolder[] shards)
+        private static Int2ObjectHashMap<CommandStores.RangesForEpoch> asMap(ShardHolder[] shards, Int2ObjectHashMap<CommandStores.RangesForEpoch> previouslyOwnedRanges)
         {
             Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores = new Int2ObjectHashMap<>();
             for (ShardHolder shard : shards)
                 commandStores.put(shard.store.id, shard.ranges);
+            commandStores.putAll(previouslyOwnedRanges);
             return commandStores;
         }
 
@@ -704,7 +701,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         this.supplier = supplier;
         this.shardDistributor = shardDistributor;
 
-        this.current = new Snapshot(new ShardHolder[0], Topology.EMPTY, Topology.EMPTY);
+        this.current = new Snapshot(new ShardHolder[0], Topology.EMPTY, Topology.EMPTY, new Int2ObjectHashMap<>());
         this.journal = journal;
     }
 
@@ -788,14 +785,39 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         List<Supplier<EpochReady>> bootstrapUpdates = new ArrayList<>();
         List<ShardHolder> result = new ArrayList<>(prev.shards.length + added.size());
+        Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges = new Int2ObjectHashMap<>();
+
         for (ShardHolder shard : prev.shards)
         {
+            // Remove shard if RangesForEpoch is fully retired
+            try
+            {
+                if (shard.retirementEpoch != null && node.topology().active().get(shard.retirementEpoch).retired().containsAll(shard.ranges().allAt(shard.retirementEpoch)))
+                {
+                    previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
+                    continue;
+                }
+            }
+            catch (TopologyRetiredException e)
+            {
+                previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
+                continue;
+            }
+            catch (TopologyException e)
+            {
+                throw new IllegalStateException();
+            }
+
             Ranges current = shard.ranges().currentRanges();
             Ranges removeRanges = subtracted.slice(current, Minimal);
             if (!removeRanges.isEmpty())
             {
                 // TODO (required): This is updating the a non-volatile field in the previous Snapshot, why modify it at all, even with volatile the guaranteed visibility is weak even with mutual exclusion
                 shard.ranges = shard.ranges().withRanges(newTopology.epoch(), current.without(subtracted));
+                if (shard.ranges.ranges[shard.ranges.size() - 1].isEmpty())
+                {
+                    shard.retirementEpoch = shard.ranges.epochs[shard.ranges.size() - 1];
+                }
                 shard.store.epochUpdateHolder.remove(epoch, shard.ranges, removeRanges);
                 bootstrapUpdates.add(shard.store.unbootstrap(epoch, removeRanges));
             }
@@ -828,6 +850,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 updateHolder.add(epoch, rangesForEpoch, addRanges);
                 ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder));
                 shard.ranges = rangesForEpoch;
+                shard.retirementEpoch = null;
 
                 Map<BootstrapRangeAction, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range), BootstrapRangeAction.class);
                 for (Map.Entry<BootstrapRangeAction, Ranges> entry : partitioned.entrySet())
@@ -860,7 +883,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 );
             };
         }
-        return new TopologyUpdate(new Snapshot(result.toArray(new ShardHolder[0]), newLocalTopology, newTopology), bootstrap);
+        return new TopologyUpdate(new Snapshot(result.toArray(new ShardHolder[0]), newLocalTopology, newTopology, previouslyOwnedRanges), bootstrap);
     }
 
     private static boolean requiresSync(Ranges ranges, Topology oldTopology, Topology newTopology)
@@ -982,19 +1005,32 @@ public abstract class CommandStores implements AsyncExecutorFactory
         while (stores.hasNext())
         {
             CommandStore store = stores.next();
+            Invariants.require(!snapshot.previouslyOwnedRanges.containsKey(store.id()));
             bitSet.set(snapshot.byId.get(store.id()));
             AsyncChain<O> next = mapReduceConsume.applyAsync(store);
             if (next != null)
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
-        if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, mapReduceConsume.keys().toRanges(), storeIterator.getMinEpoch()))
+        if (chain == null)
+            for (Map.Entry<Integer, RangesForEpoch> e : snapshot.previouslyOwnedRanges.entrySet())
+            {
+                RangesForEpoch rangesForEpoch = e.getValue();
+
+                for (int i = 0; i < rangesForEpoch.size(); i++)
+                {
+                    if (rangesForEpoch.epochs[i] >= storeIterator.getMinEpoch() && rangesForEpoch.ranges[i].intersects(mapReduceConsume.keys()))
+                        return AsyncChains.failure(new RuntimeException("Tried to query CommandStore that has already been deleted"));
+                }
+            }
+
+        if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, snapshot.previouslyOwnedRanges, mapReduceConsume.keys().toRanges(), storeIterator.getMinEpoch()))
             return AsyncChains.failure(new RuntimeException("Tried to query more than one CommandStore for the same range"));
 
         return chain == null ? AsyncChains.success(null) : chain;
     }
 
-    public static boolean checkQueryDisjointRangesAcrossCommandStores(Map<Integer, LargeBitSet> overlappingCommandStores, ShardHolder[] shards, LargeBitSet commandStoresSeen, Ranges queryRange, Long minEpoch)
+    public static boolean checkQueryDisjointRangesAcrossCommandStores(Map<Integer, LargeBitSet> overlappingCommandStores, ShardHolder[] shards, LargeBitSet commandStoresSeen, Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges, Ranges queryRange, Long minEpoch)
     {
         // Check that we are not querying two command stores for the same range
         for (Map.Entry<Integer, LargeBitSet> entry : overlappingCommandStores.entrySet())
@@ -1005,13 +1041,21 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 if (commandStoresSeen.get(i))
                 {
-                    Ranges touchedKeys = queryRange.slice(shards[i].ranges().allSince(minEpoch), Minimal);
+                    Ranges touchedKeys = shards[i].ranges().epochs[shards[i].ranges().size()-1] >= minEpoch ? queryRange.slice(shards[i].ranges().allSince(minEpoch), Minimal) : Ranges.EMPTY;
 
                     if (!range.slice(touchedKeys, Minimal).isEmpty())
                         return false;
 
                     range = range.with(touchedKeys.toRanges());
                 }
+            }
+
+            // Can only overlap with ranges of CommandStores that we traverse
+            for (Map.Entry<Integer, RangesForEpoch> e : previouslyOwnedRanges.entrySet())
+            {
+                Ranges touchedKeys = e.getValue().epochs[e.getValue().size()-1] >= minEpoch ? queryRange.slice(e.getValue().allSince(minEpoch), Minimal) : Ranges.EMPTY;
+                if (!range.slice(touchedKeys, Minimal).isEmpty())
+                    return false;
             }
         }
 
@@ -1050,7 +1094,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         Arrays.sort(shards, Comparator.comparingInt(shard -> shard.store.id));
 
         nextId = maxId + 1;
-        loadSnapshot(new Snapshot(shards, update.global.forNode(supplier.node.id()).trim(), update.global));
+        loadSnapshot(new Snapshot(shards, update.global.forNode(supplier.node.id()).trim(), update.global, new Int2ObjectHashMap<>()));
     }
 
     public synchronized void resetTopology(Journal.TopologyUpdate update)
@@ -1100,7 +1144,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         }
 
         nextId = maxId + 1;
-        loadSnapshot(new Snapshot(shards, current.local, current.global));
+        loadSnapshot(new Snapshot(shards, current.local, current.global, new Int2ObjectHashMap<>()));
     }
 
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology)

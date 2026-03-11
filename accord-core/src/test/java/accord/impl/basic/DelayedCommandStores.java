@@ -18,14 +18,7 @@
 
 package accord.impl.basic;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-import java.util.NavigableMap;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -65,6 +58,7 @@ import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
+import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.Journal.CommandUpdate;
 import static accord.utils.Invariants.Paranoia.LINEAR;
@@ -105,7 +99,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
         Arrays.sort(shards, Comparator.comparingInt(shard -> shard.store.id()));
 
-        loadSnapshot(new Snapshot(shards, lastUpdate.global.forNode(nodeId()).trim(), lastUpdate.global));
+        loadSnapshot(new Snapshot(shards, lastUpdate.global.forNode(nodeId()).trim(), lastUpdate.global, new Int2ObjectHashMap<>()));
     }
 
     protected void loadSnapshot(Snapshot nextSnapshot)
