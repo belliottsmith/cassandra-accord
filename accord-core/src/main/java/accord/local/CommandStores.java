@@ -789,25 +789,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         for (ShardHolder shard : prev.shards)
         {
-            // Remove shard if RangesForEpoch is fully retired
-            try
-            {
-                if (shard.retirementEpoch != null && node.topology().active().get(shard.retirementEpoch).retired().containsAll(shard.ranges().allAt(shard.retirementEpoch)))
-                {
-                    previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
-                    continue;
-                }
-            }
-            catch (TopologyRetiredException e)
-            {
-                previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
-                continue;
-            }
-            catch (TopologyException e)
-            {
-                throw new IllegalStateException();
-            }
-
             Ranges current = shard.ranges().currentRanges();
             Ranges removeRanges = subtracted.slice(current, Minimal);
             if (!removeRanges.isEmpty())
@@ -816,7 +797,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 shard.ranges = shard.ranges().withRanges(newTopology.epoch(), current.without(subtracted));
                 if (shard.ranges.ranges[shard.ranges.size() - 1].isEmpty())
                 {
-                    shard.retirementEpoch = shard.ranges.epochs[shard.ranges.size() - 1];
+                    shard.retirementEpoch = shard.ranges.epochs[shard.ranges.size() - 1] - 1;
                 }
                 shard.store.epochUpdateHolder.remove(epoch, shard.ranges, removeRanges);
                 bootstrapUpdates.add(shard.store.unbootstrap(epoch, removeRanges));
@@ -837,6 +818,25 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 logger.debug("Epoch {} requires visibility sync for {}", epoch, ranges);
                 bootstrapUpdates.add(shard.store.refreshReadyToCoordinate(node, ranges, epoch));
             }
+
+            try
+            {
+                if (shard.retirementEpoch != null && node.topology().active().get(shard.retirementEpoch).retired().containsAll(shard.ranges().allAt(shard.retirementEpoch)))
+                {
+                    previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
+                    continue;
+                }
+            }
+            catch (TopologyRetiredException e)
+            {
+                previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
+                continue;
+            }
+            catch (TopologyException e)
+            {
+                throw new IllegalStateException();
+            }
+
             result.add(shard);
         }
 
