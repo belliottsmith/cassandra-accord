@@ -125,7 +125,6 @@ public interface LocalListeners
     }
 
     Iterable<TxnListener> txnListeners();
+    Iterable<TxnId> txnListenersWaitingOn();
     Iterable<Registered> complexListeners();
-
-    Iterable<TxnId> txnsWaitingOn(SaveStatus saveStatus);
 }
