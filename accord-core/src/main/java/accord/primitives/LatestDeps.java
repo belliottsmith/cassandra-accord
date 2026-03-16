@@ -508,8 +508,13 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             switch (e.known)
             {
                 default: throw new UnhandledEnum(e.known);
-                case DepsProposedFixed: case DepsProposed: return Stream.of(getter.apply(e.coordinatedDeps, slice));
-                case DepsUnknown: case DepsFromCoordinator: return e.merge.stream().map(d -> getter.apply(d, slice));
+                case DepsUnknown:
+                    return e.merge.stream().map(d -> getter.apply(d, slice));
+                case DepsFromCoordinator:
+                    Stream<V> merge = e.merge.stream().map(d -> getter.apply(d, slice));
+                    return Stream.concat(Stream.of(getter.apply(e.coordinatedDeps, slice)), merge);
+                case DepsProposedFixed: case DepsProposed:
+                    return Stream.of(getter.apply(e.coordinatedDeps, slice));
                 case DepsKnown: case DepsErased: case NoDeps: case DepsCommitted:
                     throw UnhandledEnum.invalid(e.known);
             }
