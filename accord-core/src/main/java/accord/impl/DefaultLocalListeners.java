@@ -564,7 +564,7 @@ public class DefaultLocalListeners implements LocalListeners
     }
 
     @Override
-    public Iterable<TxnId> txnsWaitingOn(SaveStatus saveStatus)
+    public Iterable<TxnId> txnListenersWaitingOn()
     {
         return () -> {
             return new Iterator<>()

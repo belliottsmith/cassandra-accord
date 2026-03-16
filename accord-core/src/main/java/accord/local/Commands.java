@@ -1265,7 +1265,7 @@ public class Commands
             {
                 Command waiting = waitingSafe.current();
                 if (waiting.saveStatus().compareTo(Applying) >= 0)
-                    return false; // nothing to do
+                    return false; // nothing to do TODO (expected): NotifyWaitingOnPlus should be able to try redundantly applying to unblock
 
                 if (depSafe == null)
                 {
@@ -1309,8 +1309,11 @@ public class Commands
                         depExecution = LocalExecution.Applied;
 
                     Participants<?> participants = null;
-                    if (depExecution.compareTo(WaitingToExecute) < 0 && dep.participants().owns().isEmpty())
+                    if (depExecution.compareTo(WaitingToExecute) < 0)
                     {
+                        // transaction might have been invalidated;
+                        // we should only need to check this after replay which might not replay potentially-invalidated transactions
+                        // TODO (required): why isn't this case handled by maybeCleanup when we load the dependency?
                         // TODO (desired): slightly costly to invert a large partialDeps collection
                         participants = partialDeps.participants(dep.txnId());
                         Participants<?> waitsOn = participants.intersecting(waiting.participants().stillWaitsOn(), Minimal);
@@ -1531,6 +1534,12 @@ public class Commands
                     onDone.accept(safeStore);
                 }
             };
+        }
+
+        @Override
+        public String reason()
+        {
+            return "NotifyWaitingOnPlus{waiting=" + waitingId + ",on=" + loadDepId + ',' + transitivelyNotifyListeners + ',' + transitivelyNotifyWaitingOn + '}';
         }
     }
 

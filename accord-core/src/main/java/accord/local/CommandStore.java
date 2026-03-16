@@ -21,6 +21,7 @@ package accord.local;
 import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -1080,16 +1081,60 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     }
 
     /**
-     * This is a heavy-handed operator action to unstick waiting transactions whose transitive dependencies
+     * This method may need to be called on restart to initialise state for transactions that are waiting for
+     * a transaction that has not - and won't be - committed, if state is restored by replay.
+     * This is because a transaction that will be invalidated may be behind the durable-to-command-store replay point.
+     *
+     * This may also be used by an operator to unstick waiting transactions whose transitive dependencies
      * may already be applied.
      */
-    public final AsyncResult<Void> operatorTryToExecuteListeningTxns()
+    public final AsyncResult<Void> tryToExecuteListeningTxns(boolean loopUntilNoNewListeners)
     {
         SettableResult<Void> done = new SettableResult<>();
         execute((Empty)() -> "Try Execute Listening", safeStore -> {
-            tryExecuteListening(safeStore, listeners.txnsWaitingOn(SaveStatus.Applied).iterator(), done);
+            if (!loopUntilNoNewListeners)
+            {
+                tryExecuteListening(safeStore, listeners.txnListenersWaitingOn().iterator(), done);
+            }
+            else
+            {
+                List<TxnId> txnIds = new ArrayList<>();
+                listeners.txnListenersWaitingOn().forEach(txnIds::add);
+                if (txnIds.isEmpty()) done.trySuccess(null);
+                else
+                {
+                    txnIds.sort(TxnId::compareTo);
+                    Set<TxnId> visited = new HashSet<>(txnIds);
+                    TxnId limit = txnIds.get(txnIds.size() - 1);
+                    tryExecuteListeningLoop(safeStore, visited, limit, txnIds, done);
+                }
+            }
         }, agent);
         return done;
+    }
+
+    private void tryExecuteListeningLoop(SafeCommandStore safeStore, Set<TxnId> visited, TxnId limit, List<TxnId> txnIds, SettableResult<Void> done)
+    {
+        SettableResult<Void> continuation = new SettableResult<>();
+        continuation.invoke((success, fail) -> {
+            if (fail != null) done.tryFailure(fail);
+            else
+            {
+                List<TxnId> newTxnIds = new ArrayList<>();
+                listeners.txnListenersWaitingOn().forEach(txnId -> {
+                    if (txnId.compareTo(limit) < 0 && visited.add(txnId))
+                        newTxnIds.add(txnId);
+                });
+
+                if (newTxnIds.isEmpty()) done.trySuccess(null);
+                else
+                {
+                    newTxnIds.sort(TxnId::compareTo);
+                    tryExecuteListeningLoop(safeStore, visited, limit, newTxnIds, done);
+                }
+            }
+        });
+        tryExecuteListening(safeStore, txnIds.iterator(), continuation);
     }
 
     private void tryExecuteListening(SafeCommandStore safeStore, Iterator<TxnId> iterator, SettableResult<Void> done)
