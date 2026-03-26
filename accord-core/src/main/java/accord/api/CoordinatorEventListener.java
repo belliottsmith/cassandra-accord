@@ -34,7 +34,7 @@ public interface CoordinatorEventListener
     default void onFailed(Throwable failure, TxnId txnId, Participants<?> participants, Coordination coordination) {}
 
     default void onPreAccepted(TxnId txnId) {}
-    default void onAccepted(TxnId txnId, Ballot ballot) {}
+    default void onAccepted(TxnId txnId, Ballot ballot, @Nullable ExecutePath path) {}
     default void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path) {}
     default void onExecuted(TxnId txnId, Ballot ballot) {}
     default void onDurable(Durability durability, @Nullable Ballot ballot, TxnId txnId) {}

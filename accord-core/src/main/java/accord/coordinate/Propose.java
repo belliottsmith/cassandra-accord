@@ -51,6 +51,7 @@ import accord.utils.Rethrowable;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Accept.AcceptFlags.filterDeps;
+import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedInvalidate;
@@ -148,9 +149,16 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         //  Or we must pick it up as an Unstable dependency here.
         Deps newDeps = mergeNewDeps();
         Deps deps = mergeDeps(newDeps);
-        node.agent().coordinatorEvents().onAccepted(txnId, ballot);
-        if (kind == Accept.Kind.MEDIUM) adapter().execute(node, executor, tracker.topologies(), scope, ballot, ExecutePath.MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, finishAndTakeCallback());
+        node.agent().coordinatorEvents().onAccepted(txnId, ballot, executePath());
+        if (kind == MEDIUM) adapter().execute(node, executor, tracker.topologies(), scope, ballot, ExecutePath.MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, finishAndTakeCallback());
         else adapter().stabilise(node, executor, tracker.topologies(), scope, ballot, txnId, txn, executeAt, deps, finishAndTakeCallback());
+    }
+
+    private ExecutePath executePath()
+    {
+        if (kind == MEDIUM) return ExecutePath.MEDIUM;
+        if (ballot.equals(Ballot.ZERO)) return ExecutePath.SLOW;
+        return ExecutePath.RECOVER;
     }
 
     Deps mergeDeps()
