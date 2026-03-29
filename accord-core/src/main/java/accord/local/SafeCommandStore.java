@@ -88,6 +88,12 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     private static final int MAX_REENTRANCY = 50;
     private int reentrancyCounter;
+
+    public boolean hasRecursed()
+    {
+        return reentrancyCounter > 0;
+    }
+
     public boolean tryRecurse()
     {
         if (reentrancyCounter == MAX_REENTRANCY)

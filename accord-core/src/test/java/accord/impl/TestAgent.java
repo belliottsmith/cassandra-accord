@@ -250,4 +250,10 @@ public class TestAgent implements Agent, OwnershipEventListener
     {
         return node.now() - SECONDS.toMillis(1);
     }
+
+    @Override
+    public boolean reportRemoteSuccess(Result success)
+    {
+        return false;
+    }
 }

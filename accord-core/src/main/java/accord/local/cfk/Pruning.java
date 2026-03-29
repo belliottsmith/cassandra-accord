@@ -35,7 +35,7 @@ import accord.utils.btree.BulkIterator;
 import accord.utils.btree.UpdateFunction;
 import org.agrona.collections.Long2ObjectHashMap;
 
-import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
+import static accord.api.ProtocolModifiers.isTransitiveDependencyVisible;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_DURABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;

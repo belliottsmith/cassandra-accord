@@ -54,7 +54,7 @@ import accord.utils.RelationMultiMap;
 import accord.utils.SortedArrays;
 import accord.utils.SortedList.MergeCursor;
 
-import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
+import static accord.api.ProtocolModifiers.isTransitiveDependencyVisible;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.LoadKeys.SYNC;
 import static accord.local.LoadKeysFor.WRITE;

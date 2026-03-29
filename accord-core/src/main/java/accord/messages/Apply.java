@@ -50,8 +50,8 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
-import static accord.api.ProtocolModifiers.Toggles.fastWritesMayBypassCommandsForKey;
-import static accord.api.ProtocolModifiers.Toggles.fastWritesMayBypassSafeStore;
+import static accord.api.ProtocolModifiers.fastWritesMayBypassCommandsForKey;
+import static accord.api.ProtocolModifiers.fastWritesMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.Apply.ApplyReply.Kind.InsufficientEpochs;
 import static accord.messages.MessageType.StandardMessage.APPLY_REQ;
@@ -256,13 +256,7 @@ public class Apply extends RouteRequest<ApplyReply>
     @Override
     public ApplyReply reduce(ApplyReply a, ApplyReply b)
     {
-        if (a == null || b == null)
-            return a != null ? a : b;
-
-        int c = a.kind.compareTo(b.kind);
-        if (c > 0 || (c == 0 && a.kind != InsufficientEpochs)) return a;
-        else if (c < 0) return b;
-        else return a.minEpoch <= b.minEpoch ? a : b;
+        return ApplyReply.reduce(a, b);
     }
 
     @Override
@@ -328,6 +322,17 @@ public class Apply extends RouteRequest<ApplyReply>
         {
             Invariants.require(kind == InsufficientEpochs);
             return minEpoch;
+        }
+
+        public static ApplyReply reduce(ApplyReply a, ApplyReply b)
+        {
+            if (a == null || b == null)
+                return a != null ? a : b;
+
+            int c = a.kind.compareTo(b.kind);
+            if (c > 0 || (c == 0 && a.kind != InsufficientEpochs)) return a;
+            else if (c < 0) return b;
+            else return a.minEpoch <= b.minEpoch ? a : b;
         }
     }
 

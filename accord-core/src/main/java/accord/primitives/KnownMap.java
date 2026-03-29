@@ -27,8 +27,8 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.utils.ReducingRangeMap;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
-import static accord.api.ProtocolModifiers.RangeSpec.isStartInclusive;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
+import static accord.api.ProtocolModifiers.isRangeStartInclusive;
 import static accord.primitives.Known.Definition.DefinitionErased;
 import static accord.primitives.Known.Definition.DefinitionKnown;
 import static accord.primitives.Known.KnownDeps.DepsErased;
@@ -305,7 +305,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
                         return prev.slice(-1 - i, prev.size());
 
                     if (prev.domain() == Routable.Domain.Key)
-                        return prev.slice(i + (isEndInclusive() ? 1 : 0), prev.size());
+                        return prev.slice(i + (isRangeEndInclusive() ? 1 : 0), prev.size());
 
                     Range r = prev.get(i).asRange();
                     prev = prev.slice(i, prev.size());
@@ -319,7 +319,7 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
                         return prev.slice(0, -1 - i);
 
                     if (prev.domain() == Routable.Domain.Key)
-                        return prev.slice(0, i + (isStartInclusive() ? 0 : 1));
+                        return prev.slice(0, i + (isRangeStartInclusive() ? 0 : 1));
 
                     Range r = prev.get(i).asRange();
                     prev = prev.slice(0, i);

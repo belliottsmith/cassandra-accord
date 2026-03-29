@@ -60,9 +60,9 @@ import org.agrona.collections.IntHashSet;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
-import static accord.api.ProtocolModifiers.Toggles.dataStoreDetectsFutureReads;
-import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassCommandsForKey;
-import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
+import static accord.api.ProtocolModifiers.dataStoreDetectsFutureReads;
+import static accord.api.ProtocolModifiers.fastReadsMayBypassCommandsForKey;
+import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;

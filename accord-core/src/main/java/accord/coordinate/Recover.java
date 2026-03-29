@@ -70,7 +70,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
-import static accord.api.ProtocolModifiers.Toggles.recoverPartialAcceptPhaseIfNoFastPath;
+import static accord.api.ProtocolModifiers.recoverPartialAcceptPhaseIfNoFastPath;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;

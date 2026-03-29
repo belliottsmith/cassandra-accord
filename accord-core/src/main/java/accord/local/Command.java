@@ -948,6 +948,12 @@ public abstract class Command implements ICommand
             return waitingOn.get(txnIdCount() + keyIndex);
         }
 
+        public boolean isWaitingOnKey(RoutingKey key)
+        {
+            int i = keys.indexOf(key);
+            return i >= 0 && isWaitingOnKey(keys.indexOf(key));
+        }
+
         public RoutingKeys waitingOnKeys()
         {
             int offset = txnIdCount();
@@ -1529,6 +1535,11 @@ public abstract class Command implements ICommand
     static Command.Committed readyToExecute(Command.Committed command)
     {
         return committed(command, SaveStatus.ReadyToExecute);
+    }
+
+    static Command.Executed preapplied(Command command, Timestamp applyAt, Writes writes, Result result)
+    {
+        return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), command.participants(), command.promised(), applyAt, command.partialTxn(), command.partialDeps(), command.acceptedOrCommitted(), command.waitingOn(), writes, result);
     }
 
     static Command.Executed preapplied(Command command, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)

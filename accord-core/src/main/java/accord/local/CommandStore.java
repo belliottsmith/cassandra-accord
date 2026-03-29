@@ -80,7 +80,7 @@ import static accord.local.durability.DurabilityService.SyncLocal.KnownToSelf;
 import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Image;
-import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
+import static accord.api.ProtocolModifiers.dataStoreRequiresUniqueHlcs;
 import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_DURABLE;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY;
@@ -322,6 +322,16 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     public abstract AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
     public abstract <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
+
+    public AsyncChain<Void> priorityChain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+    {
+        return chain(context, consumer);
+    }
+
+    public <T> AsyncChain<T> priorityChain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+    {
+        return chain(context, function);
+    }
 
     public Cancellable execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
@@ -897,7 +907,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
 
         // TODO (desired): not all systems care about HLC_BOUND for GC, make configurable
-        if (globalSyncId.is(HLC_BOUND) || !requiresUniqueHlcs())
+        if (globalSyncId.is(HLC_BOUND) || !dataStoreRequiresUniqueHlcs())
         {
             RedundantBefore addOnDataStoreDurable = RedundantBefore.create(slicedRanges, globalSyncId, GC_BEFORE_AND_LOCALLY_DURABLE);
             dataStore.ensureDurable(this, slicedRanges, addOnDataStoreDurable, 0);

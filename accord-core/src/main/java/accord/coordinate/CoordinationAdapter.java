@@ -53,7 +53,7 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
-import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
+import static accord.api.ProtocolModifiers.dataStoreRequiresUniqueHlcs;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecutePath.FAST;
@@ -103,7 +103,7 @@ public interface CoordinationAdapter<R>
 
     class Adapters
     {
-        public static CoordinationAdapter<Result> standard()
+        public static TxnAdapter standard()
         {
             return TxnAdapter.STANDARD;
         }
@@ -248,7 +248,7 @@ public interface CoordinationAdapter<R>
                 {
                     Topologies all = execution(node, any, route, route, txnId, executeAt);
 
-                    if ((flags.all().contains(HAS_UNIQUE_HLC) || !requiresUniqueHlcs()) && txn.read().keys().isEmpty() && (path != FAST || !txnId.hasPrivilegedCoordinator()))
+                    if ((flags.all().contains(HAS_UNIQUE_HLC) || !dataStoreRequiresUniqueHlcs()) && txn.read().keys().isEmpty() && (path != FAST || !txnId.hasPrivilegedCoordinator()))
                     {
                         // TODO (expected): enable this optimisation with privileged coordinator to support faster blind writes
                         //   (only unsafe because we don't guarantee the stable record goes to the coordinator first)

@@ -18,6 +18,10 @@
 
 package accord.coordinate;
 
+import java.util.function.Predicate;
+
+import javax.annotation.Nullable;
+
 import accord.api.Result;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.AbstractTracker;
@@ -95,7 +99,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                     // but we make this explicit for the caller with informDurableOnDone
                     finishWithSuccess(null);
                     if (informDurableOnDone)
-                        InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, AllQuorums);
+                        InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, stableDeps, AllQuorums);
                 }
                 break;
             case RaceWithRecovery:
@@ -133,10 +137,22 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     protected void start()
     {
         node.agent().coordinatorEvents().onExecuted(txnId, ballot);
+        super.start();
+        contact();
+    }
+
+    void contact()
+    {
         // applyMinimal is used for transaction execution by the original coordinator so it's important to use
         // Node's Apply factory in case the factory has to do synchronous Apply.
-        super.start();
-        contact(to -> factory.create(applyKind, to, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(to)));
+        contact((Predicate<Id>) null);
+    }
+
+    void contact(@Nullable Predicate<Node.Id> include)
+    {
+        // applyMinimal is used for transaction execution by the original coordinator so it's important to use
+        // Node's Apply factory in case the factory has to do synchronous Apply.
+        contact(to -> factory.create(applyKind, to, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(to)), include);
     }
 
     @Override

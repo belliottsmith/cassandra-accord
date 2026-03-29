@@ -57,7 +57,7 @@ import accord.utils.btree.BTree;
 import accord.utils.btree.IntervalBTree;
 import accord.utils.btree.IntervalBTree.IntervalComparators;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
 import static accord.coordinate.ExecuteSyncPoint.coordinateIncluding;
 import static accord.local.durability.DurabilityQueue.Status.ABANDONED;
 import static accord.local.durability.DurabilityQueue.Status.ACTIVE;
@@ -318,7 +318,7 @@ public class DurabilityQueue
     public DurabilityQueue(Adapter adapter)
     {
         this.adapter = adapter;
-        Invariants.require(isEndInclusive(), "Need to implement range-exclusive IntervalComparators");
+        Invariants.require(isRangeEndInclusive(), "Need to implement range-exclusive IntervalComparators");
     }
 
     void submit(SyncPoint syncPoint, @Nullable DurabilityRequest request)

@@ -48,8 +48,8 @@ import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
-import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
-import static accord.api.ProtocolModifiers.Toggles.syncPointsTrackUnstableMediumPathDependencies;
+import static accord.api.ProtocolModifiers.filterDuplicateDependenciesFromAcceptReply;
+import static accord.api.ProtocolModifiers.syncPointsTrackUnstableMediumPathDependencies;
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;

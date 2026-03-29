@@ -36,6 +36,7 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.TopologyService;
+import accord.local.cfk.ExecuteTxnBacklog;
 import accord.topology.Topologies;
 import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
@@ -95,9 +96,9 @@ import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
-import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
-import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
-import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
+import static accord.api.ProtocolModifiers.defaultMediumPath;
+import static accord.api.ProtocolModifiers.ensurePermitted;
+import static accord.api.ProtocolModifiers.usePrivilegedCoordinator;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
@@ -184,6 +185,8 @@ public class Node implements NodeCommandStoreService
     private final Coordinations coordinations = new Coordinations();
     private final AtomicLong nextCoordinationId = new AtomicLong();
 
+    private final ExecuteTxnBacklog executeBacklogSink;
+
     /**
      * Used to guard some operations that should normally operate on consistent information, but in rare cases may need to repeat work.
      * For simplicity we have a global stamp counter for this.
@@ -219,6 +222,7 @@ public class Node implements NodeCommandStoreService
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         this.topology = new TopologyManager(topologySorter, this, topologyService, time, timeouts);
         this.durabilityService = new DurabilityService(this);
+        this.executeBacklogSink = new ExecuteTxnBacklog(this);
 
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forAllUnsafe(store -> store.progressLog.maybeNotify()), 1, SECONDS);
@@ -858,6 +862,11 @@ public class Node implements NodeCommandStoreService
     public Coordinations coordinations()
     {
         return coordinations;
+    }
+
+    public ExecuteTxnBacklog executeBacklogSink()
+    {
+        return executeBacklogSink;
     }
 
     public boolean isCoordinatingWithBallot(TxnId txnId, Ballot ballot)

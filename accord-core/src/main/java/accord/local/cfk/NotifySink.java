@@ -38,7 +38,7 @@ import static accord.local.LoadKeys.SYNC;
 import static accord.local.LoadKeysFor.WRITE;
 import static accord.primitives.Status.Truncated;
 
-interface NotifySink
+public interface NotifySink
 {
     void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc);
 
@@ -122,7 +122,13 @@ interface NotifySink
 
         private void doNotifyAlreadyReady(SafeCommandStore safeStore, TxnId txnId, RoutingKey key)
         {
-            SafeCommandsForKey update = safeStore.ifLoadedAndInitialised(key);
+            SafeCommandsForKey update = null;
+            // TODO (expected): remove this ugly condition, which is to permit stricter validation of hasNotifiedInPlace without breaking recursive notification.
+            //    this is because we may notify a read transaction before we have finished notifying later read transactions, and then try to validate that the later has been notified
+            //    to avoid this we simply don't recurse to report an already notified read transaction if we're validating this.
+            //  might be better to simply collect reads we need to notify? normally there will be zero
+            if (txnId.isWrite() || !safeStore.hasRecursed())
+                update = safeStore.ifLoadedAndInitialised(key);
             if (update != null && safeStore.tryRecurse())
             {
                 try { update.callback(safeStore, safeStore.unsafeGet(txnId).current(), false); }

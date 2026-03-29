@@ -93,7 +93,7 @@ public class RedundantStatus
          */
         UNREADY(false, true, LT, LOCALLY_DEFUNCT),
 
-        UNUSED(false, true, LT),
+        SHARD_APPLIED_HLC_BOUND(false, true, LE),
 
         /**
          * A point before which we do not know OUR OWN log
@@ -136,7 +136,7 @@ public class RedundantStatus
         TRUNCATE_BEFORE                    (false,  true,  LT, SHARD_APPLIED, LOCALLY_SYNCED),
 
         // TODO (desired): separate GC_BEFORE with HLC_BOUND and without
-        GC_BEFORE                          (false,  true,  LT, TRUNCATE_BEFORE),
+        GC_BEFORE                          (false,  true,  LT, TRUNCATE_BEFORE, SHARD_APPLIED_HLC_BOUND),
 
         // not persisted
         WAS_OWNED                          (false,  false, LT, LOCALLY_DEFUNCT),

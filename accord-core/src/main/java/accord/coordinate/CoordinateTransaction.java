@@ -236,7 +236,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         return node.coordinationAdapter(txnId, Standard);
     }
 
-    enum LocalExecuteState { PENDING, SUCCESS, TIMEOUT}
+    enum LocalExecuteState { PENDING, SUCCESS, TIMEOUT }
     class LocalExecute extends MapReduceConsumeCommandStores<Route<?>, PreAcceptReply> implements Timeouts.Timeout
     {
         LocalExecuteState state = LocalExecuteState.PENDING;

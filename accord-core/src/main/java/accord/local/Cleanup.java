@@ -31,7 +31,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
 
-import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
+import static accord.api.ProtocolModifiers.dataStoreRequiresUniqueHlcs;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.Input.PARTIAL;
 import static accord.local.RedundantStatus.Property.GC_BEFORE;
@@ -286,7 +286,7 @@ public enum Cleanup
         if (minGcBefore.compareTo(txnId) <= 0)
             return false;
 
-        if (!requiresUniqueHlcs() || !txnId.is(Write)) return true;
+        if (!dataStoreRequiresUniqueHlcs() || !txnId.is(Write)) return true;
         if (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)) return true;
         // note, it is safe to use ApplyAtKnown even with PARTIAL input here, because we are only discarding information,
         // and we can safely discard any stale executeAt

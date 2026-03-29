@@ -40,6 +40,7 @@ public interface Coordination
         Fetch, FetchRoute,
         BeginInvalidate, MaybeRecover, PrepareRecovery, BeginRecovery, RecoverAwait, CollectLatestDeps,
         PreAccept, Propose, ProposeInvalidate, Stabilise, Execute, ExecuteSyncPoint, Persist,
+        ExecuteBacklog,
         AsyncAwait, SyncAwait, Bootstrap, FetchDurableBefore, Other;
 
         private static final CoordinationKind[] LOOKUP = values();

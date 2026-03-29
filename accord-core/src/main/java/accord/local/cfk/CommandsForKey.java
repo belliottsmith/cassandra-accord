@@ -59,9 +59,9 @@ import accord.utils.btree.BTree;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
-import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
-import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
-import static accord.api.ProtocolModifiers.Toggles.shouldVisitMaybePruned;
+import static accord.api.ProtocolModifiers.dependencyElision;
+import static accord.api.ProtocolModifiers.isTransitiveDependencyVisible;
+import static accord.api.ProtocolModifiers.shouldVisitMaybePruned;
 import static accord.local.CommandSummaries.IsDep.IS_COORD_DEP;
 import static accord.local.CommandSummaries.IsDep.IS_PROPOSED_OR_STABLE_DEP;
 import static accord.local.CommandSummaries.IsDep.IS_NOT_COORD_DEP;
@@ -101,6 +101,7 @@ import static accord.primitives.Status.Durability.DurablyCommitted;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
+import static accord.primitives.Txn.Kind.All;
 import static accord.primitives.Txn.Kind.AnyVisible;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Read;
@@ -233,7 +234,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     private static boolean reportLinearizabilityViolations = true;
 
-    public static final QuickBounds NO_BOUNDS_INFO = new QuickBounds(0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE);
+    public static final QuickBounds NO_BOUNDS_INFO = new QuickBounds(0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE);
     public static final TxnInfo NO_INFO = TxnInfo.create(TxnId.NONE, TRANSITIVE, false, TxnId.NONE, Ballot.ZERO);
     public static final TxnInfo[] NO_INFOS = new TxnInfo[0];
     static final TxnId[] NOT_LOADING_PRUNED = new TxnId[0];
@@ -1165,6 +1166,21 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return Arrays.binarySearch(byId, txnId);
     }
 
+    public int committedIndexOf(Timestamp executeAt)
+    {
+        return committedIndexOf(executeAt, 0, committedByExecuteAt.length);
+    }
+
+    public int unappliedCommittedIndexOf(Timestamp executeAt)
+    {
+        return committedIndexOf(executeAt, Math.max(0, maxAppliedWriteByExecuteAt), committedByExecuteAt.length);
+    }
+
+    public int committedIndexOf(Timestamp executeAt, int from, int to)
+    {
+        return SortedArrays.binarySearch(committedByExecuteAt, from, to, executeAt, (f, v) -> f.compareTo(v.executeAt), FAST);
+    }
+
     public TxnId txnId(int i)
     {
         return byId[i];
@@ -1173,6 +1189,16 @@ public class CommandsForKey extends CommandsForKeyUpdate
     public TxnInfo get(int i)
     {
         return byId[i];
+    }
+
+    public int committedSize()
+    {
+        return committedByExecuteAt.length;
+    }
+
+    public TxnInfo committedByExecuteAt(int i)
+    {
+        return committedByExecuteAt[i];
     }
 
     @VisibleForImplementation
@@ -1217,7 +1243,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     static TxnId readyAt(QuickBounds bounds)
     {
         TxnId readyAt = bounds.readyAt;
-        if (readyAt.compareTo(bounds.gcBefore) <= 0)
+        if (readyAt.compareTo(bounds.cleanCfkBefore()) <= 0)
             readyAt = null;
         return readyAt;
     }
@@ -1230,7 +1256,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     static TxnId redundantBefore(QuickBounds bounds)
     {
         // TODO (expected): this can be weakened to shardAppliedOrInvalidatedBefore
-        return bounds.gcBefore;
+        return bounds.cleanCfkBefore();
     }
 
     public TxnId appliedBefore()
@@ -1476,7 +1502,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                             if (!txn.isDurablyCommitted())
                                 break;
 
-                        case ON:
+                        case ALWAYS:
                             if (testKind != AnyVisible)
                                 continue;
 
@@ -1617,7 +1643,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (maxUniqueHlc >= minUniqueHlc)
             return this;
 
-        if (maxUniqueHlc <= bounds.gcBefore.hlc() && bounds.gcBefore.is(HLC_BOUND))
+        if (maxUniqueHlc <= bounds.cleanCfkBefore().hlc() && bounds.cleanCfkBefore().is(HLC_BOUND))
             return this;
 
         return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedUnreadyWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, minUniqueHlc, loadingPruned, prunedBeforeById, unmanageds, true);
@@ -1825,7 +1851,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 break;
         }
         if (maxAppliedWriteByExecuteAt >= 0) maxUniqueHlc = Math.max(maxUniqueHlc, committedByExecuteAt[maxAppliedWriteByExecuteAt].executeAt.hlc());
-        else maxUniqueHlc = Math.max(maxUniqueHlc, bounds.gcBefore.hlc() - 1); // only guaranteed to witness those with strictly lower hlc; might be some txn agreed with higher flag bits
+        else maxUniqueHlc = Math.max(maxUniqueHlc, bounds.cleanCfkBefore().hlc() - 1); // only guaranteed to witness those with strictly lower hlc; might be some txn agreed with higher flag bits
 
         return updater.update(key, bounds, isNewBoundsInfo, byId, minUndecidedById, maxAppliedUnreadyWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate);
     }
@@ -1872,10 +1898,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink, boolean forceNotify)
     {
+        postProcessInternal(safeStore, prevCfk, updated, notifySink, forceNotify);
         TxnInfo minUndecided = minUndecided();
         if (minUndecided != null && (forceNotify || !minUndecided.equals(prevCfk.minUndecided())))
             notifySink.waitingOn(safeStore, minUndecided, key, SaveStatus.Stable, HasStableDeps, true);
-
+    }
+    private void postProcessInternal(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink, boolean forceNotify)
+    {
         if (updated == null || forceNotify)
         {
             notifyManaged(safeStore, AnyVisible, 0, committedByExecuteAt.length, -1, notifySink);
@@ -1943,7 +1972,46 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 return;
         }
 
-        notifyManaged(safeStore, updatedTxnId.witnessedBy(), 0, mayExecuteToIndex, mayExecuteAnyAtIndex, notifySink);
+        notifyManaged(safeStore, All, 0, mayExecuteToIndex, mayExecuteAnyAtIndex, notifySink);
+        if (Invariants.isParanoid() && safeStore.get(key).current() == this)
+        {
+            int unappliedWrites = 0, unappliedReads = 0;
+            // we limit ourselves to >= maxAppliedWrite to handle the replay case where we may backfill in any order
+            // already applied transactions and find their predecessors are not notified (because we only notify from maxAppliedWriteByExecuteAt onwards)
+            // TODO (expected): consider modifying notification logic instead, so we can have more robust validation
+            for (int i = Math.max(maxAppliedWriteByExecuteAt, 0) ; i < committedByExecuteAt.length ; i++)
+            {
+                TxnInfo txn = committedByExecuteAt[i];
+                int j = indexOf(txn);
+                Invariants.require(j >= 0 && txn == byId[j]);
+                if (txn.compareTo(APPLIED) >= 0)
+                    continue;
+
+                if (txn.is(STABLE) && !txn.hasNotifiedReady())
+                {
+                    int m = Arrays.binarySearch(byId, txn.executeAt);
+                    if (m < 0) m = -1 - m;
+                    if ((minUndecidedById < 0 || m < minUndecidedById) && !isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
+                    {
+                        int missingCount = 0;
+                        for (TxnId missing : txn.missing())
+                        {
+                            if (!missing.is(UNSTABLE) && managesExecution(missing) && !isUnready(missing))
+                                ++missingCount;
+                        }
+                        if (unappliedWrites + (txn.is(Write) ? unappliedReads : 0) == missingCount)
+                        {
+                            if (updated.txnId().equals(txn) && !updated.waitingOn().isWaitingOnKey(key))
+                                txn.setNotifiedReadyInPlace();
+                            else
+                                Invariants.require(false);
+                        }
+                    }
+                }
+                if (txn.is(Write)) ++unappliedWrites;
+                else if (txn.is(Read)) ++unappliedReads;
+            }
+        }
     }
 
     private void notifyManaged(SafeCommandStore safeStore, Kinds kinds, int mayNotExecuteBeforeIndex, int mayExecuteToIndex, int mayExecuteAny, NotifySink notifySink)
@@ -1960,15 +2028,15 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (txn.is(APPLIED))
                 continue;
 
-            if (txn.mayExecute() && !txn.hasNotifiedReady())
+            if (!txn.hasNotifiedReady())
             {
-                if (i >= mayNotExecuteBeforeIndex && (kinds.test(txn) || i == mayExecuteAny) && !isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
+                if (i >= mayNotExecuteBeforeIndex && (kinds.test(txn) || i == mayExecuteAny))
                 {
                     switch (txn.status())
                     {
                         case COMMITTED:
                         {
-                            if (txn.hasNotifiedWaiting())
+                            if (txn.hasNotifiedWaiting() || isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
                                 break;
 
                             // cannot execute as dependencies not stable, so notify progress log to get or decide stable deps
@@ -1979,7 +2047,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
                         case STABLE:
                         {
-                            if (txn.hasNotifiedReady())
+                            if (isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
                                 break;
 
                             if (undecidedIndex < byId.length)
@@ -2050,6 +2118,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         Invariants.require(Write.ordinal() == 1);
         Invariants.require((Read.ordinal() & 1) == 0);
         Invariants.require((EphemeralRead.ordinal() & 1) == 0);
+        Invariants.require(unappliedCountersDelta(EphemeralRead.ordinal()) == 0);
     }
     private static long unappliedCountersDelta(int kindOrdinal)
     {
@@ -2068,17 +2137,17 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public CommandsForKeyUpdate withBoundsAtLeast(QuickBounds withBounds, boolean expectUpToDate)
     {
-        Invariants.expect(withBounds.gcBefore.compareTo(bounds.gcBefore) >= 0, "gcBefore %s may have moved backwards from %s for key %s", withBounds.gcBefore, bounds, key);
+        Invariants.expect(withBounds.cleanCfkBefore().compareTo(bounds.cleanCfkBefore()) >= 0, "cleanCfkBefore %s may have moved backwards from %s for key %s", withBounds.cleanCfkBefore(), bounds, key);
 
         QuickBounds newBounds = bounds.withEpochs(bounds.startEpoch, withBounds.endEpoch)
-                                      .withGcBeforeBeforeAtLeast(withBounds.gcBefore)
+                                      .withCleanCfkBeforeAtLeast(withBounds.cleanCfkBefore())
                                       .withReadyAtLeast(withBounds.readyAt)
                                       .withLocallyAppliedAtLeast(withBounds.locallyAppliedBefore);
 
         if (newBounds == bounds)
             return this;
 
-        if (newBounds.gcBefore.epoch() >= newBounds.endEpoch)
+        if (newBounds.cleanCfkBefore().epoch() >= newBounds.endEpoch)
         {
             // we should be completely finished; notify every unmanaged and return an empty CFK
             // we special case this to handle the case of future dependencies supplied to us by other CommandsForKey that had pruned their dependencies;
@@ -2094,7 +2163,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBounds));
         TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds, expectUpToDate);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBounds));
-        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.gcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
+        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.cleanCfkBefore()) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
 
         return notifyManagedUnready(this, newBounds, reconstructAndUpdateUnmanaged(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate));
     }
@@ -2105,19 +2174,19 @@ public class CommandsForKey extends CommandsForKeyUpdate
      * on load and not no-op due to e.g. newSafelyPrunedBefore or newReadyAt being non-null.
      */
     @VisibleForImplementation
-    public CommandsForKey withGcBeforeAtLeast(TxnId newGcBefore, boolean expectUpToDate)
+    public CommandsForKey withCleanCfkBeforeAtLeast(TxnId newCleanCfkBefore, boolean expectUpToDate)
     {
-        QuickBounds newBounds = bounds.withGcBeforeBeforeAtLeast(newGcBefore);
+        QuickBounds newBounds = bounds.withCleanCfkBeforeAtLeast(newCleanCfkBefore);
         if (newBounds == bounds)
         {
-            Invariants.expect(newGcBefore.compareTo(bounds.gcBefore) >= 0, "gcBefore %s may have moved backwards from %s for key %s", newGcBefore, bounds, key);
+            Invariants.expect(newCleanCfkBefore.compareTo(bounds.cleanCfkBefore()) >= 0, "gcBefore %s may have moved backwards from %s for key %s", newCleanCfkBefore, bounds, key);
             return this;
         }
 
-        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newGcBefore);
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newCleanCfkBefore);
         TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds, expectUpToDate);
-        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newGcBefore);
-        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newGcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
+        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newCleanCfkBefore);
+        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newCleanCfkBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
 
         return reconstruct(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate);
     }
@@ -2265,8 +2334,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 Invariants.requireArgument(SortedArrays.isSortedUnique(byId));
                 Invariants.requireArgument(SortedArrays.isSortedUnique(committedByExecuteAt, TxnInfo::compareExecuteAt));
 
-                for (TxnInfo txn : byId)
+                for (int i = 0 ; i < byId.length ; ++i)
                 {
+                    TxnInfo txn = byId[i];
                     Invariants.require(mayExecute(txn) == txn.mayExecute());
                     Invariants.require(txn.hasDeps() || txn.missing() == NO_TXNIDS);
                 }
@@ -2296,7 +2366,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             {
                 for (TxnInfo txn : committedByExecuteAt)
                 {
-                    Invariants.require(txn == get(txn, byId));
+                    Invariants.require(txn == get(txn));
                 }
                 for (TxnInfo txn : byId)
                 {

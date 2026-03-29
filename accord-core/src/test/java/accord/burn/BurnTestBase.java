@@ -27,6 +27,7 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -64,8 +65,9 @@ import accord.api.Agent;
 import accord.api.Journal;
 import accord.api.Key;
 import accord.api.OwnershipEventListener;
-import accord.api.ProtocolModifiers.Toggles;
-import accord.api.ProtocolModifiers.Toggles.FastExec;
+import accord.api.ProtocolModifiers;
+import accord.api.ProtocolModifiers.ReplicaExecution;
+import accord.api.ProtocolModifiers.FastExecution;
 import accord.api.Scheduler;
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.MessageListener;
@@ -110,6 +112,7 @@ import accord.utils.Gens;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
 import accord.utils.Threads;
+import accord.utils.TinyEnumSet;
 import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 import accord.utils.Utils;
@@ -170,7 +173,7 @@ public class BurnTestBase
                 kinds[j] = tmp;
             }
             kinds = Arrays.copyOf(kinds, count);
-            Toggles.setMarkStaleIfCannotExecute(kinds);
+            setUnsafe(ProtocolModifiers.class, "markStaleIfCannotExecute", TinyEnumSet.encode(kinds));
         }
 
         FastPath[] fastPaths;
@@ -240,7 +243,7 @@ public class BurnTestBase
                     int[] prefixes = prefixes(n.topology().current());
 
                     boolean isWrite = random.nextBoolean();
-                    int readCount = 1 + random.nextInt(2);
+                    int readCount = (isWrite ? 0 : 1) + random.nextInt(2);
                     int writeCount = isWrite ? 1 + random.nextInt(2) : 0;
                     Kind kind = isWrite ? Kind.Write : readCount == 1 ? EphemeralRead : Kind.Read;
 
@@ -439,10 +442,12 @@ public class BurnTestBase
             timeoutDelays = delayGenerator(rnd, 500, 800, 1000, 10000);
         }
 
-        Toggles.setRecoverReads(true);
-        Toggles.setDataStoreDetectsFutureReads(random.nextBoolean());
-        Toggles.setFastReadExec(random.pick(FastExec.values()));
-        Toggles.setFastWriteExec(random.pick(FastExec.values()));
+        setUnsafe(ProtocolModifiers.class, "recoverReads", true);
+        setUnsafe(ProtocolModifiers.class, "dataStoreDetectsFutureReads", random.nextBoolean());
+        setUnsafe(ProtocolModifiers.class, "fastReadExecution", random.pick(FastExecution.values()));
+        setUnsafe(ProtocolModifiers.class, "fastWriteExecution", random.pick(FastExecution.values()));
+        setUnsafe(ProtocolModifiers.class, "permitCoordinatorBacklogExecution", random.nextBoolean());
+        setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();
@@ -660,6 +665,25 @@ public class BurnTestBase
             }
             logger.error("Exception running burn test for seed {}:", seed, cause);
             throw SimulationException.wrap(seed, cause);
+        }
+    }
+
+    private static void setUnsafe(Class<?> clazz, String fieldName, Object value)
+    {
+        Field field;
+        try
+        {
+            field = clazz.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(null, value);
+        }
+        catch (NoSuchFieldException e)
+        {
+            throw new RuntimeException(e);
+        }
+        catch (IllegalAccessException e)
+        {
+            throw new RuntimeException(e);
         }
     }
 

@@ -18,9 +18,15 @@
 
 package accord.api;
 
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javax.annotation.Nullable;
+
+import accord.primitives.Deps;
+import accord.primitives.SaveStatus;
+import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.TxnId.FastPath;
@@ -28,23 +34,295 @@ import accord.primitives.TxnId.FastPaths;
 import accord.primitives.TxnId.MediumPath;
 import accord.utils.Invariants;
 import accord.utils.TinyEnumSet;
+import accord.utils.UnhandledEnum;
 
+import static accord.api.ProtocolModifiers.CleanCfkBefore.SHARD_APPLIED;
+import static accord.api.ProtocolModifiers.DependencyElision.IF_DURABLY_COMMITTED;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.Chase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.DoNotChase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
-import static accord.api.ProtocolModifiers.Toggles.InformOfDurability.ALL;
-import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS;
-import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC;
+import static accord.api.ProtocolModifiers.SendStableMessages.FOR_READS;
+import static accord.api.ProtocolModifiers.SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC;
+import static accord.api.ProtocolModifiers.SendStableMessages.TO_ALL_DIRECT_EXECUTE_ELSE_FOR_READS;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
+import static accord.primitives.TxnId.Cardinality.Any;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
+import static accord.utils.Invariants.illegalState;
 
 /**
  * Configure various protocol behaviours. Many of these switches are correctness impacting, and should not be touched.
  */
 public class ProtocolModifiers
 {
+    public enum SendStableMessages
+    {
+        /**
+         * All participating replicas will receive a Stable message once the transaction begins the execution phase.
+         * This is potentially expensive and may harm throughput by increasing the number of messages and transaction
+         * state updates we need to perform, but it guarantees the fastest forward progress for any particular transaction.
+         */
+        TO_ALL,
+
+        /**
+         * If the transaction is able to be direct executed, send Stable messages to all replicas so that they may do so.
+         * Otherwise, behaves as {@link #FOR_READS}.
+         */
+        TO_ALL_DIRECT_EXECUTE_ELSE_FOR_READS,
+
+        /**
+         * Thrifty execution. Send a Stable message only to replicas we want to read from, so that they may execute the read.
+         * The coordinator may then send the Apply message to all replicas, saving O(n) messages.
+         */
+        FOR_READS,
+
+        /**
+         * Even thriftier: if the read is permitted to fast execute, there is no need to send a Stable message;
+         * we can simply perform the read and permit the coordinator to send the Apply message. Otherwise
+         * identical to {@link #FOR_READS}
+         */
+        FOR_READS_OR_NONE_IF_FASTEXEC
+    }
+
+    public enum CleanCfkBefore { SHARD_APPLIED, GC }
+
+    public enum DependencyElision { OFF, ALWAYS, IF_DURABLY_COMMITTED, IF_DURABLY_PREAPPLIED }
+
+    public enum FastExecution { DISABLED, MAY_BYPASS_COMMANDSFORKEY, MAY_BYPASS_SAFESTORE }
+
+    public enum InformOfDurability { NONE, HOME, ALL }
+
+    public enum ReplicaExecution { NONE, BLIND_WRITE, ALL }
+
+    public static class Configure
+    {
+        private static boolean isConfigured;
+        private static synchronized void setConfigured() { isConfigured = true; }
+        private static void pre() { if (isConfigured) throw illegalState("Cannot set ProtocolModifiers after the configuration has been first used"); }
+
+        private static boolean rangeEndInclusive = true;
+        public static synchronized void setRangeEndInclusive(boolean newRangeEndInclusive) { pre(); rangeEndInclusive = newRangeEndInclusive; }
+
+        private static FastPaths permittedFastPaths = new FastPaths(FastPath.values());
+        public static synchronized void setPermittedFastPaths(FastPaths newPermittedFastPaths) { pre(); permittedFastPaths = newPermittedFastPaths; }
+
+        private static MediumPath defaultMediumPath = MediumPath.TrackStable;
+        public static synchronized void setDefaultMediumPath(MediumPath newDefaultMediumPath) { pre(); defaultMediumPath = newDefaultMediumPath; }
+
+        private static boolean recoveryAwaitsSupersedingSyncPoints = true;
+        public static synchronized void setRecoveryAwaitsSupersedingSyncPoints(boolean newRecoveryAwaitsSupersedingSyncPoints) { pre(); recoveryAwaitsSupersedingSyncPoints = newRecoveryAwaitsSupersedingSyncPoints; }
+
+        private static boolean syncPointsTrackUnstableMediumPathDependencies = false;
+        public static synchronized void setSyncPointsTrackUnstableMediumPathDependencies(boolean newSyncPointsTrackUnstableMediumPathDependencies) { pre(); syncPointsTrackUnstableMediumPathDependencies = newSyncPointsTrackUnstableMediumPathDependencies; }
+
+        private static boolean recoverPartialAcceptPhaseIfNoFastPath = false;
+        public static synchronized void setRecoverPartialAcceptPhaseIfNoFastPath(boolean newSyncPointsRecoverPartialAcceptPhase) { pre(); recoverPartialAcceptPhaseIfNoFastPath = newSyncPointsRecoverPartialAcceptPhase; }
+
+        private static boolean recoverReads = false;
+        public static synchronized void setRecoverReads(boolean newRecoverReads) { pre(); recoverReads = newRecoverReads; }
+
+        private static boolean filterDuplicateDependenciesFromAcceptReply = true;
+        public static synchronized void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { pre(); filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
+
+        private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;
+        public static synchronized void setSendStableMessages(SendStableMessages newSendStableMessages) { pre(); sendStableMessages = newSendStableMessages; }
+
+        private static boolean sendMinimalCommits = true;
+        public static synchronized void setSendMinimalCommits(boolean newSendMinimalCommits) { pre(); sendMinimalCommits = newSendMinimalCommits; }
+
+        private static boolean permitCoordinatorLocalExecution = true;
+        public static synchronized void setPermitCoordinatorLocalExecution(boolean newPermitCoordinatorLocalExecution) { pre(); permitCoordinatorLocalExecution = newPermitCoordinatorLocalExecution; }
+
+        private static boolean dataStoreRequiresUniqueHlcs = true;
+        public static synchronized void setDataStoreRequiresUniqueHlcs(boolean newDataStoreRequiresUniqueHlcs) { pre();dataStoreRequiresUniqueHlcs = newDataStoreRequiresUniqueHlcs; }
+
+        private static int markStaleIfCannotExecute = TinyEnumSet.encode(Txn.Kind.Write);
+        public static synchronized void setMarkStaleIfCannotExecute(Txn.Kind ... kinds)
+        {
+            pre();
+            int newMarkStaleIfCannotExecute = TinyEnumSet.encode(kinds);
+            Invariants.require(TinyEnumSet.contains(newMarkStaleIfCannotExecute, Txn.Kind.Write));
+            markStaleIfCannotExecute = newMarkStaleIfCannotExecute;
+        }
+
+        private static int transitiveDependenciesAreVisible = TinyEnumSet.encode(VisibilitySyncPoint);
+        public static synchronized void setTransitiveDependenciesAreVisible(Txn.Kind ... kinds)
+        {
+            pre();
+            int newTransitiveDependenciesAreVisible = TinyEnumSet.encode(kinds);
+            Invariants.require(TinyEnumSet.contains(newTransitiveDependenciesAreVisible, Txn.Kind.VisibilitySyncPoint));
+            transitiveDependenciesAreVisible = newTransitiveDependenciesAreVisible;
+        }
+
+        private static CleanCfkBefore cleanCfkBefore = SHARD_APPLIED;
+        public static synchronized void setCleanCfkBefore(CleanCfkBefore newCleanCfkBefore) { pre(); cleanCfkBefore = newCleanCfkBefore; }
+
+        private static DependencyElision dependencyElision = IF_DURABLY_COMMITTED;
+        public static synchronized void setDependencyElision(DependencyElision newDependencyElision) { pre(); dependencyElision = newDependencyElision; }
+
+        private static boolean visitMaybePruned = true;
+        public static synchronized void setVisitMaybePruned(boolean newVisitMaybePruned) { pre(); visitMaybePruned = newVisitMaybePruned; }
+
+        private static InformOfDurability informOfDurability = InformOfDurability.ALL;
+        private static int informOfSingleKeyDurabilityIfDepsSizeAtLeast = 16;
+        public static synchronized void setInformOfDurability(InformOfDurability newInformOfDurability) { pre(); informOfDurability = newInformOfDurability; }
+        public static synchronized void setInformOfSingleKeyDurabilityIfDepsSizeAtLeast(int newInformOfSingleKeyDurabilityIfDepsSizeAtLeast) { pre();informOfSingleKeyDurabilityIfDepsSizeAtLeast = newInformOfSingleKeyDurabilityIfDepsSizeAtLeast; }
+
+        private static FastExecution fastReadExecution = FastExecution.MAY_BYPASS_SAFESTORE;
+        public static synchronized void setFastReadExecution(FastExecution newFastReads) { pre();fastReadExecution = newFastReads; }
+
+        private static boolean fastReadExecMayResendTxn = true;
+        public static synchronized void setFastReadExecMayResendTxn(boolean newFastReadExecMayResendTxn) { pre(); fastReadExecMayResendTxn = newFastReadExecMayResendTxn; }
+
+        private static FastExecution fastWriteExecution = FastExecution.MAY_BYPASS_SAFESTORE;
+        public static synchronized void setFastWriteExecution(FastExecution newFastWrites) { pre();fastWriteExecution = newFastWrites; }
+
+        private static boolean dataStoreDetectsFutureReads = false;
+        public static synchronized void setDataStoreDetectsFutureReads(boolean newDataStoreDetectsFutureReads) { pre(); dataStoreDetectsFutureReads = newDataStoreDetectsFutureReads; }
+
+        private static boolean permitCoordinatorBacklogExecution = false;
+        public static synchronized void setPermitCoordinatorBacklogExecution(boolean newCoordinatorExecuteBacklog) { pre();permitCoordinatorBacklogExecution = newCoordinatorExecuteBacklog; }
+
+        private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
+        public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
+
+        private static float replicaExecuteDistributedPersistChance = 1.0f;
+        public static synchronized void setReplicaExecuteDistributedPersistChance(float newChance) { pre(); replicaExecuteDistributedPersistChance = newChance; }
+    }
+
+    static
+    {
+        Configure.setConfigured();
+    }
+
+    public static final boolean rangeEndInclusive = Configure.rangeEndInclusive;
+    public static boolean isRangeEndInclusive() { return rangeEndInclusive; }
+    public static boolean isRangeEndExclusive() { return !rangeEndInclusive; }
+    public static boolean isRangeStartInclusive() { return !rangeEndInclusive; }
+    public static boolean isRangeStartExclusive() { return rangeEndInclusive; }
+
+    private static final FastPaths permittedFastPaths = Configure.permittedFastPaths;
+    public static boolean usePrivilegedCoordinator() { return permittedFastPaths.hasPrivilegedCoordinator(); }
+    public static FastPath ensurePermitted(FastPath path) { return path.toPermitted(permittedFastPaths); }
+
+    private static final MediumPath defaultMediumPath = Configure.defaultMediumPath;
+    public static MediumPath defaultMediumPath() { return defaultMediumPath; }
+
+    private static final boolean recoveryAwaitsSupersedingSyncPoints = Configure.recoveryAwaitsSupersedingSyncPoints;
+    public static boolean recoveryAwaitsSupersedingSyncPoints() { return recoveryAwaitsSupersedingSyncPoints; }
+
+    private static final boolean syncPointsTrackUnstableMediumPathDependencies = Configure.syncPointsTrackUnstableMediumPathDependencies;
+    public static boolean syncPointsTrackUnstableMediumPathDependencies() { return syncPointsTrackUnstableMediumPathDependencies; }
+
+    private static final boolean recoverPartialAcceptPhaseIfNoFastPath = Configure.recoverPartialAcceptPhaseIfNoFastPath;
+    public static boolean recoverPartialAcceptPhaseIfNoFastPath() { return recoverPartialAcceptPhaseIfNoFastPath; }
+
+    // TODO (expected): make final, but requires some solution to burn test mutating these randomly
+    private static boolean recoverReads = Configure.recoverReads;
+    public static boolean recoverReads() { return recoverReads; }
+
+    private static final boolean filterDuplicateDependenciesFromAcceptReply = Configure.filterDuplicateDependenciesFromAcceptReply;
+    public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
+
+    private static final SendStableMessages sendStableMessages = Configure.sendStableMessages;
+    public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_DIRECT_EXECUTE_ELSE_FOR_READS && (!txnId.is(SingleKey) || !txnId.is(Txn.Kind.Write))); }
+    public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
+
+    private static final boolean sendMinimalCommits = Configure.sendMinimalCommits;
+    public static boolean sendMinimalCommits() { return sendMinimalCommits; }
+
+    private static final boolean dataStoreRequiresUniqueHlcs = Configure.dataStoreRequiresUniqueHlcs;
+    public static boolean dataStoreRequiresUniqueHlcs() { return dataStoreRequiresUniqueHlcs; }
+
+    private static int markStaleIfCannotExecute = Configure.markStaleIfCannotExecute;
+    public static boolean markStaleIfCannotExecute(TxnId txnId) { return TinyEnumSet.contains(markStaleIfCannotExecute, txnId.kindOrdinal()); }
+    public static boolean markStaleIfCannotExecute(Txn.Kind kind) { return TinyEnumSet.contains(markStaleIfCannotExecute, kind); }
+
+    private static final int transitiveDependenciesAreVisible = Configure.transitiveDependenciesAreVisible;
+    public static boolean isTransitiveDependencyVisible(TxnId txnId) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, txnId.kindOrdinal()); }
+    public static boolean isTransitiveDependencyVisible(Txn.Kind kind) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, kind); }
+
+    private static final CleanCfkBefore cleanCfkBefore = Configure.cleanCfkBefore;
+    public static CleanCfkBefore cleanCfkBefore() { return cleanCfkBefore; }
+
+    private static final DependencyElision dependencyElision = Configure.dependencyElision;
+    public static DependencyElision dependencyElision() { return dependencyElision; }
+
+    private static final boolean visitMaybePruned = Configure.visitMaybePruned;
+    public static boolean shouldVisitMaybePruned() { return visitMaybePruned; }
+
+    public static boolean isHomeDoneIfNotDurable(SaveStatus saveStatus, TxnId txnId, Timestamp executeAt, @Nullable Txn txn)
+    {
+        if (txnId.isSystemTxn() || saveStatus.compareTo(SaveStatus.Stable) < 0)
+            return false;
+
+        if (executeAt == null || (executeAt != txnId && executeAt.epoch() != txnId.epoch()))
+            return false;
+
+        if (saveStatus.compareTo(SaveStatus.PreApplied) >= 0 && informOfSingleKeyDurabilityIfDepsSizeAtLeast > 0 && txnId.is(SingleKey))
+            return true;
+
+        // TODO (expected): why do we check txn != null?
+        return executeAtReplica(txnId, txn) && txn != null;
+    }
+
+    private static final InformOfDurability informOfDurability = Configure.informOfDurability;
+    // to support dependency elision/pruning
+    // TODO (expected): improve dependency elision, so this is no longer needed
+    private static final int informOfSingleKeyDurabilityIfDepsSizeAtLeast = Configure.informOfSingleKeyDurabilityIfDepsSizeAtLeast;
+    public static InformOfDurability informOfDurability(TxnId txnId, @Nullable Deps deps)
+    {
+        if (txnId.is(Any) || deps == null || informOfSingleKeyDurabilityIfDepsSizeAtLeast >= deps.txnIdCount())
+            return informOfDurability;
+
+        return InformOfDurability.NONE;
+    }
+
+    private static FastExecution fastReadExecution = Configure.fastReadExecution;
+    public static boolean fastReadsMayBypassSafeStore(TxnId txnId) { return fastReadExecution == FastExecution.MAY_BYPASS_SAFESTORE && (dataStoreDetectsFutureReads() || txnId.is(EphemeralRead)); }
+    public static boolean fastReadsMayBypassCommandsForKey(TxnId txnId) { return fastReadExecution != FastExecution.DISABLED && !txnId.is(Txn.Kind.Write); }
+
+    private static final boolean fastReadExecutionMayResendTxn = Configure.fastReadExecMayResendTxn;
+    public static boolean fastReadExecutionMayResendTxn() { return fastReadExecutionMayResendTxn; }
+
+    private static FastExecution fastWriteExecution = Configure.fastWriteExecution;
+    public static boolean fastWritesMayBypassSafeStore() { return fastWriteExecution == FastExecution.MAY_BYPASS_SAFESTORE; }
+    public static boolean fastWritesMayBypassCommandsForKey() { return fastWriteExecution != FastExecution.DISABLED; }
+
+    private static boolean dataStoreDetectsFutureReads = Configure.dataStoreDetectsFutureReads;
+    public static boolean dataStoreDetectsFutureReads() { return dataStoreDetectsFutureReads; }
+
+    private static boolean permitCoordinatorBacklogExecution = Configure.permitCoordinatorBacklogExecution;
+    public static boolean permitCoordinatorBacklogExecution() { return permitCoordinatorBacklogExecution; }
+
+    private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
+    public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }
+    
+    private static ReplicaExecution replicaExecution = Configure.replicaExecution;
+    public static boolean executeAtReplica(TxnId txnId, @Nullable Txn txn)
+    {
+        if (!txnId.is(SingleKey))
+            return false;
+
+        switch (replicaExecution)
+        {
+            default: throw new UnhandledEnum(replicaExecution);
+            case NONE: return false;
+            case ALL: txnId.is(Txn.Kind.Write);
+            case BLIND_WRITE: return txnId.is(Txn.Kind.Write) && txn != null && txn.read().keys().isEmpty();
+        }
+    }
+
+    private static final float replicaExecuteDistributedPersistChance = Configure.replicaExecuteDistributedPersistChance;
+    public static boolean replicaExecuteDistributedPersist()
+    {
+        float chance = replicaExecuteDistributedPersistChance;
+        if (chance <= 0f) return false;
+        if (chance >= 1f) return true;
+        return ThreadLocalRandom.current().nextFloat() < chance;
+    }
+
     public static class QuorumEpochIntersections
     {
         public enum ChaseFixedPoint
@@ -192,130 +470,4 @@ public class ProtocolModifiers
             return (txnDiscardPreAcceptDeps | syncPointDiscardPreAcceptDeps)
                    && (txnId.isSyncPoint() ? syncPointDiscardPreAcceptDeps : txnDiscardPreAcceptDeps);
         }
-    }
-
-    public static class RangeSpecParam
-    {
-        // Implementations may set this prior to creating any Range object to specify whether the start or end bound of its ranges are inclusive.
-        public static boolean END_INCLUSIVE = true;
-    }
-    public static class RangeSpec
-    {
-        public static final boolean END_INCLUSIVE = RangeSpecParam.END_INCLUSIVE;
-        public static boolean isEndInclusive()
-        {
-            return END_INCLUSIVE;
-        }
-        public static boolean isEndExclusive()
-        {
-            return !END_INCLUSIVE;
-        }
-        public static boolean isStartInclusive()
-        {
-            return !END_INCLUSIVE;
-        }
-        public static boolean isStartExclusive()
-        {
-            return END_INCLUSIVE;
-        }
-    }
-
-    public static class Toggles
-    {
-        private static FastPaths permittedFastPaths = new FastPaths(FastPath.values());
-        public static boolean usePrivilegedCoordinator() { return permittedFastPaths.hasPrivilegedCoordinator(); }
-        public static void setPermittedFastPaths(FastPaths newPermittedFastPaths) { permittedFastPaths = newPermittedFastPaths; }
-        public static FastPath ensurePermitted(FastPath path) { return path.toPermitted(permittedFastPaths); }
-
-        private static MediumPath defaultMediumPath = MediumPath.TrackStable;
-        public static MediumPath defaultMediumPath() { return defaultMediumPath; }
-        public static void setDefaultMediumPath(MediumPath newDefaultMediumPath) { defaultMediumPath = newDefaultMediumPath; }
-
-        private static boolean recoveryAwaitsSupersedingSyncPoints = true;
-        public static boolean recoveryAwaitsSupersedingSyncPoints() { return recoveryAwaitsSupersedingSyncPoints; }
-        public static void setRecoveryAwaitsSupersedingSyncPoints(boolean newRecoveryAwaitsSupersedingSyncPoints) { recoveryAwaitsSupersedingSyncPoints = newRecoveryAwaitsSupersedingSyncPoints; }
-
-        private static boolean syncPointsTrackUnstableMediumPathDependencies = false;
-        public static boolean syncPointsTrackUnstableMediumPathDependencies() { return syncPointsTrackUnstableMediumPathDependencies; }
-        public static void setSyncPointsTrackUnstableMediumPathDependencies(boolean newSyncPointsTrackUnstableMediumPathDependencies) { syncPointsTrackUnstableMediumPathDependencies = newSyncPointsTrackUnstableMediumPathDependencies; }
-
-        private static boolean recoverPartialAcceptPhaseIfNoFastPath = false;
-        public static boolean recoverPartialAcceptPhaseIfNoFastPath() { return recoverPartialAcceptPhaseIfNoFastPath; }
-        public static void setRecoverPartialAcceptPhaseIfNoFastPath(boolean newSyncPointsRecoverPartialAcceptPhase) {recoverPartialAcceptPhaseIfNoFastPath = newSyncPointsRecoverPartialAcceptPhase; }
-
-        private static boolean recoverReads = false;
-        public static boolean recoverReads() { return recoverReads; }
-        public static void setRecoverReads(boolean newRecoverReads) { recoverReads = newRecoverReads; }
-
-        private static boolean filterDuplicateDependenciesFromAcceptReply = true;
-        public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
-        public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
-
-        public enum SendStableMessages { TO_ALL, FOR_READS, FOR_READS_OR_NONE_IF_FASTEXEC}
-        private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;
-        public static void setSendStableMessages(SendStableMessages newSendStableMessages) { sendStableMessages = newSendStableMessages; }
-        public static boolean sendOnlyReadStableMessages() { return sendStableMessages.compareTo(FOR_READS) >= 0; }
-        public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
-
-        private static boolean permitLocalExecution = true;
-        public static boolean permitLocalExecution() { return permitLocalExecution; }
-        public static void setPermitLocalExecution(boolean newPermitLocalExecution) { permitLocalExecution = newPermitLocalExecution; }
-
-        private static boolean requiresUniqueHlcs = true;
-        public static boolean requiresUniqueHlcs() { return requiresUniqueHlcs; }
-        public static void setRequiresUniqueHlcs(boolean newRequiresUniqueHlcs) { requiresUniqueHlcs = newRequiresUniqueHlcs; }
-
-        private static int markStaleIfCannotExecute = TinyEnumSet.encode(Txn.Kind.Write);
-        public static boolean markStaleIfCannotExecute(TxnId txnId) { return TinyEnumSet.contains(markStaleIfCannotExecute, txnId.kindOrdinal()); }
-        public static boolean markStaleIfCannotExecute(Txn.Kind kind) { return TinyEnumSet.contains(markStaleIfCannotExecute, kind); }
-        public static void setMarkStaleIfCannotExecute(Txn.Kind ... kinds)
-        {
-            int newMarkStaleIfCannotExecute = TinyEnumSet.encode(kinds);
-            Invariants.require(TinyEnumSet.contains(newMarkStaleIfCannotExecute, Txn.Kind.Write));
-            markStaleIfCannotExecute = newMarkStaleIfCannotExecute;
-        }
-
-        private static int transitiveDependenciesAreVisible = TinyEnumSet.encode(VisibilitySyncPoint);
-        public static boolean isTransitiveDependencyVisible(TxnId txnId) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, txnId.kindOrdinal()); }
-        public static boolean isTransitiveDependencyVisible(Txn.Kind kind) { return TinyEnumSet.contains(transitiveDependenciesAreVisible, kind); }
-        public static void setTransitiveDependenciesAreVisible(Txn.Kind ... kinds)
-        {
-            int newTransitiveDependenciesAreVisible = TinyEnumSet.encode(kinds);
-            Invariants.require(TinyEnumSet.contains(newTransitiveDependenciesAreVisible, Txn.Kind.VisibilitySyncPoint));
-            transitiveDependenciesAreVisible = newTransitiveDependenciesAreVisible;
-        }
-
-        public enum DependencyElision { OFF, ON, IF_DURABLY_COMMITTED, IF_DURABLY_PREAPPLIED }
-        private static DependencyElision dependencyElision = IF_DURABLY_COMMITTED;
-        public static DependencyElision dependencyElision() { return dependencyElision; }
-        public static void setDependencyElision(DependencyElision newDependencyElision) { dependencyElision = newDependencyElision; }
-
-        private static boolean visitMaybePruned = true;
-        public static boolean shouldVisitMaybePruned() { return visitMaybePruned; }
-        public static void setVisitMaybePruned(boolean newVisitMaybePruned) { visitMaybePruned = newVisitMaybePruned; }
-
-        public enum InformOfDurability { HOME, ALL }
-        private static InformOfDurability informOfDurability = ALL;
-        public static InformOfDurability informOfDurability() { return informOfDurability; }
-        public static void setInformOfDurability(InformOfDurability newInformOfDurability) { informOfDurability = newInformOfDurability; }
-
-        public enum FastExec { DISABLED, MAY_BYPASS_COMMANDSFORKEY, MAY_BYPASS_SAFESTORE }
-        private static FastExec fastReadExec = FastExec.MAY_BYPASS_SAFESTORE;
-        public static boolean fastReadsMayBypassSafeStore(TxnId txnId) { return fastReadExec == FastExec.MAY_BYPASS_SAFESTORE && (dataStoreDetectsFutureReads() || txnId.is(EphemeralRead)); }
-        public static boolean fastReadsMayBypassCommandsForKey(TxnId txnId) { return fastReadExec != FastExec.DISABLED && !txnId.is(Txn.Kind.Write); }
-        public static void setFastReadExec(FastExec newFastReads) { fastReadExec = newFastReads; }
-
-        private static boolean fastReadExecMayResendTxn = true;
-        public static boolean fastReadExecMayResendTxn() { return fastReadExecMayResendTxn; }
-        public static void setFastReadExecMayResendTxn(boolean newFastReadExecMayResendTxn) { fastReadExecMayResendTxn = newFastReadExecMayResendTxn; }
-
-        private static FastExec fastWriteExec = FastExec.MAY_BYPASS_SAFESTORE;
-        public static boolean fastWritesMayBypassSafeStore() { return fastWriteExec == FastExec.MAY_BYPASS_SAFESTORE; }
-        public static boolean fastWritesMayBypassCommandsForKey() { return fastWriteExec != FastExec.DISABLED; }
-        public static void setFastWriteExec(FastExec newFastWrites) { fastWriteExec = newFastWrites; }
-
-        private static boolean dataStoreDetectsFutureReads;
-        public static boolean dataStoreDetectsFutureReads() { return dataStoreDetectsFutureReads; }
-        public static void setDataStoreDetectsFutureReads(boolean newDataStoreDetectsFutureReads) { dataStoreDetectsFutureReads = newDataStoreDetectsFutureReads; }
-    }
-}
+    }}

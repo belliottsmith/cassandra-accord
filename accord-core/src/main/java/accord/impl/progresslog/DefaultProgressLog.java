@@ -34,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.ProgressLog;
+import accord.api.ProtocolModifiers;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.local.Command;
@@ -75,6 +76,7 @@ import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
+import static accord.primitives.Status.Stable;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -258,6 +260,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     boolean isHomeDone(Command command)
     {
+        if (ProtocolModifiers.isHomeDoneIfNotDurable(command.saveStatus(), command.txnId(), command.executeAt(), command.partialTxn()))
+            return true;
         return command.durability().isDurableOrInvalidated() && isHomeDoneIfDurable(command);
     }
 

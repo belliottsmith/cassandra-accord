@@ -28,10 +28,11 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.ProtocolModifiers.Toggles.DependencyElision;
+import accord.api.ProtocolModifiers.DependencyElision;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.ViolationHandler.ViolationHandlerHolder;
+import accord.coordinate.ExecuteTxn;
 import accord.local.Command.WaitingOn;
 import accord.local.Command.WaitingOn.Update;
 import accord.local.CommandStores.RangesForEpochSupplier;
@@ -44,8 +45,10 @@ import accord.messages.Commit;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
+import accord.primitives.FullRoute;
 import accord.primitives.Known;
 import accord.primitives.Known.KnownExecuteAt;
+import accord.primitives.Known.KnownRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
@@ -56,6 +59,7 @@ import accord.primitives.SaveStatus;
 import accord.primitives.SaveStatus.LocalExecution;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
+import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -67,11 +71,11 @@ import accord.utils.async.AsyncChains;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_PREAPPLIED;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.OFF;
-import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
-import static accord.api.ProtocolModifiers.Toggles.markStaleIfCannotExecute;
+import static accord.api.ProtocolModifiers.*;
+import static accord.api.ProtocolModifiers.DependencyElision.IF_DURABLY_COMMITTED;
+import static accord.api.ProtocolModifiers.DependencyElision.IF_DURABLY_PREAPPLIED;
+import static accord.api.ProtocolModifiers.DependencyElision.OFF;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.shouldCleanup;
@@ -113,13 +117,13 @@ import static accord.primitives.SaveStatus.LocalExecution.WaitingToExecute;
 import static accord.primitives.SaveStatus.PreAccepted;
 import static accord.primitives.SaveStatus.PreAcceptedWithDeps;
 import static accord.primitives.SaveStatus.PreAcceptedWithVote;
+import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
 import static accord.primitives.Status.Durability;
 import static accord.primitives.Status.Invalidated;
-import static accord.primitives.Known.KnownRoute.FullRoute;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
@@ -128,6 +132,7 @@ import static accord.primitives.Status.Truncated;
 import static accord.primitives.Route.isFullRoute;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
@@ -695,13 +700,64 @@ public class Commands
         @Override
         public AsyncChain<Void> apply(V v)
         {
-            return commandStore.chain(this, this);
+            return commandStore.priorityChain(this, this);
         }
 
         @Override
         public void accept(SafeCommandStore safeStore)
         {
             postApply(safeStore, txnId, force);
+        }
+
+        @Override public TxnId primaryTxnId() { return txnId; }
+        @Override public Unseekables<?> keys() { return participants; }
+        @Override public LoadKeys loadKeys() { return SYNC; }
+        @Override public String reason() { return "Post Apply"; }
+    }
+
+    private static class PostFastApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, PreLoadContext
+    {
+        final CommandStore commandStore;
+        final TxnId txnId;
+        final Participants<?> participants;
+        final Timestamp applyAt;
+        final Writes writes;
+        final Result result;
+        final boolean force;
+
+        protected PostFastApply(Head<?> head, CommandStore commandStore, TxnId txnId, Participants<?> participants, Timestamp applyAt, Writes writes, Result result, boolean force)
+        {
+            super(head);
+            this.commandStore = commandStore;
+            this.txnId = txnId;
+            this.participants = participants;
+            this.applyAt = applyAt;
+            this.writes = writes;
+            this.result = result;
+            this.force = force;
+        }
+
+        @Override
+        public AsyncChain<Void> apply(V v)
+        {
+            return commandStore.priorityChain(this, this);
+        }
+
+        @Override
+        public void accept(SafeCommandStore safeStore)
+        {
+            SafeCommand safeCommand = safeStore.get(txnId);
+            Command command = safeCommand.current();
+            logger.trace("{} applied, setting status to Applied and notifying listeners", command);
+            if (command.hasBeen(Applied) && !force)
+                return;
+
+            if (!command.hasBeen(PreApplied))
+                safeCommand.preapplied(safeStore, applyAt, writes, result);
+
+            safeCommand.applied(safeStore, force);
+            safeStore.agent().replicaEvents().onApplied(safeStore, command);
+            safeStore.notifyListeners(safeCommand, command);
         }
 
         @Override public TxnId primaryTxnId() { return txnId; }
@@ -799,11 +855,75 @@ public class Commands
         {
             default: throw UnhandledEnum.invalid(command.status());
             case Stable:
-                // TODO (required): maintain distinct ReadyToRead and ReadyToWrite states
-                safeCommand.readyToExecute(safeStore);
-                logger.trace("{}: set to ReadyToExecute", txnId);
-                safeStore.notifyListeners(safeCommand, command);
-                break;
+                if (executeAtReplica(txnId, command.partialTxn()) && !command.participants().executes().isEmpty())
+                {
+                    FullRoute<?> route = (FullRoute<?>) command.route();
+                    Txn txn = command.partialTxn().reconstitute(route);
+                    // TODO (required): compute ApplyAt
+                    Timestamp applyAt;
+                    {
+                        Timestamp executeAt = command.executeAt();
+                        long minUniqueHlc = command.waitingOn().minUniqueHlc();
+                        if (!txnId.is(Txn.Kind.Write) || minUniqueHlc == 0) applyAt = executeAt;
+                        else applyAt = new TimestampWithUniqueHlc(executeAt, minUniqueHlc);
+                    }
+
+                    if (!txn.read().keys().isEmpty())
+                    {
+                        PartialTxn partialTxn = command.partialTxn();
+                        Participants<?> executes = command.participants().executes();
+                        CommandStore unsafeStore = safeStore.commandStore();
+                        safeCommand.readyToExecute(safeStore);
+                        safeStore = safeStore;
+                        safeCommand = safeCommand;
+                        txn.read(safeStore, applyAt, executes).begin((success, fail) -> {
+                            if (fail != null)
+                            {
+                                unsafeStore.agent().onException(fail);
+                                unsafeStore.execute(PreLoadContext.contextFor(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore0 -> {
+                                    SafeCommand safeCommand0 = safeStore0.get(txnId);
+                                    Command command0 = safeCommand0.current();
+                                    if (command0.saveStatus().compareTo(ReadyToExecute) < 0)
+                                    {
+                                        safeStore0.notifyListeners(safeCommand0, safeCommand0.current());
+                                    }
+                                }, unsafeStore.agent());
+                            }
+                            else
+                            {
+                                Writes writes = txn.execute(txnId, applyAt, success);
+                                Result result = txn.result(txnId, applyAt, success);
+                                unsafeStore.node().coordinations().forEach(txnId, coordination -> {
+                                    if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+                                        ((ExecuteTxn) coordination).onLocalDirectSuccess(applyAt, writes, result);
+                                });
+                                writes.applyDirect(unsafeStore, executes, partialTxn)
+                                              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, result, false))
+                                      .begin(unsafeStore.agent());
+                            }
+                        });
+                        break;
+                    }
+
+                    Writes writes = txn.execute(txnId, applyAt, null);
+                    Result result = txn.result(txnId, applyAt, null);
+
+                    safeStore.node().coordinations().forEach(txnId, coordination -> {
+                        if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+                            ((ExecuteTxn) coordination).onLocalDirectSuccess(applyAt, writes, result);
+                    });
+//                    RemoteSuccess.report(safeStore.node().coordinations(), txnId, result);
+                    command = safeCommand.preapplied(safeStore, applyAt, writes, result);
+                    // fall-through
+                }
+                else
+                {
+                    // TODO (expected): maintain distinct ReadyToRead and ReadyToWrite states
+                    safeCommand.readyToExecute(safeStore);
+                    logger.trace("{}: set to ReadyToExecute", txnId);
+                    safeStore.notifyListeners(safeCommand, command);
+                    break;
+                }
 
             case PreApplied:
                 Command.Executed executed = command.asExecuted();
@@ -1713,7 +1833,7 @@ public class Commands
         //   but it might be nice to impose this earlier, or with some clearer semantics
         Invariants.require(addRoute == participants.route());
         Route<?> fullRoute = null;
-        if (expectKnown.has(FullRoute))
+        if (expectKnown.has(KnownRoute.FullRoute))
         {
             if (isFullRoute(cur.route())) fullRoute = cur.route();
             else if (isFullRoute(addRoute)) fullRoute = addRoute;

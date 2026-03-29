@@ -327,4 +327,10 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
             return;
         snapshotter.restore(snapshot -> snapshot.restore(commandStore));
     }
+
+    @Override
+    public boolean reportRemoteSuccess(Result success)
+    {
+        return true;
+    }
 }

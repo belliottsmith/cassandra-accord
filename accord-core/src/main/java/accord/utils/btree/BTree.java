@@ -3236,15 +3236,6 @@ public class BTree
             for (int i = 0; i < count; ++i)
                 out[outOffset + i] = in[inOffset + i] - (1 + in[inOffset + i - 1]);
         }
-
-        void reset()
-        {
-            Arrays.fill(buffer, null);
-            count = 0;
-            hasRightChild = false;
-            inUse = false;
-            clearSourceNode();
-        }
     }
 
     /**
@@ -3274,7 +3265,71 @@ public class BTree
          * While this method is not strictly  necessary, it exists to
          * ensure the implementing classes are aware they must handle it.
          */
-        abstract void reset();
+        void reset()
+        {
+            if (leaf().savedBuffer != null && leaf().savedBuffer[0] != null)
+            {
+                Arrays.fill(leaf().savedBuffer, null);
+                Arrays.fill(leaf().buffer, null);
+                leaf().savedNextKey = null;
+            }
+            else
+            {
+                clearLeafBuffer(leaf().buffer);
+            }
+
+            BranchBuilder branch = leaf().parent;
+            while (branch != null && branch.inUse)
+            {
+                branch.count = 0;
+                branch.hasRightChild = false;
+                branch.clearSourceNode();
+                if (branch.savedBuffer != null && branch.savedBuffer[0] != null)
+                {
+                    Arrays.fill(branch.savedBuffer, null); // by definition full, if non-empty
+                    Arrays.fill(branch.buffer, null);
+                    branch.savedNextKey = null;
+                }
+                else
+                {
+                    clearBranchBuffer(branch.buffer);
+                }
+                branch.inUse = false;
+                branch = branch.parent;
+            }
+        }
+
+        /**
+         * Clear the contents of a branch buffer, aborting once we encounter a null entry
+         * to save time on small trees
+         */
+        private void clearLeafBuffer(Object[] array)
+        {
+            if (array[0] == null)
+                return;
+            // find first null entry; loop from beginning, to amortise cost over size of working set
+            int i = 1;
+            while (i < array.length && array[i] != null)
+                ++i;
+            Arrays.fill(array, 0, i, null);
+        }
+
+        /**
+         * Clear the contents of a branch buffer, aborting once we encounter a null entry
+         * to save time on small trees
+         */
+        private void clearBranchBuffer(Object[] array)
+        {
+            if (array[0] == null)
+                return;
+
+            // find first null entry; loop from beginning, to amortise cost over size of working set
+            int i = 1;
+            while (i < MAX_KEYS && array[i] != null)
+                ++i;
+            Arrays.fill(array, 0, i, null);
+            Arrays.fill(array, MAX_KEYS, MAX_KEYS + i + 1, null);
+        }
     }
 
     /**
@@ -3333,19 +3388,6 @@ public class BTree
             }
         }
 
-        @Override
-        public void reset()
-        {
-            Arrays.fill(leaf().buffer, null);
-            leaf().count = 0;
-            BranchBuilder branch = leaf().parent;
-            while (branch != null && branch.inUse)
-            {
-                branch.reset();
-                branch = branch.parent;
-            }
-        }
-
         public boolean validateEmpty()
         {
             LeafOrBranchBuilder cur = leaf();
@@ -3393,58 +3435,6 @@ public class BTree
                     branch = branch.parent;
                 }
             }
-        }
-
-        void reset()
-        {
-            clearLeafBuffer(leaf().buffer);
-            if (leaf().savedBuffer != null)
-                Arrays.fill(leaf().savedBuffer, null);
-
-            BranchBuilder branch = leaf().parent;
-            while (branch != null && branch.inUse)
-            {
-                branch.count = 0;
-                branch.hasRightChild = false;
-                branch.clearSourceNode();
-                clearBranchBuffer(branch.buffer);
-                if (branch.savedBuffer != null && branch.savedBuffer[0] != null)
-                    Arrays.fill(branch.savedBuffer, null); // by definition full, if non-empty
-                branch.inUse = false;
-                branch = branch.parent;
-            }
-        }
-
-        /**
-         * Clear the contents of a branch buffer, aborting once we encounter a null entry
-         * to save time on small trees
-         */
-        private void clearLeafBuffer(Object[] array)
-        {
-            if (array[0] == null)
-                return;
-            // find first null entry; loop from beginning, to amortise cost over size of working set
-            int i = 1;
-            while (i < array.length && array[i] != null)
-                ++i;
-            Arrays.fill(array, 0, i, null);
-        }
-
-        /**
-         * Clear the contents of a branch buffer, aborting once we encounter a null entry
-         * to save time on small trees
-         */
-        private void clearBranchBuffer(Object[] array)
-        {
-            if (array[0] == null)
-                return;
-
-            // find first null entry; loop from beginning, to amortise cost over size of working set
-            int i = 1;
-            while (i < MAX_KEYS && array[i] != null)
-                ++i;
-            Arrays.fill(array, 0, i, null);
-            Arrays.fill(array, MAX_KEYS, MAX_KEYS + i + 1, null);
         }
     }
 

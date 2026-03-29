@@ -52,7 +52,7 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
-import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
+import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
@@ -92,7 +92,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     protected void startOnceInitialised()
     {
         node.agent().coordinatorEvents().onExecuting(txnId, Ballot.ZERO, deps, EPHEMERAL);
-        if (permitLocalExecution() && tryIfUniversal(node.id()))
+        if (permitCoordinatorLocalExecution() && tryIfUniversal(node.id()))
         {
             new LocalExecute(txnId, node.id()).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
         }
