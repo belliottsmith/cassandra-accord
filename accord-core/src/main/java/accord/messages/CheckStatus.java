@@ -243,9 +243,9 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
     @Override
     protected void acceptInternal(CheckStatusReply ok, Throwable failure)
     {
-        if (failure != null) node.reply(replyTo, replyContext, ok, failure);
-        else if (ok == null) node.reply(replyTo, replyContext, CheckStatusNack.NotOwned, null);
-        else node.reply(replyTo, replyContext, ok, null);
+        if (failure != null) node.reply(replyTo, replyContext, ok, failure, tracing());
+        else if (ok == null) node.reply(replyTo, replyContext, CheckStatusNack.NotOwned, null, tracing());
+        else node.reply(replyTo, replyContext, ok, null, tracing());
     }
 
     public interface CheckStatusReply extends Reply

@@ -18,6 +18,7 @@
 
 package accord.coordinate;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.function.BiConsumer;
 
@@ -32,6 +33,7 @@ import accord.coordinate.tracking.QuorumIdTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
+import accord.local.LoadKeys;
 import accord.local.LogUnavailableException;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -39,6 +41,9 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
+import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
 import accord.messages.Callback;
 import accord.messages.Commit;
@@ -49,7 +54,6 @@ import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
 import accord.messages.ReadTxnData;
-import accord.messages.SafeCallback;
 import accord.messages.StableThenRead;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -63,17 +67,21 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
-import accord.utils.SortedArrays;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
-import static accord.api.ProtocolModifiers.Toggles.recoverReads;
-import static accord.api.ProtocolModifiers.Toggles.fastReadExecMayResendTxn;
-import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
-import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
-import static accord.api.ProtocolModifiers.Toggles.sendNoStableIfFastExec;
-import static accord.api.ProtocolModifiers.Toggles.sendOnlyReadStableMessages;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
+import static accord.api.ProtocolModifiers.replicaExecuteDistributedPersist;
+import static accord.api.ProtocolModifiers.recoverReads;
+import static accord.api.ProtocolModifiers.fastReadExecutionMayResendTxn;
+import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
+import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
+import static accord.api.ProtocolModifiers.sendMinimal;
+import static accord.api.ProtocolModifiers.sendNoStableIfFastExec;
+import static accord.api.ProtocolModifiers.sendOnlyReadStableMessages;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
@@ -81,24 +89,30 @@ import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
+import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.messages.Commit.Kind.StableSlowPath;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
+import static accord.messages.MessageType.StandardMessage.READ_REQ;
+import static accord.messages.MessageType.StandardMessage.STABLE_THEN_READ_REQ;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
+import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.Stable;
+import static accord.primitives.Status.Durability.AllQuorums;
 import static accord.primitives.Status.Durability.DurablyStable;
-import static accord.primitives.Status.Phase.Execute;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): return Waiting from ReadData if not ready to execute, and do not submit more than one speculative retry in this case
 // TODO (expected): by default, if we can execute locally, never contact a remote replica regardless of local outcome
 public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 {
-    class StableTracker extends QuorumIdTracker implements Callback<ReadReply>
+    class StableTracker extends QuorumIdTracker implements CallbackExclusive<ReadReply>, Callback<ReadReply>
     {
         private boolean isDone;
         private boolean informOnSuccess;
+        private boolean hasOnlyRedundant;
 
         public StableTracker(Topologies topologies)
         {
@@ -106,22 +120,48 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         }
 
         @Override
-        public void onSuccess(Id from, ReadReply reply)
+        public final void onSuccess(Node.Id from, ReadReply reply)
         {
+            CallbackExclusive.onSuccess(executor, this, from, reply);
+        }
+
+        @Override
+        public final void onSlow(Node.Id from)
+        {
+            CallbackExclusive.onSlow(executor, this, from);
+        }
+
+        @Override
+        public final void onFailure(Node.Id from, Throwable failure)
+        {
+            CallbackExclusive.onFailure(executor, this, from, failure);
+        }
+
+        @Override
+        public void onSuccessExclusive(Id from, ReadReply reply)
+        {
+            hasOnlyRedundant &= reply == CommitOrReadNack.Redundant;
             if ((reply.isOk() || reply == Waiting) && RequestStatus.Success == recordSuccess(from) && informOnSuccess)
                 informStable();
         }
 
         @Override
-        public void onFailure(Id from, Throwable failure)
+        public void onFailureExclusive(Id from, Throwable failure)
         {
+        }
+
+        @Override
+        public void onCallbackFailureExclusive(Id from, @Nullable Throwable failure)
+        {
+            node.agent().onException(failure);
         }
 
         void informStable()
         {
             Invariants.require(hasReachedQuorum());
             isDone = true;
-            InformDurable.informHome(node, topologies, txnId, route, executeAt, DurablyStable);
+            if (hasOnlyRedundant) InformDurable.informDefault(node, topologies, txnId, route, ballot, executeAt, stableDeps, AllQuorums, tracing);
+            else InformDurable.informHome(node, topologies, txnId, route, executeAt, DurablyStable, tracing);
         }
 
         void maybeInformStable()
@@ -157,7 +197,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     private final StableTracker stable;
     private @Nullable SortedListSet<Node.Id> unstableFastReads;
 
-    private final Participants<?> readScope;
     private Data data;
     private long uniqueHlc;
     private boolean isPrivilegedVoteCommitting;
@@ -180,7 +219,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         this.sendDeps = sendDeps;
         this.flags = flags;
         this.stable = new StableTracker(topologies.forEpochs(txnId.epoch(), executeAt.epoch()));
-        this.readScope = txn == null ? route : route.overlapping(txn.keys());
         Invariants.require(!txnId.awaitsOnlyDeps());
         Invariants.require(!txnId.awaitsPreviouslyOwned());
     }
@@ -190,7 +228,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         node.agent().coordinatorEvents().onExecuting(txnId, ballot, stableDeps, path);
         Node.Id self = node.id();
-        if (permitLocalExecution() && tryIfUniversal(self))
+        if (permitCoordinatorLocalExecution() && tryIfUniversal(self))
         {
             isPrivilegedVoteCommitting = txnId.hasPrivilegedCoordinator() && path == FAST;
             ExecuteFlags executeFlags = flags.get(self);
@@ -207,11 +245,14 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
              */
             boolean mayFastExecute = !isPrivilegedVoteCommitting
                                      && executeFlags.contains(READY_TO_EXECUTE)
+                                     && sendNoStableIfFastExec()
                                      && fastReadsMayBypassSafeStore(txnId);
 
             if (mayFastExecute)
                 markUnstableFastRead(node.id());
-            new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
+            new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, READ_REQ, MICROSECONDS));
+            if (!isPrivilegedVoteCommitting)
+                start(Collections.emptyList(), Collections.singletonList(node.id()));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
@@ -229,12 +270,17 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void start(List<Id> readFrom)
     {
+        start(readFrom, readFrom);
+    }
+
+    protected void start(List<Id> sendReadTo, List<Id> readingFrom)
+    {
         // TODO (desired): migrate to SortedListSet; or introduce a specialised version for integer keys; or introduce a hash equivalent
         Topologies all = allTopologies;
         Commit.Kind kind = commitKind();
-        for (int i = 0, size = readFrom.size() ; i < size ; ++i)
+        for (int i = 0, size = sendReadTo.size() ; i < size ; ++i)
         {
-            Node.Id to = readFrom.get(i);
+            Node.Id to = sendReadTo.get(i);
             ExecuteFlags flags = this.flags.get(to);
             Invariants.require(kind.compareTo(StableFastPath) >= 0);
             boolean sendUnstable = flags.contains(READY_TO_EXECUTE) && sendNoStableIfFastExec() && path != RECOVER;
@@ -242,18 +288,19 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             else sendStableRead(to, kind);
         }
 
-        if (sendOnlyReadStableMessages() && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
+        boolean sendOnlyReadStableMessages = flags.isAnyReadyToExecute() && sendOnlyReadStableMessages(txnId);
+        if (sendOnlyReadStableMessages && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
             return;
 
         IntHashSet readSet = new IntHashSet();
-        readFrom.forEach(i -> readSet.add(i.id));
-        SortedArrays.SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
+        readingFrom.forEach(i -> readSet.add(i.id));
+        SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
         for (Node.Id to : contact)
         {
             if (readSet.contains(to.id))
                 continue;
 
-            if (sendOnlyReadStableMessages() && all.current().contains(to))
+            if (sendOnlyReadStableMessages && all.current().contains(to))
                 continue;
 
             sendStableOnly(to, kind);
@@ -264,22 +311,21 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         Commit send = new Commit(kind, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
         boolean addCallback = allTopologies.size() == 1 || stable.nodes().contains(to);
-        if (addCallback) node.send(to, send, executor, stable);
-        else node.send(to, send);
-
+        if (addCallback) node.send(to, send, executor, stable, tracing);
+        else node.send(to, send, tracing);
     }
 
     private void sendUnstableRead(Node.Id to, ExecuteFlags flags)
     {
         Txn sendTxn = null;
         Timestamp sendExecuteAt = null;
-        if (flags.contains(READY_TO_EXECUTE) && fastReadExecMayResendTxn() && fastReadsMayBypassSafeStore(txnId))
+        if (flags.contains(READY_TO_EXECUTE) && fastReadExecutionMayResendTxn() && fastReadsMayBypassSafeStore(txnId))
         {
             sendTxn = txn;
             sendExecuteAt = executeAt;
             markUnstableFastRead(to);
         }
-        node.send(to, new ReadTxnData(to, allTopologies, txnId, readScope, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this);
+        node.send(to, new ReadTxnData(to, allTopologies, txnId, route, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this, tracing);
     }
 
     private void markUnstableFastRead(Node.Id to)
@@ -291,21 +337,25 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private void sendStableRead(Node.Id to, Commit.Kind kind)
     {
-        node.send(to, new StableThenRead(kind, to, allTopologies, txnId, txn, route, executeAt, stableDeps), executor, this);
+        node.send(to, new StableThenRead(kind, to, allTopologies, txnId, txn, route, executeAt, stableDeps), executor, this, tracing);
     }
 
     private void sendMaximal(Node.Id to)
     {
         Commit send = new Commit(StableWithTxnAndDeps, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
-        node.send(to, send, executor, stable);
+        node.send(to, send, executor, stable, tracing);
     }
 
     private Commit.Kind commitKind()
     {
+        if (!sendMinimal())
+            return StableWithTxnAndDeps;
+
         switch (path)
         {
             default: throw UnhandledEnum.unknown(path);
             case EPHEMERAL: throw UnhandledEnum.invalid(EPHEMERAL);
+            case BACKLOG:
             case FAST:    return StableFastPath;
             case MEDIUM:  return StableMediumPath;
             case SLOW:    return StableSlowPath;
@@ -317,7 +367,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     public void contact(Id to)
     {
         ExecuteFlags flags = this.flags.get(to);
-        boolean sendUnstable = !sendOnlyReadStableMessages() || path == RECOVER || flags.contains(READY_TO_EXECUTE);
+        boolean sendUnstable = !sendOnlyReadStableMessages(txnId) || path == RECOVER || flags.contains(READY_TO_EXECUTE);
         if (sendUnstable) sendUnstableRead(to, flags);
         else sendStableRead(to, commitKind());
     }
@@ -329,9 +379,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     }
 
     @Override
-    public void onSuccess(Id from, ReadReply reply)
+    public void onSuccessExclusive(Id from, ReadReply reply)
     {
-        super.onSuccess(from, reply);
+        super.onSuccessExclusive(from, reply);
         // we forward all not-oks for consideration, and any stable fast path read oks;
         // it's up to the stable tracker to decide what to do with them, we're just filtering out unstable Acks
         if (!reply.isOk() || unstableFastReads == null || !unstableFastReads.contains(from))
@@ -362,11 +412,16 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             default: throw UnhandledEnum.unknown(nack.kind);
             case InsufficientEpochs: throw UnhandledEnum.invalid(nack.kind);
             case Waiting:
-                if (from.id == node.id().id)
+                if (from.id == node.id().id && isPrivilegedVoteCommitting)
+                {
+                    start(Collections.emptyList(), Collections.singletonList(node.id()));
                     isPrivilegedVoteCommitting = false;
+                }
                 return Action.None;
 
             case Redundant:
+                return Action.Reject;
+
             case Rejected:
                 invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 return Action.Aborted;
@@ -382,7 +437,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void onDone(Success success, Throwable failure)
     {
-        if (failure == null)
+        if (success == Success.Success)
         {
             stable.setDone();
             Timestamp executeAt = this.executeAt;
@@ -409,7 +464,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 else
                 {
                     stable.informStableOnceQuorum();
-                    if (sendOnlyReadStableMessages())
+                    if (sendOnlyReadStableMessages(txnId))
                     {
                         // send additional stable messages to record the transaction outcome
                         Commit.Kind kind = commitKind();
@@ -431,23 +486,64 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     }
 
     @Override
-    public void onSlowResponse(Id from)
+    public void exclusiveOnSlowResponse(Id from)
     {
         // send stable messages to everyone not yet contacted, and then inform decided, to avoid unnecessary recoveries
         stable.maybeInformStable();
-        super.onSlowResponse(from);
+        super.exclusiveOnSlowResponse(from);
     }
 
     @Override
-    public void onFailure(Id from, Throwable failure)
+    public void exclusiveOnFailure(Id from, Throwable failure)
     {
-        if (isPrivilegedVoteCommitting && from.id == node.id().id) finishWithFailure(failure);
-        else super.onFailure(from, failure);
+        if (isPrivilegedVoteCommitting && from.id == node.id().id && !isDone()) finishWithFailure(failure);
+        else super.exclusiveOnFailure(from, failure);
     }
 
     protected CoordinationAdapter<Result> adapter()
     {
         return node.coordinationAdapter(txnId, Standard);
+    }
+
+    private void onExternalSuccess(Result result)
+    {
+        executor.execute(() -> {
+            if (!trySetDone())
+                return;
+
+            stable.setDone();
+            BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
+            if (callback != null)
+                callback.accept(result, null);
+        });
+    }
+
+    public void onRemoteSuccess(Result result)
+    {
+        if (tracing != null)
+            tracing.trace(null, "Remote Success");
+        onExternalSuccess(result);
+    }
+
+    public void onLocalDirectSuccess(Timestamp executeAt, Writes writes, Result result)
+    {
+        if (tracing != null)
+            tracing.trace(null, "Local Direct Success");
+
+        if (replicaExecuteDistributedPersist())
+        {
+            executor.executeMaybeImmediately(() -> {
+                if (!trySetDone())
+                    return;
+
+                stable.setDone();
+                adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
+            });
+        }
+        else
+        {
+            onExternalSuccess(result);
+        }
     }
 
     @Override
@@ -464,14 +560,18 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         final boolean mayFastExecute;
         private boolean committed;
-        private final SafeCallback<ReadReply> callback;
         private Timeouts.RegisteredTimeout slowTimeout;
 
         public LocalExecute(TxnId txnId, ExecuteFlags flags, boolean mayFastExecute)
         {
             super(txnId, route, mayFastExecute ? txn.intersecting(route, true) : null, ExecuteTxn.this.executeAt, ExecuteTxn.this.executeAt.epoch(), flags);
-            this.callback = new SafeCallback<>(executor, ExecuteTxn.this);
             this.mayFastExecute = mayFastExecute;
+        }
+
+        @Override
+        public LoadKeys loadKeys()
+        {
+            return LoadKeys.SYNC;
         }
 
         @Override
@@ -494,6 +594,27 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind()))
                 return CommitOrReadNack.Rejected;
 
+            if (coordinatorBacklogExecution(ballot) && txnId.is(SingleKey) && txnId.is(Key))
+            {
+                SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(scope.get(0).asRoutingKey());
+                if (safeCfk != null)
+                {
+                    CommandsForKey cfk = safeCfk.current();
+                    int i = cfk.unappliedCommittedIndexOf(executeAt);
+                    if (i < 0) i = -1 -i;
+                    else ++i;
+
+                    boolean executeBacklog = false;
+                    if (i < cfk.committedSize())
+                    {
+                        TxnInfo next = cfk.get(i);
+                        executeBacklog = next.is(STABLE) && next.is(SingleKey);
+                    }
+                    if (executeBacklog) safeCfk.overrideSink(node.executeBacklogSink());
+                    else safeCfk.overrideSink(null);
+                }
+            }
+
             return super.applyInternal(safeStore, safeCommand, participants);
         }
 
@@ -511,15 +632,19 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (reply != null && reply.kind == CommitOrReadNack.Kind.Waiting)
             {
                 committed = true;
-                long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
-                slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
+                long slowAt = node.agent().selfSlowAt(txnId, READ_REQ, MICROSECONDS);
+                // TODO (desired): avoid converting to MICROSECONDS again here
+                if (slowAt >= 0)
                 {
-                    @Override public void timeout() { executor.executeMaybeImmediately(() -> {
-                        onSlowResponse(node.id());
-                        slowTimeout = null;
-                    }); }
-                    @Override public int stripe() { return txnId.hashCode(); }
-                }, slowAt, MICROSECONDS);
+                    slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
+                    {
+                        @Override public void timeout() { executor.executeMaybeImmediately(() -> {
+                            onSlow(node.id());
+                            slowTimeout = null;
+                        }); }
+                        @Override public int stripe() { return txnId.hashCode(); }
+                    }, slowAt, MICROSECONDS);
+                }
             }
             else if (failure == null)
             {
@@ -540,31 +665,40 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (!super.timeoutInternal())
                 return false;
 
-            slowTimeout = null;
-            if (committed) callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
-            else callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
+            cancelSlowTimeout();
+            if (committed)
+                ExecuteTxn.this.onFailure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
+            else
+                ExecuteTxn.this.onFailure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
             return true;
         }
 
         @Override
         protected void reply(ReadReply reply, Throwable fail)
         {
-            if (slowTimeout != null && reply != Waiting)
-            {
-                slowTimeout.cancel();
-                slowTimeout = null;
-            }
+            if (reply != Waiting)
+                cancelSlowTimeout();
 
             // TODO (expected): execute immediately if already on CommandStore
-            if (fail == null) callback.success(node.id(), reply);
-            else callback.failure(node.id(), fail);
+            if (fail == null) ExecuteTxn.this.onSuccess(node.id(), reply);
+            else ExecuteTxn.this.onFailure(node.id(), fail);
+        }
+
+        private void cancelSlowTimeout()
+        {
+            Timeouts.RegisteredTimeout cancel = slowTimeout;
+            if (cancel != null)
+            {
+                cancel.cancel();
+                slowTimeout = null;
+            }
         }
 
         @Override
         public ReadType kind() { throw new UnsupportedOperationException(); }
 
         @Override
-        public MessageType type() { throw new UnsupportedOperationException(); }
+        public MessageType type() { return STABLE_THEN_READ_REQ; }
 
         @Override
         public String reason()
@@ -576,7 +710,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     public CoordinationKind kind()
     {
-        return CoordinationKind.Execute;
+        return Execute;
     }
 
     @Override

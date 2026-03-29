@@ -82,7 +82,7 @@ public class RecoverAwait extends Await
             if (txnId.isSyncPoint() && txnId.hlc() > recoverId.hlc() && command.executeAt().is(HLC_BOUND))
             {
                 rejects = true;
-                node.reply(replyTo, replyContext, RecoverAwaitOk.Reject, null);
+                node.reply(replyTo, replyContext, RecoverAwaitOk.Reject, null, tracing());
             }
             return;
         }
@@ -91,7 +91,7 @@ public class RecoverAwait extends Await
         if (!command.partialDeps().participants(recoverId).containsAll(participants))
         {
             rejects = true;
-            node.reply(replyTo, replyContext, RecoverAwaitOk.Reject, null);
+            node.reply(replyTo, replyContext, RecoverAwaitOk.Reject, null, tracing());
         }
     }
 
@@ -99,7 +99,7 @@ public class RecoverAwait extends Await
     protected void onSynchronousAwaitComplete()
     {
         if (!rejects)
-            node.reply(replyTo, replyContext, cannotAccept || unavailable ? RecoverAwaitOk.Unknown : RecoverAwaitOk.Accept, null);
+            node.reply(replyTo, replyContext, cannotAccept || unavailable ? RecoverAwaitOk.Unknown : RecoverAwaitOk.Accept, null, tracing());
     }
 
     @Override

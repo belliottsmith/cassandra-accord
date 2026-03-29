@@ -35,7 +35,6 @@ import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.MapReduceConsumeCommandStores;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.Ballot;
@@ -68,7 +67,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
  *
  * TODO (desired): return an OK message indicating we're waiting synchronously
  */
-public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> implements Request, LocalListeners.ComplexListener, Timeouts.Timeout
+public class Await extends AbstractRequest<Participants<?>, Void> implements Request, LocalListeners.ComplexListener, Timeouts.Timeout
 {
     public static class SerializerSupport
     {
@@ -192,15 +191,10 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
         }
     }
 
-    public final TxnId txnId;
     public final Until until;
     public final long minAwaitEpoch, maxAwaitEpoch;
     public final int callbackId; // < 0 means synchronous await
     public final boolean notifyProgressLog;
-
-    transient Node node;
-    transient Id replyTo;
-    transient ReplyContext replyContext;
 
     private transient volatile RemoteListeners.Registration asyncRegistration;
     private static final AtomicReferenceFieldUpdater<Await, RemoteListeners.Registration> registrationUpdater = AtomicReferenceFieldUpdater.newUpdater(Await.class, RemoteListeners.Registration.class, "asyncRegistration");
@@ -218,8 +212,7 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
 
     public Await(Id to, Topologies topologies, TxnId txnId, Participants<?> participants, Until until, int callbackId, boolean notifyProgressLog)
     {
-        super(computeScope(to, topologies, participants));
-        this.txnId = txnId;
+        super(txnId, computeScope(to, topologies, participants));
         this.callbackId = callbackId;
         this.notifyProgressLog = notifyProgressLog;
         this.until = until;
@@ -235,8 +228,7 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
 
     public Await(TxnId txnId, Participants<?> scope, Until until, long minAwaitEpoch, long maxAwaitEpoch, int callbackId, boolean notifyProgressLog)
     {
-        super(scope);
-        this.txnId = txnId;
+        super(txnId, scope);
         this.until = until;
         this.minAwaitEpoch = minAwaitEpoch;
         this.maxAwaitEpoch = maxAwaitEpoch;
@@ -246,13 +238,13 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
     }
 
     @Override
-    public void process(Node node, Id replyToNode, ReplyContext replyContext)
+    public Cancellable process(Node node, Id replyToNode, ReplyContext replyContext)
     {
         this.node = node;
         this.replyTo = replyToNode;
         this.replyContext = replyContext;
         // TODO (expected): integrate with cancellation
-        node.commandStores().mapReduceConsume(minAwaitEpoch, maxAwaitEpoch, this);
+        return node.commandStores().mapReduceConsume(minAwaitEpoch, maxAwaitEpoch, this);
     }
 
     @Override
@@ -327,7 +319,7 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
             int waitingOn = synchronouslyWaitingOnUpdater.decrementAndGet(this);
             if (waitingOn >= 0)
             {
-                long expiresAtMicros = node.agent().expiresAt(replyContext, MICROSECONDS);
+                long expiresAtMicros = replyContext.expiresAt(MICROSECONDS);
                 if (expiresAtMicros > 0)
                 {
                     timeout = node.timeouts().registerAt(this, expiresAtMicros, MICROSECONDS);
@@ -344,7 +336,7 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
 
     protected void reply(AwaitOk reply, Throwable failure)
     {
-        node.reply(replyTo, replyContext, reply, failure);
+        node.reply(replyTo, replyContext, reply, failure, tracing());
     }
 
     public void timeout()
@@ -443,7 +435,7 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
 
     protected void onSynchronousAwaitComplete()
     {
-        node.reply(replyTo, replyContext, unavailable ? AwaitOk.Unavailable : AwaitOk.Ready, null);
+        node.reply(replyTo, replyContext, unavailable ? AwaitOk.Unavailable : AwaitOk.Ready, null, tracing());
     }
 
     public static class AsyncAwaitComplete extends RouteRequest<Reply>

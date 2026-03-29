@@ -19,18 +19,19 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import accord.api.Tracing;
+import accord.impl.LocalDelivery;
 import accord.local.Commands;
+import accord.local.Commands.CommitOutcome;
 import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.local.SequentialAsyncExecutor;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.messages.ReadData.CommitOrReadNack;
-import accord.messages.ReadData.ReadReply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -46,11 +47,9 @@ import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
 import accord.topology.TopologyException;
 import accord.utils.Invariants;
-import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
-import static accord.messages.Commit.Kind.CommitSlowPath;
 import static accord.messages.Commit.Kind.CommitWithTxn;
 import static accord.messages.MessageType.StandardMessage.COMMIT_INVALIDATE_REQ;
 import static accord.messages.MessageType.StandardMessage.COMMIT_REQ;
@@ -191,14 +190,6 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
         return partialDeps;
     }
 
-    public static void commitMinimalNoRead(SortedArrayList<Id> contact, Node node, SequentialAsyncExecutor executor, Topologies stabilise, Topologies all, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps unstableDeps, Callback<ReadReply> callback)
-    {
-        Invariants.requireArgument(stabilise.size() == 1, "Invalid coordinate epochs: %s", stabilise);
-        // we want to send to everyone, and we want to include all the relevant data, but we stabilise on the coordination epoch replica responses
-        for (Node.Id to : contact)
-            node.send(to, new Commit(CommitSlowPath, to, all, txnId, txn, route, ballot, executeAt, unstableDeps), executor, callback);
-    }
-
     @Override
     public LoadKeys loadKeys()
     {
@@ -224,9 +215,10 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
 
-        switch (Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps, kind))
+        CommitOutcome outcome = Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps, kind);
+        switch (outcome)
         {
-            default:
+            default: throw new UnhandledEnum(outcome);
             case Success:
             case Redundant:
                 return null;
@@ -263,10 +255,22 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
     {
         partialDeps = null;
         partialTxn = null;
-        if (reply != null || failure != null)
-            node.reply(replyTo, replyContext, reply, failure);
-        else if (kind.saveStatus == Committed)
-            node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null);
+        if (reply == null && failure == null)
+        {
+            if (isCancelled())
+            {
+                if (!(replyContext instanceof LocalDelivery<?>))
+                    return;
+                failure = CANCELLATION_EXCEPTION;
+            }
+            else
+            {
+                // TODO (expected): indicate in some way whether a reply is needed
+                node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null, tracing());
+                return;
+            }
+        }
+        node.reply(replyTo, replyContext, reply, failure, tracing());
     }
 
     @Override
@@ -295,12 +299,12 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
             }
         }
 
-        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, Timestamp until)
+        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, Timestamp until, @Nullable Tracing tracing)
         {
-            commitInvalidate(node, txnId, inform, until.epoch());
+            commitInvalidate(node, txnId, inform, until.epoch(), tracing);
         }
 
-        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, long untilEpoch)
+        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, long untilEpoch, @Nullable Tracing tracing)
         {
             // TODO (expected, safety): this kind of check needs to be inserted in all equivalent methods
             Invariants.require(untilEpoch >= txnId.epoch());
@@ -316,12 +320,12 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
                 node.agent().onException(e);
                 return;
             }
-            commitInvalidate(node, commitTo, txnId, inform);
+            commitInvalidate(node, commitTo, txnId, inform, tracing);
         }
 
-        public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Participants<?> inform)
+        public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Participants<?> inform, @Nullable Tracing tracing)
         {
-            node.send(commitTo, to -> new Invalidate(to, commitTo, txnId, inform));
+            node.send(commitTo, to -> new Invalidate(to, commitTo, txnId, inform), tracing);
         }
 
         public final long invalidateUntilEpoch;

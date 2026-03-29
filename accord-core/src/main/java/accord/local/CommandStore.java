@@ -77,10 +77,11 @@ import static accord.api.DataStore.FetchKind.Sync;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.durability.DurabilityService.SyncLocal.KnownToSelf;
+import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Image;
-import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
+import static accord.api.ProtocolModifiers.dataStoreRequiresUniqueHlcs;
 import static accord.local.RedundantStatus.SomeStatus.GC_BEFORE_AND_LOCALLY_DURABLE;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY;
@@ -167,7 +168,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
     private MaxDecidedRX maxDecidedRX = MaxDecidedRX.EMPTY;
-    private int maxConflictsUpdates = 0;
+    private int maxConflictsUpdates = 0, prunedMaxConflictsSize;
     protected RangesForEpoch rangesForEpoch;
     protected @Nullable Ranges refuses;
     List<SyncPointListener> syncPointListeners;
@@ -188,7 +189,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      */
     private NavigableMap<Timestamp, Ranges> safeToRead = emptySafeToRead();
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
-    private RejectBefore rejectBefore = RejectBefore.EMPTY;
 
     static class WaitingOnVisibility
     {
@@ -323,6 +323,16 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public abstract AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
     public abstract <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
 
+    public AsyncChain<Void> priorityChain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+    {
+        return chain(context, consumer);
+    }
+
+    public <T> AsyncChain<T> priorityChain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+    {
+        return chain(context, function);
+    }
+
     public Cancellable execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
         return chain(context, consumer).begin(callback);
@@ -348,11 +358,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     protected void unsafeSetMaxDecidedRX(MaxDecidedRX newMaxDecidedRX)
     {
         this.maxDecidedRX = newMaxDecidedRX;
-    }
-
-    protected void unsafeSetRejectBefore(RejectBefore newRejectBefore)
-    {
-        this.rejectBefore = newRejectBefore;
     }
 
     final void unsafeSetRedundantBefore(RedundantBefore newRedundantBefore)
@@ -403,8 +408,8 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      */
     final void unsafeSetSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
     {
-        node.updateStamp();
         this.safeToRead = newSafeToRead;
+        node.updateStamp();
     }
 
     protected final void unsafeClearSafeToRead()
@@ -456,13 +461,18 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         executeAt = executeAt.flattenUniqueHlc(); // this is what guarantees a bootstrap recipient can compute uniqueHlc safely
         MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.txnId(), updated.participants().hasTouched(), executeAt);
         if (Invariants.isParanoid())
-            Invariants.require(updatedMaxConflicts.getMax(updated.participants().hasTouched()).compareTo(executeAt) >= 0);
+            Invariants.require(updatedMaxConflicts.getAny(updated.txnId(), updated.participants().hasTouched()).compareTo(executeAt) >= 0);
         updateMaxConflicts(executeAt, updatedMaxConflicts);
     }
 
     protected void updateMaxConflicts(Ranges ranges, Timestamp executeAt)
     {
-        updateMaxConflicts(executeAt, maxConflicts.update(ranges, executeAt, executeAt));
+        updateMaxConflicts(ranges, executeAt, Timestamp.NONE);
+    }
+
+    protected void updateMaxConflicts(Ranges ranges, Timestamp executeAt, Timestamp rejectBefore)
+    {
+        updateMaxConflicts(executeAt, maxConflicts.update(ranges, executeAt, executeAt, rejectBefore));
     }
 
     protected void updateMaxConflicts(NavigableMap<? extends Timestamp, Ranges> map)
@@ -484,45 +494,25 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     protected void updateMaxConflicts(Timestamp executeAt, MaxConflicts updatedMaxConflicts)
     {
-        if (++maxConflictsUpdates >= agent.maxConflictsPruneInterval())
+        if (++maxConflictsUpdates >= Math.max(prunedMaxConflictsSize, 128))
         {
-            int initialSize = updatedMaxConflicts.size();
-            MaxConflicts initialConflicts = updatedMaxConflicts;
-            long pruneHlc = executeAt.hlc() - agent.maxConflictsHlcPruneDelta();
-            Timestamp pruneBefore = pruneHlc > 0 ? Timestamp.fromValues(executeAt.epoch(), pruneHlc, executeAt.node) : null;
-            Ranges ranges = rangesForEpoch.all();
-            if (pruneBefore != null)
-                updatedMaxConflicts = updatedMaxConflicts.update(ranges, pruneBefore, pruneBefore);
-
-            int prunedSize = updatedMaxConflicts.size();
-            if (initialSize > 100 && prunedSize == initialSize)
+            if (updatedMaxConflicts.size() >= prunedMaxConflictsSize * 2)
             {
-                logger.debug("Ineffective prune for {}. Initial size: {}, pruned size: {}, executeAt: {}, pruneBefore: {}", ranges, initialSize, prunedSize, executeAt, pruneBefore);
-                if (dumpCounter == 0)
-                {
-                    logger.trace("initial MaxConflicts dump: {}", initialConflicts);
-                    logger.trace("pruned MaxConflicts dump: {}", updatedMaxConflicts);
-                }
-                dumpCounter++;
-                dumpCounter %= 100;
+                long pruneHlc = executeAt.hlc() - agent.maxConflictsHlcPruneDelta();
+                Timestamp pruneBefore = pruneHlc > 0 ? Timestamp.fromValues(executeAt.epoch(), pruneHlc, executeAt.node) : null;
+                Ranges ranges = rangesForEpoch.all();
+                if (pruneBefore != null)
+                    updatedMaxConflicts = updatedMaxConflicts.update(ranges, pruneBefore, pruneBefore);
+
+                maxConflictsUpdates = 0;
+                prunedMaxConflictsSize = updatedMaxConflicts.size();
             }
-            else if (prunedSize != initialSize)
+            else
             {
-                logger.trace("Successfully pruned {} to {}", initialSize, prunedSize);
+                maxConflictsUpdates = prunedMaxConflictsSize * 2 - updatedMaxConflicts.size();
             }
-
-
-            maxConflictsUpdates = 0;
         }
         unsafeSetMaxConflicts(updatedMaxConflicts);
-    }
-
-    final void upsertRejectBefore(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
-    {
-        // TODO (desired): narrow ranges to those that are owned
-        Invariants.requireArgument(txnId.isSyncPoint());
-        RejectBefore newRejectBefore = RejectBefore.add(rejectBefore, ranges, txnId);
-        unsafeSetRejectBefore(newRejectBefore);
     }
 
     final void markExclusiveSyncPointDecided(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
@@ -559,17 +549,13 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     {
         NodeCommandStoreService node = safeStore.node();
 
-        boolean isExpired = safeStore.agent().rejectPreAccept(safeStore.node(), txnId) && !txnId.isSyncPoint();
-        if (rejectBefore != null && !isExpired)
-        {
-            boolean rejects = rejectBefore.rejects(txnId, keys);
-            isExpired = rejects;
-        }
+        Timestamp maxConflict = maxConflicts.get(txnId, keys);
+        boolean isExpired = maxConflict.is(REJECTED) || (safeStore.agent().rejectPreAccept(safeStore.node(), txnId) && !txnId.isSyncPoint());
 
         if (isExpired)
             return node.uniqueTimestamp(txnId).asRejected();
 
-        Timestamp min = TxnId.mergeMax(txnId, maxConflicts.get(txnId, keys));
+        Timestamp min = TxnId.mergeMax(txnId, maxConflict);
         if (permitFastPath && txnId == min && txnId.epoch() >= node.epoch())
             return txnId;
 
@@ -686,9 +672,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     private AsyncResult<EpochReady> startSafeBootstrap(Node node, Ranges newRanges, long epoch)
     {
-        return submit((Empty) () -> "New Epoch", safeStore -> {
+        return node.withEpochAtLeast(epoch, null, () -> chain((Empty) () -> "New Epoch", safeStore -> {
             return startSafeBootstrapInternal(node, safeStore, newRanges, epoch);
-        });
+        })).beginAsResult();
     }
 
     private static final AsyncResult<Void> MUST_OVERWRITE = AsyncResults.failure(new IllegalStateException());
@@ -718,16 +704,16 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      */
     protected AsyncResult<EpochReady> startUnsafeBootstrap(Node node, Ranges ranges, long epoch, FetchKind fetch)
     {
-        return submit((Empty) () -> "Refuse Requests for " + fetch + " Bootstrap", safeStore -> {
+        return node.withEpochAtLeast(epoch, null, () -> chain((Empty) () -> "Refuse Requests for " + fetch + " Bootstrap", safeStore -> {
             unsafeRefuseRequests(ranges);
             safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
             // TODO (expected): rationalise with startSafeBootstrap
             String description = "Bootstrap " + ranges + " for epoch " + epoch + " in " + this;
             return new EpochReady(epoch, MUST_OVERWRITE, readyToCoordinate(ranges, epoch), new SettableWithDescription<>(description), new SettableWithDescription<>(description));
-        }).invoke((success, fail) -> {
+        })).invoke((success, fail) -> {
             if (fail != null) logger.error("Fatal error initiating {} bootstrap for {}", this, fetch, fail);
             else rebootstrap(node, ranges, epoch, 1, success, fetch);
-        });
+        }).beginAsResult();
     }
 
     private void rebootstrap(Node node, Ranges ranges, long epoch, int attempt, EpochReady ready, FetchKind fetch)
@@ -897,7 +883,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
 
         // TODO (desired): not all systems care about HLC_BOUND for GC, make configurable
-        if (globalSyncId.is(HLC_BOUND) || !requiresUniqueHlcs())
+        if (globalSyncId.is(HLC_BOUND) || !dataStoreRequiresUniqueHlcs())
         {
             RedundantBefore addOnDataStoreDurable = RedundantBefore.create(slicedRanges, globalSyncId, GC_BEFORE_AND_LOCALLY_DURABLE);
             dataStore.ensureDurable(this, slicedRanges, addOnDataStoreDurable, 0);
@@ -1197,7 +1183,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     public final boolean isRejectedIfNotPreAccepted(TxnId txnId, Unseekables<?> participants)
     {
-        return rejectBefore.rejects(txnId, participants);
+        return maxConflicts.get(txnId, participants).is(REJECTED);
     }
 
     public final MaxConflicts unsafeGetMaxConflicts()
@@ -1213,12 +1199,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public final LocalListeners unsafeGetListeners()
     {
         return listeners;
-    }
-
-    @Nullable
-    public final RejectBefore unsafeGetRejectBefore()
-    {
-        return rejectBefore;
     }
 
     public final DurableBefore durableBefore()

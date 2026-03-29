@@ -43,6 +43,7 @@ import java.util.function.Supplier;
 import accord.api.AsyncExecutor;
 import accord.api.Journal;
 import accord.api.MessageSink;
+import accord.api.MessageSink.ReplySink;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultTimeouts;
@@ -54,6 +55,7 @@ import accord.impl.SizeOfIntersectionSorter;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
+import accord.local.MinimalCommand;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.RedundantBefore;
@@ -65,7 +67,6 @@ import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
-import accord.messages.SafeCallback;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
@@ -96,7 +97,7 @@ public class Cluster implements Scheduler
         <T> Queue<T> get();
     }
 
-    public static class InstanceSink implements MessageSink
+    public static class InstanceSink implements ReplySink
     {
         final Id self;
         final Function<Id, Node> lookup;
@@ -104,7 +105,7 @@ public class Cluster implements Scheduler
         final RandomSource random;
 
         int nextMessageId = 0;
-        Map<Long, SafeCallback> callbacks = new LinkedHashMap<>();
+        Map<Long, Callback> callbacks = new LinkedHashMap<>();
 
         public InstanceSink(Id self, Function<Id, Node> lookup, Cluster parent, RandomSource random)
         {
@@ -124,27 +125,27 @@ public class Cluster implements Scheduler
         public Cancellable send(Id to, Request send, int attempt, AsyncExecutor executor, Callback callback)
         {
             long messageId = nextMessageId++;
-            SafeCallback sc = new SafeCallback(executor, callback);
-            callbacks.put(messageId, sc);
+            callbacks.put(messageId, callback);
             parent.add(self, to, messageId, send);
             parent.pending.add((Runnable)() -> {
-                if (sc == callbacks.remove(messageId))
-                    sc.timeout(to);
+                if (callback == callbacks.remove(messageId))
+                    callback.onFailure(to, null);
             }, 1000 + random.nextInt(10000), TimeUnit.MILLISECONDS);
             return () -> callbacks.remove(messageId);
         }
 
         @Override
-        public void reply(Id replyToNode, ReplyContext replyContext, Reply reply)
+        public void reply(Id replyToNode, ReplyContext replyContext, Reply reply, Throwable failure)
         {
-            long replyToMessage = ((Packet) replyContext).body.msg_id;
-            parent.add(self, replyToNode, replyToMessage, reply);
-        }
+            if (reply == null)
+            {
+                if (failure == null)
+                    throw new IllegalArgumentException("Both reply and failure are null");
+                reply = new FailureReply(failure);
+            }
 
-        @Override
-        public void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure)
-        {
-            reply(replyingToNode, replyContext, new FailureReply(failure));
+            long replyToMessage = ((Packet)replyContext).body.msg_id;
+            parent.add(self, replyToNode, replyToMessage, reply);
         }
     }
 
@@ -234,11 +235,11 @@ public class Cluster implements Scheduler
                     if (deliver.body.in_reply_to > Body.SENTINEL_MSG_ID || body instanceof Reply)
                     {
                         Reply reply = (Reply) body;
-                        SafeCallback callback = sinks.get(deliver.dest).callbacks.remove(deliver.body.in_reply_to);
+                        Callback callback = sinks.get(deliver.dest).callbacks.remove(deliver.body.in_reply_to);
                         if (callback != null)
                         {
-                            if (reply instanceof Reply.FailureReply) callback.failure(deliver.src, ((Reply.FailureReply) reply).failure);
-                            else callback.success(deliver.src, reply);
+                            if (reply instanceof Reply.FailureReply) callback.onFailure(deliver.src, ((Reply.FailureReply) reply).failure);
+                            else callback.onSuccess(deliver.src, reply);
                         }
                     }
                     else on.receive((Request) body, deliver.src, deliver);
@@ -357,7 +358,7 @@ public class Cluster implements Scheduler
                                           time, new UniqueTimeService.AtomicUniqueTime(time),
                                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                                           MaelstromAgent.INSTANCE,
-                                          randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
+                                          randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, p -> new DefaultTimeouts(p, Runnable::run),
                                           DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, InMemoryCommandStores.SingleThread::new,
                                           new CoordinationAdapter.DefaultFactory(), DurableBefore.NOOP_PERSISTER, new NoOpJournal()));
             }
@@ -391,8 +392,8 @@ public class Cluster implements Scheduler
         @Override public void open(Node node) { }
         @Override public void start(Node node) { }
         @Override public Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
-        @Override public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
-        @Override public Command.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
+        @Override public MinimalCommand loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
+        @Override public MinimalCommand.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
         @Override public void saveCommand(int store, CommandUpdate value, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
         @Override public List<TopologyUpdate> loadTopologies() { throw new IllegalStateException("Not impelemented"); }
         @Override public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }

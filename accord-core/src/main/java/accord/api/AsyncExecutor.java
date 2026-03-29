@@ -40,10 +40,13 @@ public interface AsyncExecutor extends Executor
     // Depending on this implementation this method may queue-jump, i.e. task submission order is not guaranteed.
     // Make sure this is semantically safe at all call-sites.
     // TODO (required): RejectedExecutionException?
-    default void executeMaybeImmediately(Runnable run)
+    default boolean executeMaybeImmediately(Runnable run)
     {
-        if (!tryExecuteImmediately(run))
-            execute(run);
+        if (tryExecuteImmediately(run))
+            return true;
+
+        execute(run);
+        return false;
     }
 
     AsyncChain<Void> chain(Runnable run);

@@ -23,7 +23,9 @@ import java.io.StringReader;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
+import accord.api.MessageSink;
 import accord.messages.*;
 import com.google.gson.JsonObject;
 import com.google.gson.TypeAdapter;
@@ -35,7 +37,6 @@ import static accord.utils.Invariants.illegalState;
 
 public class Packet implements ReplyContext
 {
-
     public enum Type
     {
         init(MaelstromInit.class, MaelstromInit.GSON_ADAPTER),
@@ -173,4 +174,15 @@ public class Packet implements ReplyContext
         }
     };
 
+    @Override
+    public long expiresAt(TimeUnit units)
+    {
+        return 0;
+    }
+
+    @Override
+    public void reply(Id to, MessageSink sink, Reply success, Throwable failure)
+    {
+        ((MessageSink.ReplySink) sink).reply(to, this, success, failure);
+    }
 }

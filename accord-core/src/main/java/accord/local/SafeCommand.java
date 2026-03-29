@@ -158,6 +158,11 @@ public abstract class SafeCommand
         return update(safeStore, Command.readyToExecute(current().asCommitted()));
     }
 
+    public Command.Executed preapplied(SafeCommandStore safeStore, Timestamp applyAt, Writes writes, Result result)
+    {
+        return update(safeStore, Command.preapplied(current(), applyAt, writes, result));
+    }
+
     public Command.Executed preapplied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
     {
         return update(safeStore, Command.preapplied(current(), participants, promised, executeAt, partialTxn, partialDeps, waitingOn, writes, result));

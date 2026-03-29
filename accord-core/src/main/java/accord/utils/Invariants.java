@@ -50,7 +50,7 @@ public class Invariants
     private static final int PARANOIA_COMPUTE = Paranoia.valueOf(System.getProperty(KEY_PARANOIA_CPU, "NONE").toUpperCase()).ordinal();
     private static final int PARANOIA_MEMORY = Paranoia.valueOf(System.getProperty(KEY_PARANOIA_MEMORY, "NONE").toUpperCase()).ordinal();
     private static final int PARANOIA_FACTOR = ParanoiaCostFactor.valueOf(System.getProperty(KEY_PARANOIA_COSTFACTOR, "LOW").toUpperCase()).ordinal();
-    private static boolean IS_PARANOID = PARANOIA_COMPUTE > 0 || PARANOIA_MEMORY > 0;
+    private static final boolean IS_PARANOID = Boolean.parseBoolean(System.getProperty("accord.paranoid", "false")) || PARANOIA_COMPUTE > 0 || PARANOIA_MEMORY > 0;
     private static Consumer<RuntimeException> onUnexpected = System.getProperty("accord.testing", "false").equals("true")
                                                              ? fail -> { throw fail; }
                                                              : fail -> logger.error("Invariant failed", fail);

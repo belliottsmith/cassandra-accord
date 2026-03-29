@@ -91,6 +91,6 @@ public class PendingEpochsTest
     {
         MockCluster.Clock time = new MockCluster.Clock(0);
         Node node = createNode(ID, Topology.EMPTY, new MessageSink.NoOpSink(), time, new TestAgent(time), null);
-        return new TopologyManager(SUPPLIER, node, ignore -> {throw new UnsupportedOperationException();}, time, new DefaultTimeouts(time));
+        return new TopologyManager(SUPPLIER, node, ignore -> {throw new UnsupportedOperationException();}, time, new DefaultTimeouts(time, Runnable::run));
     }
 }

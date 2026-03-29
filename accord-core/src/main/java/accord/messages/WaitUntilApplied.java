@@ -100,7 +100,7 @@ public class WaitUntilApplied extends ReadData
     @Override
     protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (data != null) data.validateReply(txnId, executeAt, false);
+        if (data != null) data.validateReply(txnId, executeAt, uniqueHlc);
         ReadReply reply = retryInLaterEpoch > 0 ? new ReadOkWithFutureEpoch(unavailable, data, retryInLaterEpoch)
                                                 : new ReadOk(unavailable, data, uniqueHlc);
         reply(reply, null);

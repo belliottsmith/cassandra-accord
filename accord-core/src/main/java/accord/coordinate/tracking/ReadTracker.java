@@ -47,7 +47,7 @@ public abstract class ReadTracker extends AbstractTracker<ReadTracker.ReadShardT
 {
     private static final ShardOutcome<ReadTracker> DataSuccess = (tracker, shardIndex) -> {
         --tracker.waitingOnData;
-        return --tracker.waitingOnShards == 0 ? Success : NoChange;
+        return --tracker.waitingOnShards == 0 && !tracker.waitingOnSelf ? Success : NoChange;
     };
 
     public static class ReadShardTracker extends ShardTracker
@@ -227,6 +227,7 @@ public abstract class ReadTracker extends AbstractTracker<ReadTracker.ReadShardT
     protected final List<Id> candidates; // TODO (easy, efficiency): use Agrona's IntArrayList
     private IntHashSet slow;
     protected int waitingOnData;
+    protected boolean waitingOnSelf;
 
     public ReadTracker(Topologies topologies)
     {

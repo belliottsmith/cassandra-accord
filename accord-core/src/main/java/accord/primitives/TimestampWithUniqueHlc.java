@@ -29,7 +29,7 @@ public final class TimestampWithUniqueHlc extends Timestamp
     {
         super(copy);
         this.uniqueHlc = uniqueHlc;
-        Invariants.require(uniqueHlc != hlc());
+        Invariants.require(uniqueHlc > hlc());
     }
 
     public TimestampWithUniqueHlc(long epoch, long hlc, long uniqueHlc, int flags, Id node)

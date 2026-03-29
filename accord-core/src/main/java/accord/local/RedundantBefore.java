@@ -35,6 +35,7 @@ import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.local.RedundantStatus.Coverage;
@@ -55,8 +56,9 @@ import accord.utils.Functions;
 import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
+import accord.utils.UnhandledEnum;
 
-import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
+import static accord.api.ProtocolModifiers.dataStoreRequiresUniqueHlcs;
 import static accord.local.RedundantStatus.Coverage.SOME;
 import static accord.local.RedundantStatus.ONLY_LE_MASK;
 import static accord.local.RedundantStatus.NOT_OWNED_ONLY;
@@ -69,6 +71,7 @@ import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
 import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
+import static accord.local.RedundantStatus.Property.SHARD_APPLIED_HLC_BOUND;
 import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.WAS_OWNED_SYNCED;
@@ -109,14 +112,16 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         public final long startEpoch, endEpoch;
         public final TxnId readyAt;
         public final TxnId gcBefore;
+        public final TxnId shardAppliedHlcBoundBefore;
         public final TxnId locallyAppliedBefore;
 
-        public QuickBounds(long startEpoch, long endEpoch, TxnId readyAt, TxnId gcBefore, TxnId locallyAppliedBefore)
+        public QuickBounds(long startEpoch, long endEpoch, TxnId readyAt, TxnId gcBefore, TxnId shardAppliedHlcBoundBefore, TxnId locallyAppliedBefore)
         {
             this.startEpoch = startEpoch;
             this.endEpoch = endEpoch;
             this.readyAt = readyAt;
             this.gcBefore = gcBefore;
+            this.shardAppliedHlcBoundBefore = TxnId.max(gcBefore, shardAppliedHlcBoundBefore); // SHARD_APPLIED_HLC_BOUND introduced later, not guaranteed to be set; this can be removed some time in the future
             this.locallyAppliedBefore = locallyAppliedBefore;
         }
 
@@ -124,31 +129,61 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         {
             if (startEpoch == this.startEpoch && endEpoch == this.endEpoch)
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, shardAppliedHlcBoundBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withReadyAtLeast(TxnId newReadyAt)
         {
             if (newReadyAt.compareTo(readyAt) <= 0)
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, newReadyAt, gcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, newReadyAt, gcBefore, shardAppliedHlcBoundBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withLocallyAppliedAtLeast(TxnId newLocallyAppliedBefore)
         {
             if (newLocallyAppliedBefore.compareTo(locallyAppliedBefore) <= 0)
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, newLocallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, shardAppliedHlcBoundBefore, newLocallyAppliedBefore);
         }
 
-        public QuickBounds withGcBeforeBeforeAtLeast(TxnId newGcBefore)
+        public QuickBounds withShardAppliedHlcBoundBeforeAtLeast(TxnId newShardAppliedHlcBoundBefore)
+        {
+            if (newShardAppliedHlcBoundBefore.compareTo(this.shardAppliedHlcBoundBefore) <= 0)
+                return this;
+            // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
+            if (newShardAppliedHlcBoundBefore.hlc() < this.shardAppliedHlcBoundBefore.hlc())
+                return this;
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, newShardAppliedHlcBoundBefore, locallyAppliedBefore);
+        }
+
+        public QuickBounds withGcBeforeAtLeast(TxnId newGcBefore)
         {
             if (newGcBefore.compareTo(this.gcBefore) <= 0)
                 return this;
             // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
             if (newGcBefore.hlc() < this.gcBefore.hlc())
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, readyAt, newGcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, newGcBefore, shardAppliedHlcBoundBefore, locallyAppliedBefore);
+        }
+
+        public TxnId cleanCfkBefore()
+        {
+            switch (ProtocolModifiers.cleanCfkBefore())
+            {
+                default: throw new UnhandledEnum(ProtocolModifiers.cleanCfkBefore());
+                case SHARD_APPLIED: return shardAppliedHlcBoundBefore;
+                case GC: return gcBefore;
+            }
+        }
+
+        public QuickBounds withCleanCfkBeforeAtLeast(TxnId atLeast)
+        {
+            switch (ProtocolModifiers.cleanCfkBefore())
+            {
+                default: throw new UnhandledEnum(ProtocolModifiers.cleanCfkBefore());
+                case SHARD_APPLIED: return withShardAppliedHlcBoundBeforeAtLeast(atLeast);
+                case GC: return withGcBeforeAtLeast(atLeast);
+            }
         }
 
         @Override
@@ -193,6 +228,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             super(startEpoch, endEpoch,
                   maxBound(bounds, statuses, UNREADY),
                   maxBound(bounds, statuses, GC_BEFORE),
+                  maxBound(bounds, statuses, SHARD_APPLIED_HLC_BOUND),
                   maxBound(bounds, statuses, LOCALLY_APPLIED));
             Invariants.require(statuses.length == bounds.length * 2);
             this.range = range;
@@ -678,7 +714,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             long status = status(i);
             if (any(status, GC_BEFORE))
             {
-                if (requiresUniqueHlcs() && txnId.isWrite())
+                if (dataStoreRequiresUniqueHlcs() && txnId.isWrite())
                 {
                     if (applyAtIfKnown == null)
                     {
@@ -723,6 +759,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         public final TxnId shardAppliedBefore()
         {
             return bound(SHARD_APPLIED);
+        }
+
+        public final TxnId shardAppliedHlcBoundBefore()
+        {
+            return bound(SHARD_APPLIED_HLC_BOUND);
         }
 
         public final TxnId locallyWitnessedBefore()

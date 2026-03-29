@@ -27,6 +27,7 @@ import accord.local.Command;
 import accord.local.MaxConflicts;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
+import accord.messages.Callback.ConcreteCallbackExclusive;
 import accord.messages.ReadData;
 import accord.primitives.SyncPoint;
 import accord.primitives.Participants;
@@ -40,7 +41,6 @@ import accord.coordinate.CoordinateSyncPoint;
 import accord.coordinate.FetchCoordinator;
 import accord.local.CommandStore;
 import accord.local.Node;
-import accord.messages.Callback;
 import accord.messages.MessageType;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
@@ -141,16 +141,16 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         Ranges ownedRanges = ownedRangesForNode(to);
         Invariants.requireArgument(ownedRanges.containsAll(ranges), "Got a reply from %s for ranges %s, but owned ranges %s does not contain all the ranges", to, ranges, ownedRanges);
         PartialDeps partialDeps = syncPoint.waitFor.intersecting(ranges);
-        node.send(to, newFetchRequest(syncPoint.syncId.epoch(), syncPoint.syncId, ranges, partialDeps, rangeReadTxn(ranges)), executor, new Callback<ReadReply>()
+        node.send(to, newFetchRequest(syncPoint.syncId.epoch(), syncPoint.syncId, ranges, partialDeps, rangeReadTxn(ranges)), executor, new ConcreteCallbackExclusive<ReadReply>(executor)
         {
             @Override
-            public void onSuccess(Node.Id from, ReadReply reply)
+            public void onSuccessExclusive(Node.Id from, ReadReply reply)
             {
                 if (!reply.isOk())
                 {
                     if (reply == InsufficientAndWaiting)
                     {
-                        CoordinateSyncPoint.sendApply(node, from, syncPoint);
+                        CoordinateSyncPoint.sendApply(node, from, syncPoint, tracing);
                     }
                     else if (reply == Redundant)
                     {
@@ -191,12 +191,18 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
             }
 
             @Override
-            public void onFailure(Node.Id from, Throwable failure)
+            public void onFailureExclusive(Node.Id from, Throwable failure)
             {
                 inflight.remove(key).cancel();
                 fail(from, failure);
             }
-        });
+
+            @Override
+            public void onCallbackFailureExclusive(Node.Id from, @Nullable Throwable failure)
+            {
+                node.agent().onException(failure);
+            }
+        }, tracing);
     }
 
     public FetchResult result()
@@ -261,7 +267,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         // must be invoked by implementations some time after the read has started OR must override safeToReadAt()
         protected void readStarted(SafeCommandStore safeStore)
         {
-            safeToReadAfter = Timestamp.nonNullOrMax(Timestamp.NONE, Timestamp.nonNullOrMax(safeToReadAfter, safeStore.commandStore().unsafeGetMaxConflicts().foldl(MaxConflicts.Entry::mergeMax, Timestamp.NONE)));
+            safeToReadAfter = Timestamp.nonNullOrMax(Timestamp.NONE, Timestamp.nonNullOrMax(safeToReadAfter, safeStore.commandStore().unsafeGetMaxConflicts().foldl(MaxConflicts.Entry::get, Timestamp.NONE, TxnId.NONE)));
         }
 
         protected Timestamp safeToReadAfter()

@@ -31,9 +31,9 @@ import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
-import static accord.api.ProtocolModifiers.RangeSpec.isStartExclusive;
-import static accord.api.ProtocolModifiers.RangeSpec.isStartInclusive;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
+import static accord.api.ProtocolModifiers.isRangeStartExclusive;
+import static accord.api.ProtocolModifiers.isRangeStartInclusive;
 import static accord.utils.Functions.alwaysFalse;
 import static accord.utils.Invariants.illegalState;
 
@@ -146,7 +146,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         return IntStream.range(0, values.length)
                         .filter(i -> include.test(values[i]))
-                        .mapToObj(i -> (isStartInclusive() ? "[" : "(") + starts[i] + "," + starts[i + 1] + (isEndInclusive() ? "]" : ")") + "=" + values[i])
+                        .mapToObj(i -> (isRangeStartInclusive() ? "[" : "(") + starts[i] + "," + starts[i + 1] + (isRangeEndInclusive() ? "]" : ")") + "=" + values[i])
                         .collect(Collectors.joining(", ", "{", "}"));
     }
 
@@ -199,7 +199,7 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         int idx = Arrays.binarySearch(starts, key);
         if (idx < 0) idx = -2 - idx;
-        else if (isEndInclusive()) --idx;
+        else if (isRangeEndInclusive()) --idx;
         return idx;
     }
 
@@ -388,11 +388,11 @@ public class ReducingIntervalMap<K extends Comparable<? super K>, V>
     {
         int from = Arrays.binarySearch(starts, start);
         if (from < 0) from = Math.max(0, -2 - from);
-        else if (isStartExclusive()) ++from;
+        else if (isRangeStartExclusive()) ++from;
 
         int to = Arrays.binarySearch(starts, end);
         if (to < 0) to = -1 - to;
-        else if (isStartInclusive()) ++to;
+        else if (isRangeStartInclusive()) ++to;
         return new RangeIterator(from, to);
     }
 

@@ -61,20 +61,15 @@ public class ListData extends TreeMap<Key, Timestamped<int[]>> implements Data
     }
 
     @Override
-    public boolean validateReply(TxnId txnId, Timestamp executeAt, boolean futureReadPossible)
+    public boolean validateReply(TxnId txnId, Timestamp executeAt, long safeToReadHlc)
     {
-        if (txnId.awaitsOnlyDeps())
-            return true;
-
         for (Timestamped<int[]> v : values())
         {
-            if (v.timestamp.compareTo(executeAt) >= 0)
-            {
-                Invariants.require(futureReadPossible, "For %s, read a timestamp (%s) from future (execute at is %s)",
-                                   txnId, v.timestamp, executeAt);
+            if (safeToReadHlc > 0 && v.timestamp.uniqueHlc() >= safeToReadHlc)
                 return false;
-            }
-            Invariants.require(!futureReadPossible || v.timestamp.hlc() < executeAt.hlc());
+
+            Invariants.require(v.timestamp.compareTo(executeAt) < 0, "For %s, read a timestamp (%s) from future (execute at is %s)", txnId, v.timestamp, executeAt);
+            Invariants.require(safeToReadHlc == 0 || v.timestamp.hlc() < safeToReadHlc);
         }
         return true;
     }

@@ -106,6 +106,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
     static final int MERGE_FLAGS = REJECTED.bit | SOFT_REJECT.bit | UNSTABLE.bit | HLC_BOUND.bit | SHARD_BOUND.bit;
     public static final long IDENTITY_LSB = 0xFFFFFFFF_FFFF00FFL;
     public static final int IDENTITY_FLAGS = 0x00000000_000000FF;
+    public static final int NON_IDENTITY_FLAGS = 0x00000000_0000FF00;
     public static final int NON_IDENTITY_FLAGS_SHIFT = Integer.bitCount(IDENTITY_FLAGS);
     public static final int KIND_AND_DOMAIN_FLAGS = 0x00000000_0000000F;
     public static final long MAX_EPOCH = (1L << 48) - 1;
@@ -220,7 +221,7 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
 
     public final boolean hasNonIdentityFlags()
     {
-        return (flagsUnmasked() & IDENTITY_FLAGS) != 0;
+        return (flagsUnmasked() & NON_IDENTITY_FLAGS) != 0;
     }
 
     // if caller masks no need to mask before returning
@@ -286,6 +287,11 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return removeFlags(this, flag.bit, Timestamp::fromBits);
     }
 
+    public Timestamp withoutNonIdentityFlags()
+    {
+        return removeFlags(this, NON_IDENTITY_FLAGS, Timestamp::fromBits);
+    }
+
     public final Timestamp addFlags(Timestamp merge)
     {
         return addFlags(this, merge, Timestamp::new);
@@ -309,9 +315,9 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return factory.create(to.msb, newLsb, to.node);
     }
 
-    static <T extends Timestamp> T removeFlags(T to, int addFlags, RawFactory<T> factory)
+    static <T extends Timestamp> T removeFlags(T to, int removeFlags, RawFactory<T> factory)
     {
-        long newLsb = to.lsb & ~addFlags;
+        long newLsb = to.lsb & ~removeFlags;
         if (to.lsb == newLsb)
             return to;
         return factory.create(to.msb, newLsb, to.node);
@@ -359,8 +365,8 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return c;
     }
 
-    // a non-zero result means that EPOCH and HLC are BOTH greater-equal,
-    // and at least one of (epoch, hlc, node, flag) is strictly greater.
+    // a non-zero result means that EPOCH and HLC are BOTH greater/less-equal,
+    // and at least one of (epoch, hlc, node, flag) is strictly greater/less.
     public final int compareSimultaneousEpochAndHlc(@Nonnull Timestamp that)
     {
         if (this == that) return 0;

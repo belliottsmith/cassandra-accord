@@ -207,7 +207,7 @@ public class Utils
                              scheduler,
                              SizeOfIntersectionSorter.SUPPLIER,
                              DefaultRemoteListeners::new,
-                             DefaultTimeouts::new,
+                             time -> new DefaultTimeouts(time, Runnable::run),
                              DefaultProgressLogs::new,
                              DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.Synchronized::new,

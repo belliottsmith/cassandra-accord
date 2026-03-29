@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -36,6 +37,7 @@ import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 
 /**
  * Message task that will continue sending messages to a set of nodes until all
@@ -43,6 +45,9 @@ import accord.utils.async.AsyncResults;
  */
 public class MessageTask extends AsyncResults.SettableResult<Void> implements Runnable
 {
+    static final AtomicInteger nextId = new AtomicInteger();
+    final int id = nextId.incrementAndGet();
+
     public interface NodeProcess
     {
         void process(Node node, Node.Id from, Consumer<Boolean> onDone);
@@ -95,9 +100,10 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
         }
 
         @Override
-        public void process(Node on, Node.Id from, ReplyContext replyContext)
+        public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
         {
-            process.process(on, from, success -> on.reply(from, replyContext, success ? SUCCESS : FAILURE, null));
+            process.process(on, from, success -> on.reply(from, replyContext, success ? SUCCESS : FAILURE, null, null));
+            return null;
         }
 
         @Override
@@ -128,7 +134,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
             Invariants.requireArgument(reply == SUCCESS || reply == FAILURE);
             if (reply == FAILURE)
             {
-                originator.send(from, request, executor, this);
+                originator.send(from, request, executor, this, null);
                 return;
             }
 
@@ -143,7 +149,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
         @Override
         public void onFailure(Node.Id from, Throwable failure)
         {
-            originator.send(from, request, executor, this);
+            originator.send(from, request, executor, this, null);
         }
 
         @Override
@@ -195,7 +201,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
     public void run()
     {
         for (Node.Id to : recipients)
-            originator.send(to, request, executor, callback);
+            originator.send(to, request, executor, callback, null);
     }
 
     @Override

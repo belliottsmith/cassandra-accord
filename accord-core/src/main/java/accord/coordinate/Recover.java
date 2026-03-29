@@ -70,7 +70,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
-import static accord.api.ProtocolModifiers.Toggles.recoverPartialAcceptPhaseIfNoFastPath;
+import static accord.api.ProtocolModifiers.recoverPartialAcceptPhaseIfNoFastPath;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.Infer.InvalidateAndCallback.locallyInvalidateAndCallback;
@@ -618,7 +618,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
     {
         locallyInvalidateAndCallback(node, txnId, reportTo.refine(txnId, null, scope), scope, ProgressToken.INVALIDATED, callback, tracing);
         node.withEpochAtLeast(invalidateUntil.epoch(), executor, node.agent(), () -> {
-            Commit.Invalidate.commitInvalidate(node, txnId, scope, invalidateUntil);
+            Commit.Invalidate.commitInvalidate(node, txnId, scope, invalidateUntil, tracing);
         });
     }
 

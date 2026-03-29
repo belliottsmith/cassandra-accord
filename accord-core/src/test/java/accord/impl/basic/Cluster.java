@@ -92,11 +92,11 @@ import accord.local.UniqueTimeService.AtomicUniqueTimeWithStaleReservation;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.Serialize;
 import accord.local.durability.DurabilityService;
+import accord.messages.Callback;
 import accord.messages.Message;
 import accord.messages.MessageType;
 import accord.messages.Reply;
 import accord.messages.Request;
-import accord.messages.SafeCallback;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
@@ -321,14 +321,14 @@ public class Cluster
             if (deliver.message instanceof Reply)
             {
                 Reply reply = (Reply) deliver.message;
-                SafeCallback callback = reply.isFinal()
-                                        ? sinks.get(deliver.dst).callbacks.remove(deliver.replyId)
-                                        : sinks.get(deliver.dst).callbacks.get(deliver.replyId);
+                Callback callback = reply.isFinal()
+                                    ? sinks.get(deliver.dst).callbacks.remove(deliver.replyId)
+                                    : sinks.get(deliver.dst).callbacks.get(deliver.replyId);
 
                 if (callback != null)
                 {
-                    if (reply instanceof Reply.FailureReply) callback.failure(deliver.src, ((Reply.FailureReply) reply).failure);
-                    else callback.success(deliver.src, reply);
+                    if (reply instanceof Reply.FailureReply) callback.onFailure(deliver.src, ((Reply.FailureReply) reply).failure);
+                    else callback.onSuccess(deliver.src, reply);
                 }
             }
 
@@ -611,8 +611,9 @@ public class Cluster
             {
                 final RandomSource random = randomSupplier.get();
                 // TODO (testing): slow/expires should be broadly in sync with our link latency config
-                final LongSupplier slowDelay, expiresDelay, failsDelay;
+                final LongSupplier localDelay, slowDelay, expiresDelay, failsDelay;
                 {
+                    int medianLocalDelay = random.nextInt(10, 20);
                     int medianSlowDelay = random.nextInt(100, 200);
                     int medianExpiresDelay = random.nextInt(1000, 2000);
                     int medianFailsDelay = random.nextInt(1000, 2000);
@@ -621,14 +622,19 @@ public class Cluster
                     int minExpiresDelay = random.nextBiasedInt(500, 800, 1000);
                     int minFailsDelay = random.nextBiasedInt(500, 800, 1000);
 
+                    int maxLocalDelay = random.nextBiasedInt(100, 200, 1000);
                     int maxSlowDelay = random.nextBiasedInt(medianSlowDelay + 100, medianSlowDelay + 200, 1000);
                     int maxExpiresDelay = random.nextBiasedInt(medianExpiresDelay + 500, 3000, 10000);
                     int maxFailsDelay = random.nextBiasedInt(medianFailsDelay + 500, 3000, 10000);
 
+                    float localDelayChance = random.nextFloat();
+                    LongSupplier innerLocalDelay = random.biasedUniformLongs(0, medianLocalDelay, maxLocalDelay);
+                    localDelay = () -> random.decide(localDelayChance) ? innerLocalDelay.getAsLong() : 0;
                     slowDelay = random.biasedUniformLongs(minSlowDelay, medianSlowDelay, maxSlowDelay);
                     expiresDelay = random.biasedUniformLongs(minExpiresDelay, medianExpiresDelay, maxExpiresDelay);
                     failsDelay = random.biasedUniformLongs(minFailsDelay, medianFailsDelay, maxFailsDelay);
                 }
+                @Override public long localDelay() { return localDelay.getAsLong();}
                 @Override public long slowDelay() { return slowDelay.getAsLong();}
                 @Override public long expiresDelay() { return expiresDelay.getAsLong(); }
                 @Override public long slowAt() { return now() + slowDelay.getAsLong();}
@@ -656,7 +662,7 @@ public class Cluster
                 Node node = new Node(id, messageSink, topologyService, timeService, new AtomicUniqueTimeWithStaleReservation(timeService),
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      agent,
-                                     randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
+                                     randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, time -> new DefaultTimeouts(time, Runnable::run),
                                      TestProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
                                      journal.durableBeforePersister(), journal);
                 journal.start(node);
@@ -1003,7 +1009,7 @@ public class Cluster
 
         // depending on arrival order, an unmanaged txn may be ready to execute immediately or have to wait for another transaction to commit
         if (before == SaveStatus.Stable || before == SaveStatus.ReadyToExecute)
-            return after == SaveStatus.Stable || after == SaveStatus.ReadyToExecute;
+            return after == SaveStatus.Stable || after == SaveStatus.ReadyToExecute || after == SaveStatus.Applied;
 
         if (before == SaveStatus.PreApplied || before == SaveStatus.Applying || before == SaveStatus.Applied)
             return after == SaveStatus.PreApplied || after == SaveStatus.Applying || after == SaveStatus.Applied;

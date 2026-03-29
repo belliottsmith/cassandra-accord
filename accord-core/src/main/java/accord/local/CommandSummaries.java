@@ -316,7 +316,7 @@ public interface CommandSummaries
             if (cfk == null || cfk.size() == 0)
                 return false;
 
-            return isRelevant(cfk.key(), cfk.get(cfk.size() - 1), cfk.minUndecided());
+            return isRelevant(cfk.key(), cfk.get(cfk.size() - 1), cfk.minUndecidedManaged());
         }
 
         public boolean isRelevant(RoutingKey key, TxnId last, TxnId minUndecided)
@@ -358,12 +358,12 @@ public interface CommandSummaries
             return ifRelevant(cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants(), cmd.partialDeps());
         }
 
-        public final Summary ifRelevant(Command.Minimal cmd)
+        public final Summary ifRelevant(MinimalCommand cmd)
         {
             return ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants, null);
         }
 
-        public final Summary ifRelevant(Command.MinimalWithDeps cmd)
+        public final Summary ifRelevant(MinimalCommand.MinimalWithDeps cmd)
         {
             if (cmd.participants == null)
                 return null;

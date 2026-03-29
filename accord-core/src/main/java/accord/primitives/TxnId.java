@@ -36,7 +36,6 @@ import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.Any;
-import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.primitives.TxnId.MediumPath.NoMediumPath;
 import static accord.utils.Invariants.illegalArgument;
 
@@ -306,9 +305,10 @@ public class TxnId extends Timestamp
         return cardinality.is(flagsUnmasked());
     }
 
+    @Override
     public final TxnId withoutNonIdentityFlags()
     {
-        return (flags() & ~IDENTITY_FLAGS) == 0 ? this : new TxnId(msb, lsb & IDENTITY_LSB, node);
+        return removeFlags(this, NON_IDENTITY_FLAGS, TxnId::fromBits);
     }
 
     public final int nonIdentityFlags()

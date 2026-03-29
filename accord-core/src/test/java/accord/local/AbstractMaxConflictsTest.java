@@ -62,8 +62,8 @@ public abstract class AbstractMaxConflictsTest
         assertTrue(isWellFormed(next));
         for (MaxConflicts.Entry e : prev)
         {
-            assertTrue(next.getMax(Ranges.of(e.toPlainRange())).compareTo(e.any) >= 0);
-            assertTrue(next.getMaxWrite(Ranges.of(e.toPlainRange())).compareTo(e.write) >= 0);
+            assertTrue(next.getAny(TxnId.MAX, Ranges.of(e.toPlainRange())).compareTo(e.any) >= 0);
+            assertTrue(next.getWrite(TxnId.MAX, Ranges.of(e.toPlainRange())).compareTo(e.write) >= 0);
         }
     }
 

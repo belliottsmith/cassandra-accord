@@ -45,7 +45,8 @@ public interface MessageType
         GET_LATEST_DEPS_REQ, GET_LATEST_DEPS_RSP,
         GET_MAX_CONFLICT_REQ, GET_MAX_CONFLICT_RSP,
         GET_DURABLE_BEFORE_REQ, GET_DURABLE_BEFORE_RSP,
-        SET_SHARD_DURABLE_REQ, SET_GLOBALLY_DURABLE_REQ;
+        SET_SHARD_DURABLE_REQ, SET_GLOBALLY_DURABLE_REQ,
+        REMOTE_SUCCESS_REQ;
 
         private volatile Object mapToImplementation;
         public static void initialise(Map<StandardMessage, ?> mapToImplementation)

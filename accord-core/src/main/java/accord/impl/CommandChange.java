@@ -33,6 +33,7 @@ import accord.local.Cleanup.Input;
 import accord.local.Command;
 import accord.local.Command.WaitingOn;
 import accord.local.DurableBefore;
+import accord.local.MinimalCommand;
 import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
@@ -577,14 +578,14 @@ public class CommandChange
             return mask | (mask >>> 16);
         }
 
-        public Command.Minimal asMinimal()
+        public MinimalCommand asMinimal()
         {
-            return new Command.Minimal(txnId, saveStatus, participants, durability, executeAt);
+            return new MinimalCommand(txnId, saveStatus, durability, participants, executeAt);
         }
 
-        public Command.MinimalWithDeps asMinimalWithDeps()
+        public MinimalCommand.MinimalWithDeps asMinimalWithDeps()
         {
-            return new Command.MinimalWithConcreteDeps(txnId, saveStatus, participants, durability, executeAt, partialDeps());
+            return new MinimalCommand.MinimalWithConcreteDeps(txnId, saveStatus, durability, participants, executeAt, partialDeps());
         }
 
         public void forceResult(Result newValue)

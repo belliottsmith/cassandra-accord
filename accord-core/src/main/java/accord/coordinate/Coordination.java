@@ -40,7 +40,9 @@ public interface Coordination
         Fetch, FetchRoute,
         BeginInvalidate, MaybeRecover, PrepareRecovery, BeginRecovery, RecoverAwait, CollectLatestDeps,
         PreAccept, Propose, ProposeInvalidate, Stabilise, Execute, ExecuteSyncPoint, Persist,
-        AsyncAwait, SyncAwait, Bootstrap, FetchDurableBefore, Other;
+        ExecuteBacklog,
+        AsyncAwait, SyncAwait, Bootstrap, FetchDurableBefore, Other,
+        Client;
 
         private static final CoordinationKind[] LOOKUP = values();
         public static final TinyEnumSet<CoordinationKind> COORDINATES_STATE_MACHINE = TinyEnumSet.of(
@@ -82,7 +84,7 @@ public interface Coordination
     static void traceStart(Tracing tracing, Coordination coordination)
     {
         String description = coordination.describe();
-        if (description != null)
+        if (description != null && !description.isEmpty())
             tracing.trace(null, "Description: %s", description);
         Participants<?> scope = coordination.scope();
         if (scope != null)
@@ -92,7 +94,8 @@ public interface Coordination
     static void traceStop(Tracing tracing, Coordination coordination)
     {
         AbstractTracker<?> tracker = coordination.tracker();
-        if (tracker != null)
-            tracing.trace(null, "Tracker: %s", tracker.summariseTracker());
+        if (tracker != null) tracing.trace(null, "Done. Tracker: %s", tracker.summariseTracker());
+        else tracing.trace(null, "Done");
+        tracing.done();
     }
 }

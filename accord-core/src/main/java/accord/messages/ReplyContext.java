@@ -18,7 +18,36 @@
 
 package accord.messages;
 
-// TODO: rename to ExecutionContext maybe?
+import java.util.concurrent.TimeUnit;
+
+import accord.api.MessageSink;
+import accord.local.Node;
+
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
+
 public interface ReplyContext
 {
+    long expiresAt(TimeUnit units);
+    void reply(Node.Id to, MessageSink sink, Reply success, Throwable failure);
+
+    class NoReplyContext implements ReplyContext
+    {
+        final long expiresAtMicros;
+
+        public NoReplyContext(Node node, Request request)
+        {
+            this.expiresAtMicros = node.agent().selfExpiresAt(request.primaryTxnId(), request.type(), MICROSECONDS);
+        }
+
+        @Override
+        public long expiresAt(TimeUnit units)
+        {
+            return units.convert(expiresAtMicros, MICROSECONDS);
+        }
+
+        @Override
+        public void reply(Node.Id to, MessageSink sink, Reply success, Throwable failure)
+        {
+        }
+    }
 }

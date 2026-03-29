@@ -27,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Result;
+import accord.api.Tracing;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.CoordinationAdapter.Adapters.SyncPointAdapter;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
@@ -155,7 +156,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         if (executeAt.is(REJECTED))
         {
             node.agent().coordinatorEvents().onRejected(txnId);
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, executeAt, finishAndTakeCallback());
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, executeAt, tracing, finishAndTakeCallback());
         }
         else
         {
@@ -172,7 +173,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         }
     }
 
-    public static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint)
+    public static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint, Tracing tracing)
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
@@ -186,10 +187,10 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
             node.agent().onException(e);
             return;
         }
-        sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
+        sendApply(node, to, syncPoint, topologies, Ballot.ZERO, tracing);
     }
 
-    public static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint, long minEpoch, long maxEpoch)
+    public static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint, long minEpoch, long maxEpoch, @Nullable Tracing tracing)
     {
         // TODO (expected): consider, document and add invariants checking if this topologies is correct in all cases
         //  (notably ExclusiveSyncPoints should execute in earlier epochs for durability, but not for fetching)
@@ -203,10 +204,10 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
             node.agent().onException(t);
             return;
         }
-        sendApply(node, to, syncPoint, topologies, Ballot.ZERO);
+        sendApply(node, to, syncPoint, topologies, Ballot.ZERO, tracing);
     }
 
-    private static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint, Topologies participates, Ballot ballot)
+    private static void sendApply(Node node, Node.Id to, PartialSyncPoint syncPoint, Topologies participates, Ballot ballot, @Nullable Tracing tracing)
     {
         TxnId txnId = syncPoint.syncId;
         Timestamp executeAt = syncPoint.executeAt;
@@ -215,6 +216,6 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         Route<?> route = syncPoint.route;
         Result result = txn.result(txnId, executeAt, null);
         Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, ballot, route, txn, executeAt, deps, null, result, syncPoint.fullRoute, ExecuteFlags.none());
-        node.send(to, apply);
+        node.send(to, apply, tracing);
     }
 }

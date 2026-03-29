@@ -28,13 +28,14 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.ProtocolModifiers.Toggles.DependencyElision;
+import accord.api.Data;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.ViolationHandler.ViolationHandlerHolder;
 import accord.local.Command.WaitingOn;
 import accord.local.Command.WaitingOn.Update;
 import accord.local.CommandStores.RangesForEpochSupplier;
+import accord.local.MinimalCommand.MinimalWithConcreteDeps;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
@@ -44,8 +45,10 @@ import accord.messages.Commit;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
+import accord.primitives.FullRoute;
 import accord.primitives.Known;
 import accord.primitives.Known.KnownExecuteAt;
+import accord.primitives.Known.KnownRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
@@ -56,6 +59,7 @@ import accord.primitives.SaveStatus;
 import accord.primitives.SaveStatus.LocalExecution;
 import accord.primitives.Status;
 import accord.primitives.Timestamp;
+import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -67,11 +71,10 @@ import accord.utils.async.AsyncChains;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_PREAPPLIED;
-import static accord.api.ProtocolModifiers.Toggles.DependencyElision.OFF;
-import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
-import static accord.api.ProtocolModifiers.Toggles.markStaleIfCannotExecute;
+import static accord.api.ProtocolModifiers.*;
+import static accord.api.ProtocolModifiers.DependencyElision.IF_DURABLY_COMMITTED;
+import static accord.api.ProtocolModifiers.DependencyElision.IF_DURABLY_PREAPPLIED;
+import static accord.api.ProtocolModifiers.DependencyElision.OFF;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.shouldCleanup;
@@ -103,6 +106,7 @@ import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
+import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.Outcome.Apply;
@@ -113,13 +117,13 @@ import static accord.primitives.SaveStatus.LocalExecution.WaitingToExecute;
 import static accord.primitives.SaveStatus.PreAccepted;
 import static accord.primitives.SaveStatus.PreAcceptedWithDeps;
 import static accord.primitives.SaveStatus.PreAcceptedWithVote;
+import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
 import static accord.primitives.Status.Durability;
 import static accord.primitives.Status.Invalidated;
-import static accord.primitives.Known.KnownRoute.FullRoute;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
@@ -695,13 +699,64 @@ public class Commands
         @Override
         public AsyncChain<Void> apply(V v)
         {
-            return commandStore.chain(this, this);
+            return commandStore.priorityChain(this, this);
         }
 
         @Override
         public void accept(SafeCommandStore safeStore)
         {
             postApply(safeStore, txnId, force);
+        }
+
+        @Override public TxnId primaryTxnId() { return txnId; }
+        @Override public Unseekables<?> keys() { return participants; }
+        @Override public LoadKeys loadKeys() { return SYNC; }
+        @Override public String reason() { return "Post Apply"; }
+    }
+
+    private static class PostFastApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, PreLoadContext
+    {
+        final CommandStore commandStore;
+        final TxnId txnId;
+        final Participants<?> participants;
+        final Timestamp applyAt;
+        final Writes writes;
+        final Result result;
+        final boolean force;
+
+        protected PostFastApply(Head<?> head, CommandStore commandStore, TxnId txnId, Participants<?> participants, Timestamp applyAt, Writes writes, Result result, boolean force)
+        {
+            super(head);
+            this.commandStore = commandStore;
+            this.txnId = txnId;
+            this.participants = participants;
+            this.applyAt = applyAt;
+            this.writes = writes;
+            this.result = result;
+            this.force = force;
+        }
+
+        @Override
+        public AsyncChain<Void> apply(V v)
+        {
+            return commandStore.priorityChain(this, this);
+        }
+
+        @Override
+        public void accept(SafeCommandStore safeStore)
+        {
+            SafeCommand safeCommand = safeStore.get(txnId);
+            Command command = safeCommand.current();
+            logger.trace("{} applied, setting status to Applied and notifying listeners", command);
+            if (command.hasBeen(Applied) && !force)
+                return;
+
+            if (!command.hasBeen(PreApplied))
+                safeCommand.preapplied(safeStore, applyAt, writes, result);
+
+            Command applied = safeCommand.applied(safeStore, force);
+            safeStore.agent().replicaEvents().onApplied(safeStore, applied);
+            safeStore.notifyListeners(safeCommand, command);
         }
 
         @Override public TxnId primaryTxnId() { return txnId; }
@@ -799,11 +854,20 @@ public class Commands
         {
             default: throw UnhandledEnum.invalid(command.status());
             case Stable:
-                // TODO (required): maintain distinct ReadyToRead and ReadyToWrite states
-                safeCommand.readyToExecute(safeStore);
-                logger.trace("{}: set to ReadyToExecute", txnId);
-                safeStore.notifyListeners(safeCommand, command);
-                break;
+                if (executeAtReplica(txnId, command.partialTxn()) && !command.participants().executes().isEmpty() && safeStore.safeToReadAt(command.executeAt()).containsAll(command.participants().executes()))
+                {
+                    if (null == (command = replicaExecute(safeStore, safeCommand, command, txnId)))
+                        break;
+                    // else fall-through
+                }
+                else
+                {
+                    // TODO (expected): maintain distinct ReadyToRead and ReadyToWrite states
+                    safeCommand.readyToExecute(safeStore);
+                    logger.trace("{}: set to ReadyToExecute", txnId);
+                    safeStore.notifyListeners(safeCommand, command);
+                    break;
+                }
 
             case PreApplied:
                 Command.Executed executed = command.asExecuted();
@@ -828,16 +892,110 @@ public class Commands
         return true;
     }
 
+    private static Command replicaExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, TxnId txnId)
+    {
+        FullRoute<?> route = (FullRoute<?>) command.route();
+        PartialTxn txn = command.partialTxn();
+        txn.reconstitute(route);
+        Timestamp applyAt;
+        {
+            Timestamp executeAt = command.executeAt();
+            long minUniqueHlc = command.waitingOn().minUniqueHlc();
+            if (!txnId.is(Txn.Kind.Write) || minUniqueHlc == 0) applyAt = executeAt;
+            else applyAt = new TimestampWithUniqueHlc(executeAt, minUniqueHlc);
+        }
+
+        Ballot ballot = command.acceptedOrCommitted();
+        if (!txn.read().keys().isEmpty())
+        {
+            Participants<?> executes = command.participants().executes();
+            CommandStore unsafeStore = safeStore.commandStore();
+            safeCommand.readyToExecute(safeStore);
+            safeStore = safeStore;
+            long stamp = safeStore.commandStore().node().currentStamp();
+            txn.read(safeStore, applyAt, executes).begin((data, fail) -> {
+                if (fail != null)
+                {
+                    unsafeStore.agent().onException(fail);
+                    notifyAfterFailedFastApply(unsafeStore, txnId);
+                }
+                else
+                {
+                    if (!fastWritesMayBypassSafeStore())
+                        replicaExecuteSlowApply(unsafeStore, ballot, txnId, route, txn, data, applyAt, stamp);
+                    else if (stamp == unsafeStore.node.currentStamp() || unsafeStore.unsafeGetSafeToRead().lowerEntry(applyAt).getValue().containsAll(executes))
+                        replicaExecuteFastApply(unsafeStore, ballot, txnId, route, txn, data, applyAt, executes);
+                    else
+                        notifyAfterFailedFastApply(unsafeStore, txnId);
+                }
+            });
+            return null;
+        }
+
+        Writes writes = txn.execute(txnId, applyAt, null);
+        Result result = txn.result(txnId, applyAt, null);
+
+        safeStore.commandStore().node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+        command = safeCommand.preapplied(safeStore, applyAt, writes, result);
+        return command;
+    }
+
+    private static void replicaExecuteFastApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, Participants<?> executes)
+    {
+        Writes writes = txn.execute(txnId, applyAt, data);
+        Result result = txn.result(txnId, applyAt, data);
+        unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+        writes.applyDirect(unsafeStore, executes, txn)
+              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, result, false))
+              .begin(unsafeStore.agent);
+    }
+
+    private static void replicaExecuteSlowApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, long stamp)
+    {
+        unsafeStore.execute(PreLoadContext.contextFor(txnId, "Replica Apply"), safeStore -> {
+            SafeCommand safeCommand = safeStore.unsafeGet(txnId);
+            Command command = safeCommand.current();
+            if (stamp != unsafeStore.node.currentStamp() && !safeStore.safeToReadAt(applyAt).containsAll(command.route()))
+            {
+                notifyAfterFailedFastApply(safeStore, txnId);
+            }
+            else
+            {
+                Writes writes = txn.execute(txnId, applyAt, data);
+                Result result = txn.result(txnId, applyAt, data);
+                unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+                if (command.saveStatus.compareTo(SaveStatus.PreApplied) <= 0)
+                    apply(Applying, safeStore, safeCommand, command.participants, command.acceptedOrCommitted(), txnId, command.route(), applyAt, command.partialDeps(), command.partialTxn(), writes, result);
+            }
+        });
+    }
+
+    private static void notifyAfterFailedFastApply(CommandStore unsafeStore, TxnId txnId)
+    {
+        unsafeStore.execute(PreLoadContext.contextFor(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore -> {
+            notifyAfterFailedFastApply(safeStore, txnId);
+        }, unsafeStore.agent());
+    }
+
+    private static void notifyAfterFailedFastApply(SafeCommandStore safeStore, TxnId txnId)
+    {
+        SafeCommand safeCommand = safeStore.get(txnId);
+        Command command = safeCommand.current();
+        if (command.saveStatus().compareTo(ReadyToExecute) <= 0)
+            safeStore.notifyListeners(safeCommand, null);
+    }
+
     protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp waitingExecuteAt, StoreParticipants participants, PartialDeps deps)
     {
         if (waitingId.awaitsOnlyDeps())
             waitingExecuteAt = Timestamp.maxForEpoch(waitingId.epoch());
 
-        WaitingOn.Initialise initialise = Update.initialise(safeStore, waitingId, waitingExecuteAt, participants, deps);
-        return updateWaitingOn(safeStore, initialise, waitingExecuteAt, initialise).build();
+        WaitingOn.Update initialise = Update.initialise(safeStore, waitingId, waitingExecuteAt, participants, deps);
+        // TODO (desired): avoid allocating MinimalWithConcreteDeps here, but overall neater than prior approach of ICommand interface (which has minimal benefit to allocations)
+        return updateWaitingOn(safeStore, new MinimalWithConcreteDeps(waitingId, null, null, participants, waitingExecuteAt, deps), waitingExecuteAt, initialise).build();
     }
 
-    protected static Update updateWaitingOn(SafeCommandStore safeStore, ICommand waiting, Timestamp executeAt, WaitingOn.Update initialise)
+    protected static Update updateWaitingOn(SafeCommandStore safeStore, MinimalWithConcreteDeps waiting, Timestamp executeAt, WaitingOn.Update initialise)
     {
         RedundantBefore redundantBefore = safeStore.redundantBefore();
         TxnId minWaitingOnTxnId = initialise.minWaitingOnTxn();
@@ -869,9 +1027,9 @@ public class Commands
      * @param dependencySafeCommand is either committed truncated, or invalidated
      * @return true iff {@code maybeExecute} might now have a different outcome
      */
-    private static boolean updateWaitingOn(SafeCommandStore safeStore, ICommand waiting, Timestamp waitingExecuteAt, Update waitingOn, SafeCommand dependencySafeCommand)
+    private static boolean updateWaitingOn(SafeCommandStore safeStore, MinimalWithConcreteDeps waiting, Timestamp waitingExecuteAt, Update waitingOn, SafeCommand dependencySafeCommand)
     {
-        TxnId waitingId = waiting.txnId();
+        TxnId waitingId = waiting.txnId;
         Command dependency = dependencySafeCommand.current();
         Invariants.require(dependency.hasBeen(PreCommitted));
         TxnId dependencyId = dependency.txnId();
@@ -889,10 +1047,10 @@ public class Commands
                     Invariants.require(dependency.executeAt().compareTo(waitingExecuteAt) < 0
                                        || !dependencyId.witnesses(waitingId)
                                        || waitingId.awaitsOnlyDeps()
-                                       || waiting.participants().stillWaitsOn().isEmpty()
+                                       || waiting.participants.stillWaitsOn().isEmpty()
                                        || !markStaleIfCannotExecute(dependencyId)
                                        || safeStore.redundantBefore().status(dependencyId, null,
-                                                 waiting.partialDeps().participants(dependencyId)).all(LOCALLY_DEFUNCT)
+                                                 waiting.partialDeps.participants(dependencyId)).all(LOCALLY_DEFUNCT)
                     );
                 case Vestigial:
                 case Erased:
@@ -922,7 +1080,7 @@ public class Commands
         else
         {
             Participants<?> participants = waiting.partialDeps().participants(dependency.txnId());
-            Participants<?> waitsOn = participants.intersecting(waiting.participants().stillWaitsOn(), Minimal);
+            Participants<?> waitsOn = participants.intersecting(waiting.participants.stillWaitsOn(), Minimal);
             RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, waitsOn);
 
             if (waitsOn.isEmpty() || status.all(LOCALLY_DEFUNCT))
@@ -1713,7 +1871,7 @@ public class Commands
         //   but it might be nice to impose this earlier, or with some clearer semantics
         Invariants.require(addRoute == participants.route());
         Route<?> fullRoute = null;
-        if (expectKnown.has(FullRoute))
+        if (expectKnown.has(KnownRoute.FullRoute))
         {
             if (isFullRoute(cur.route())) fullRoute = cur.route();
             else if (isFullRoute(addRoute)) fullRoute = addRoute;
@@ -1749,7 +1907,8 @@ public class Commands
 
         if (commitKind == StableMediumPath)
         {
-            if (haveKnown.is(DepsProposedFixed) && expectKnown.is(DepsKnown) && ballot != null && ballot.equals(Ballot.ZERO) && participants.stillTouches().equals(cur.participants().touches()))
+            if ((haveKnown.is(DepsProposedFixed) || (haveKnown.is(DepsProposed) && cur.acceptedOrCommitted().equals(Ballot.ZERO)))
+                && expectKnown.is(DepsKnown) && ballot != null && ballot.equals(Ballot.ZERO) && participants.stillTouches().equals(cur.participants().touches()))
                 return UPDATE_TXN_MERGE_DEPS;
             return INSUFFICIENT;
         }

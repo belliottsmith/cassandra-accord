@@ -28,7 +28,7 @@ import java.util.Objects;
 
 import javax.annotation.Nullable;
 
-import static accord.api.ProtocolModifiers.RangeSpec.END_INCLUSIVE;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
 import static accord.utils.SortedArrays.Search.CEIL;
 import static accord.utils.SortedArrays.Search.FAST;
 
@@ -87,9 +87,9 @@ public class Range implements Comparable<RoutableKey>, Unseekable, Seekable, Ran
     @Override
     public final int compareTo(RoutableKey key)
     {
-        if (key.compareTo(start) < (END_INCLUSIVE ? 1 : 0))
+        if (key.compareTo(start) < (isRangeEndInclusive() ? 1 : 0))
             return 1;
-        if (key.compareTo(end) > (END_INCLUSIVE ? 0 : -1))
+        if (key.compareTo(end) > (isRangeEndInclusive() ? 0 : -1))
             return -1;
         return 0;
     }
@@ -103,7 +103,7 @@ public class Range implements Comparable<RoutableKey>, Unseekable, Seekable, Ran
     public final int compareStartTo(RoutableKey key)
     {
         int c = start().compareTo(key);
-        if (END_INCLUSIVE && c == 0) c = 1;
+        if (isRangeEndInclusive() && c == 0) c = 1;
         return c;
     }
 
@@ -116,18 +116,18 @@ public class Range implements Comparable<RoutableKey>, Unseekable, Seekable, Ran
     public final int compareEndTo(RoutableKey key)
     {
         int c = end().compareTo(key);
-        if (!END_INCLUSIVE && c == 0) c = -1;
+        if (!isRangeEndInclusive() && c == 0) c = -1;
         return c;
     }
 
     public final boolean startInclusive()
     {
-        return !END_INCLUSIVE;
+        return !isRangeEndInclusive();
     }
 
     public final boolean endInclusive()
     {
-        return END_INCLUSIVE;
+        return isRangeEndInclusive();
     }
 
     @Override

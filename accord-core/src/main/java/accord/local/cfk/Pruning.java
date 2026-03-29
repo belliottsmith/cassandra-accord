@@ -35,7 +35,7 @@ import accord.utils.btree.BulkIterator;
 import accord.utils.btree.UpdateFunction;
 import org.agrona.collections.Long2ObjectHashMap;
 
-import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
+import static accord.api.ProtocolModifiers.isTransitiveDependencyVisible;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.APPLIED_DURABLE;
 import static accord.local.cfk.CommandsForKey.InternalStatus.COMMITTED;
@@ -265,11 +265,12 @@ public class Pruning
                 if (!txn.is(PRUNED))
                     newById[count++] = txn;
             }
-            int newMinUndecidedById = nextUndecided(newById, 0, cfk);
+            int newMinUndecidedManagedById = nextUndecided(true, newById, 0, cfk);
+            int newMinUndecidedUnmanagedById = nextUndecided(false, newById, 0, cfk);
             int newMaxAppliedUnreadyWriteById = recomputeMaxAppliedUnreadyWriteById(cfk.bounds, newById, cfk.maxAppliedUnreadyWriteById);
             int newPrunedBeforeId = cfk.prunedBeforeById - prunedCount;
             return new CommandsForKey(cfk.key, cfk.bounds, false, newById,
-                                      newMinUndecidedById, newMaxAppliedUnreadyWriteById,
+                                      newMinUndecidedManagedById, newMinUndecidedUnmanagedById, newMaxAppliedUnreadyWriteById,
                                       cfk.committedByExecuteAt, cfk.maxAppliedWriteByExecuteAt,
                                       cfk.maxUniqueHlc, cfk.loadingPruned, newPrunedBeforeId,
                                       cfk.unmanageds, true);
@@ -324,7 +325,7 @@ public class Pruning
 
         TxnInfo[] byId = cfk.byId;
         TxnInfo[] committedByExecuteAt = cfk.committedByExecuteAt;
-        int minUndecidedById;
+        int minUndecidedManagedById, minUndecidedUnmanagedById;
         int retainCount = 0, removedCommittedCount = 0;
         // a store of committed executeAts we have removed where we cannot otherwise cheaply infer it
         Object[] removedExecuteAts = NO_TXNIDS;
@@ -332,8 +333,9 @@ public class Pruning
         Long2ObjectHashMap<TxnInfo> epochPrunedBefores = buildEpochPrunedBefores(byId, committedByExecuteAt, newPrunedBefore);
         TxnInfo[] newById;
         {
-            minUndecidedById = cfk.minUndecidedById;
-            int minUndecidedByIdDelta = 0;
+            minUndecidedManagedById = cfk.minUndecidedManagedById;
+            minUndecidedUnmanagedById = cfk.minUndecidedUnmanagedById;
+            int minUndecidedManagedByIdDelta = 0, minUndecidedUnmanagedByIdDelta = 0;
             RecursiveObjectBuffers<TxnId> missingBuffers = new RecursiveObjectBuffers<>(cachedTxnIds());
             TxnId[] mergedMissing = newPrunedBefore.missing();
             int mergedMissingCount = mergedMissing.length;
@@ -377,8 +379,10 @@ public class Pruning
                     case APPLIED_NOT_DURABLE:
                     case APPLIED_NOT_EXECUTED:
                         newByIdBuffer[pos - ++retainCount] = txn;
-                        if (i == minUndecidedById)
-                            minUndecidedByIdDelta = retainCount;
+                        if (i == minUndecidedManagedById)
+                            minUndecidedManagedByIdDelta = retainCount;
+                        if (i == minUndecidedUnmanagedById)
+                            minUndecidedUnmanagedByIdDelta = retainCount;
                         break;
 
                     case APPLIED_DURABLE:
@@ -429,12 +433,19 @@ public class Pruning
                 return cfk;
 
             int removedByIdCount = pos - retainCount;
-            if (minUndecidedById >= 0)
+            if (minUndecidedManagedById >= 0)
             {
-                if (minUndecidedById >= pos)
-                    minUndecidedById -= removedByIdCount;
+                if (minUndecidedManagedById >= pos)
+                    minUndecidedManagedById -= removedByIdCount;
                 else
-                    minUndecidedById = retainCount - minUndecidedByIdDelta;
+                    minUndecidedManagedById = retainCount - minUndecidedManagedByIdDelta;
+            }
+            if (minUndecidedUnmanagedById >= 0)
+            {
+                if (minUndecidedUnmanagedById >= pos)
+                    minUndecidedUnmanagedById -= removedByIdCount;
+                else
+                    minUndecidedUnmanagedById = retainCount - minUndecidedUnmanagedByIdDelta;
             }
             newById = new TxnInfo[byId.length - removedByIdCount];
             System.arraycopy(newByIdBuffer, pos - retainCount, newById, 0, retainCount);
@@ -488,8 +499,8 @@ public class Pruning
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
         int newMaxAppliedUnreadyWriteById = recomputeMaxAppliedUnreadyWriteById(cfk.bounds, newById, cfk.maxAppliedUnreadyWriteById);
-        Invariants.require(newById[retainCount] == newPrunedBefore);
-        return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds, true);
+        Invariants.require(newById[retainCount].equals(newPrunedBefore));
+        return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedManagedById, minUndecidedUnmanagedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds, true);
     }
 
     /**

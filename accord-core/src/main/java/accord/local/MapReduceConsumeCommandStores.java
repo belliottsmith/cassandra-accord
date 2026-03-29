@@ -38,7 +38,7 @@ public abstract class MapReduceConsumeCommandStores<P extends Participants<?>, O
         return new Delegate<>(this)
         {
             @Override
-            AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
+            protected AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
             {
                 return apply.apply(commandStore);
             }

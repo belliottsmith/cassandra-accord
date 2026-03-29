@@ -27,10 +27,9 @@ import accord.coordinate.Coordination.CoordinationKind;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
-import accord.messages.ReplyContext;
+import accord.messages.MessageType;
 import accord.primitives.Participants;
 import accord.primitives.Routable.Domain;
-import accord.primitives.Status.Phase;
 import accord.primitives.Txn;
 import accord.primitives.Txn.Kind;
 import accord.primitives.TxnId;
@@ -93,15 +92,6 @@ public interface Agent extends UncaughtExceptionListener
      */
     long maxConflictsHlcPruneDelta();
 
-    /**
-     * Controls pruning of MaxConflicts
-     *
-     * Every n updates, max conflicts is pruned to the delta, where n is the value returned by this method
-     *
-     * TODO (expected): this isn't a very clean way to prune max conflicts - should be done by size of collection / update rate
-     */
-    long maxConflictsPruneInterval();
-
     default boolean softReject(long unappliedCount, long maxUnappliedAge, long cumulativeUnappliedAge) { return false; }
     default boolean hardReject(int softRejectCount, int totalCount) { return false; }
 
@@ -158,11 +148,13 @@ public interface Agent extends UncaughtExceptionListener
     long retryDurabilityDelay(Node node, int attempt, TimeUnit units);
     long expireEpochWait(TimeUnit units);
 
-    long expiresAt(ReplyContext replyContext, TimeUnit unit);
-    long selfSlowAt(TxnId txnId, Phase phase, TimeUnit unit);
-    long selfExpiresAt(TxnId txnId, Phase phase, TimeUnit unit);
+    // TODO (desired): standardise slowAt/expiresAt computation entry point across local and remote delivery
+    long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit);
+    long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit);
 
     // make sure the staleId is sufficiently stale
     AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean requested);
     long minStaleHlc(Node node, boolean requested);
+
+    default boolean reportRemoteSuccess(Result success) { return true; }
 }

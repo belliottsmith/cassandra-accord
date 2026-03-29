@@ -71,10 +71,16 @@ public class RecordingMessageSink extends SimpleMessageSink
     }
 
     @Override
-    public void reply(Node.Id replyingToNode, ReplyContext replyContext, Reply reply)
+    public void reply(Node.Id replyingToNode, ReplyContext replyContext, Reply reply, Throwable failure)
     {
+        if (reply == null)
+        {
+            if (failure == null)
+                throw new IllegalArgumentException("Both reply and failure are null");
+            reply = new Reply.FailureReply(failure);
+        }
         responses.add(new Envelope<>(replyingToNode, reply, null));
-        super.reply(replyingToNode, replyContext, reply);
+        super.reply(replyingToNode, replyContext, reply, null);
     }
 
     public void assertHistorySizes(int requests, int responses)

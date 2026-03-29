@@ -22,6 +22,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 
+import accord.api.MessageSink.ReplySink;
 import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.messages.PreAccept;
@@ -253,7 +254,7 @@ public class ExtendedAssertions
         ReplyContext replyContext = Mockito.mock(ReplyContext.class);
         request.process(on, replyTo, replyContext);
         ArgumentCaptor<T> reply = ArgumentCaptor.forClass(replyType);
-        Mockito.verify(on.messageSink()).reply(Mockito.eq(replyTo), Mockito.eq(replyContext), reply.capture());
+        ((ReplySink)Mockito.verify(on.messageSink())).reply(Mockito.eq(replyTo), Mockito.eq(replyContext), reply.capture(), null);
         return Assertions.assertThat(reply.getValue());
     }
 

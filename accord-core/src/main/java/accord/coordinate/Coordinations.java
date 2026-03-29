@@ -21,6 +21,7 @@ package accord.coordinate;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -104,6 +105,18 @@ public class Coordinations implements Iterable<Coordination>
     }
 
     final ConcurrentHashMap<TxnId, Entries> coordinations = new ConcurrentHashMap<>();
+
+    public void forEach(TxnId txnId, Consumer<Coordination> consumer)
+    {
+        coordinations.compute(txnId, (ignore, e) -> {
+            if (e == null)
+                return null;
+
+            for (int i = 0 ; i < e.count ; ++i)
+                consumer.accept(e.coordinations[i]);
+            return e;
+        });
+    }
 
     public void register(Coordination coordination)
     {

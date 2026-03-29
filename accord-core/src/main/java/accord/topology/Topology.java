@@ -55,7 +55,7 @@ import accord.utils.Utils;
 import org.agrona.collections.Int2ObjectHashMap;
 import org.agrona.collections.IntArrayList;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
 import static accord.utils.Invariants.illegalArgument;
 import static accord.utils.SortedArrays.Search.FAST;
 import static accord.utils.SortedArrays.Search.FLOOR;
@@ -601,7 +601,7 @@ public class Topology
             Range r = subsetOfRanges.get(bi);
             ai = as.findNext(ai, r.end(), FAST);
             if (ai < 0) ai = -1 - ai;
-            else if (isEndInclusive()) ++ai;
+            else if (isRangeEndInclusive()) ++ai;
             ++bi;
         }
 

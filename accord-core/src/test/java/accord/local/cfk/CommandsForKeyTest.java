@@ -54,7 +54,7 @@ import accord.impl.DefaultLocalListeners;
 import accord.impl.DefaultLocalListeners.DefaultNotifySink;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.IntKey;
-import accord.local.ICommand.Builder;
+import accord.local.CommandBuilder;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
@@ -65,12 +65,11 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
+import accord.messages.MessageType;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.local.cfk.CommandsForKey.TxnInfo;
-import accord.messages.ReplyContext;
-import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Keys;
@@ -95,10 +94,10 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 
-import static accord.local.Command.Executed.executed;
-import static accord.local.Command.NotDefined.notDefined;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.SaveStatus.NotDefined;
+import static accord.primitives.SaveStatus.PreAccepted;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.NotDurable;
@@ -510,7 +509,7 @@ public class CommandsForKeyTest
 
         Command unwitnessed(TxnId txnId)
         {
-            Command command = notDefined(builder(txnId), Ballot.ZERO);
+            Command command = builder(txnId).build(NotDefined);
             unwitnessed.add(txnId);
             undecided.add(txnId);
             candidates.add(txnId);
@@ -520,48 +519,46 @@ public class CommandsForKeyTest
 
         Command preaccepted(TxnId txnId)
         {
-            return Command.PreAccepted.preaccepted(builder(txnId), SaveStatus.PreAccepted);
+            return builder(txnId).build(PreAccepted);
         }
 
         Command acceptedInvalidated(TxnId txnId, SaveStatus saveStatus)
         {
-            return saveStatus == SaveStatus.AcceptedInvalidateWithDefinition
-                   ? Command.Accepted.accepted(builder(txnId, true), saveStatus)
-                   : Command.NotAcceptedWithoutDefinition.acceptedInvalidate(builder(txnId, false));
+            return builder(txnId, saveStatus.known.isDefinitionKnown()).build(saveStatus);
         }
 
         Command accepted(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus)
         {
             Deps deps = generateDeps(txnId, txnId, Status.AcceptedMedium);
-            Builder builder = builder(txnId, saveStatus.known.definition().isKnown())
+            CommandBuilder builder = builder(txnId, saveStatus.known.definition().isKnown())
                               .partialDeps(deps.intersecting(txnId.domain() == Key ? KEY_ROUTE : RANGE_ROUTE))
                               .executeAt(executeAt);
 
-            return Command.Accepted.accepted(builder, saveStatus);
+            return builder.build(saveStatus);
         }
 
         Command committed(TxnId txnId, Timestamp executeAt)
         {
             Deps deps = generateDeps(txnId, executeAt, Status.Committed);
-            Builder builder = builder(txnId).partialDeps(slice(txnId, deps))
-                                            .executeAt(executeAt);
-            return Command.Committed.committed(builder, SaveStatus.Committed);
+            CommandBuilder builder = builder(txnId).partialDeps(slice(txnId, deps))
+                                                   .executeAt(executeAt);
+            return builder.build(SaveStatus.Committed);
         }
 
         Command stable(TxnId txnId, Timestamp executeAt, @Nullable Command.Committed committed)
         {
             Deps deps = committed == null ? generateDeps(txnId, executeAt, Status.Stable) : committed.partialDeps();
-            Builder builder = builder(txnId).partialDeps(slice(txnId, deps))
-                                            .executeAt(executeAt);
+            CommandBuilder builder = builder(txnId).partialDeps(slice(txnId, deps))
+                                                   .executeAt(executeAt);
             builder.waitingOn(initialiseWaitingOn(txnId, executeAt, builder.participants().route(), deps));
-            return Command.Committed.committed(builder, Stable);
+            return builder.build(Stable);
         }
 
         Command applied(TxnId txnId, Timestamp executeAt, @Nullable Command.Committed committed)
         {
             Deps deps = committed == null ? generateDeps(txnId, executeAt, Status.Applied) : committed.partialDeps();
             Command.WaitingOn waitingOn = committed == null || committed.waitingOn == null ? initialiseWaitingOn(txnId, executeAt, committed.participants().route(), deps) : committed.waitingOn;
-            Builder builder = builder(txnId)
+            CommandBuilder builder = builder(txnId)
                               .partialDeps(slice(txnId, deps))
                               .executeAt(executeAt)
                               .waitingOn(waitingOn)
@@ -570,7 +567,7 @@ public class CommandsForKeyTest
             if (txnId.is(Write))
                 builder.writes(new Writes(txnId, executeAt, KEYS, null));
 
-            return executed(builder, SaveStatus.Applied);
+            return builder.build(SaveStatus.Applied);
         }
 
         Command invalidated(TxnId txnId)
@@ -578,17 +575,16 @@ public class CommandsForKeyTest
             return Command.Truncated.invalidated(txnId, builder(txnId).participants());
         }
 
-        Builder builder(TxnId txnId)
+        CommandBuilder builder(TxnId txnId)
         {
             return builder(txnId, true);
         }
 
-        Builder builder(TxnId txnId, boolean withDefinition)
+        CommandBuilder builder(TxnId txnId, boolean withDefinition)
         {
-            Builder result = new Builder(txnId)
+            CommandBuilder result = new CommandBuilder(txnId)
                              .durability(NotDurable)
-                             .setParticipants(StoreParticipants.all(txnId.is(Key) ? KEY_ROUTE : RANGE_ROUTE))
-                             .promised(Ballot.ZERO).acceptedOrCommitted(Ballot.ZERO);
+                             .participants(StoreParticipants.all(txnId.is(Key) ? KEY_ROUTE : RANGE_ROUTE));
 
             if (withDefinition)
                 result.partialTxn((txnId.domain() == Key ? KEY_TXN : RANGE_TXN).slice(RANGES, true));
@@ -745,6 +741,17 @@ public class CommandsForKeyTest
         protected void set(CommandsForKey command)
         {
             current = command;
+        }
+
+        @Override
+        public void overrideSink(NotifySink overrideSink)
+        {
+        }
+
+        @Override
+        public NotifySink overrideSink()
+        {
+            return null;
         }
     }
 
@@ -1095,12 +1102,6 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long maxConflictsPruneInterval()
-        {
-            return maxConflictsPruneInterval;
-        }
-
-        @Override
         public Txn emptySystemTxn(Txn.Kind kind, Domain domain)
         {
             throw new UnsupportedOperationException();
@@ -1155,19 +1156,13 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+        public long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit)
         {
             return 0;
         }
 
         @Override
-        public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
-        {
-            return 0;
-        }
-
-        @Override
-        public long expiresAt(ReplyContext replyContext, TimeUnit unit)
+        public long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit)
         {
             return 0;
         }

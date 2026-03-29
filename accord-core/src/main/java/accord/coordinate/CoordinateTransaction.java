@@ -25,8 +25,6 @@ import javax.annotation.Nullable;
 
 import accord.api.ProtocolModifiers;
 import accord.api.Result;
-import accord.api.Timeouts;
-import accord.api.Timeouts.RegisteredTimeout;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
@@ -34,15 +32,12 @@ import accord.local.Commands;
 import accord.local.DepsCalculator;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
-import accord.local.MapReduceConsumeCommandStores;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.messages.PreAccept.PreAcceptNack;
 import accord.messages.PreAccept.PreAcceptReply;
-import accord.primitives.Route;
-import accord.primitives.Status;
 import accord.topology.Topologies;
 import accord.local.Node;
 import accord.messages.PreAccept.PreAcceptOk;
@@ -57,16 +52,13 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
-import static accord.coordinate.CoordinateTransaction.LocalExecuteState.PENDING;
-import static accord.coordinate.CoordinateTransaction.LocalExecuteState.SUCCESS;
-import static accord.coordinate.CoordinateTransaction.LocalExecuteState.TIMEOUT;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.CoordinationFlags.empty;
 import static accord.coordinate.ExecutePath.FAST;
-import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.local.Commands.AcceptOutcome.Success;
 import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Accept.Kind.SLOW;
+import static accord.messages.MessageType.StandardMessage.PRE_ACCEPT_REQ;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.Timestamp.Flag.SOFT_REJECT;
@@ -125,25 +117,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             new LocalExecute().start();
         else
             contact(null, false);
-    }
-
-    @Override
-    protected void finishWithFailure(Throwable failure)
-    {
-        if (failure instanceof Preempted)
-        {
-            // cannot expect to successfully propose invalidation, and no point as already being recovered
-            super.finishWithFailure(failure);
-        }
-        else
-        {
-            BiConsumer<? super Result, Throwable> callback = finishAndTakeCallback();
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, (success, invalidated) -> {
-                failure.addSuppressed(invalidated);
-                callback.accept(null, failure);
-                node.agent().coordinatorEvents().onFailed(failure, txnId, scope, this);
-            });
-        }
     }
 
     @Override
@@ -236,71 +209,44 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         return node.coordinationAdapter(txnId, Standard);
     }
 
-    enum LocalExecuteState { PENDING, SUCCESS, TIMEOUT}
-    class LocalExecute extends MapReduceConsumeCommandStores<Route<?>, PreAcceptReply> implements Timeouts.Timeout
+    class LocalExecute extends AbstractLocalExecute
     {
-        LocalExecuteState state = LocalExecuteState.PENDING;
-        Cancellable cancel;
-        RegisteredTimeout timeout;
-
-        protected LocalExecute()
+        @Override
+        long expiresAt()
         {
-            super(CoordinateTransaction.this.scope);
-        }
-
-        void start()
-        {
-            markSelfContacted();
-            Cancellable cancel = node.commandStores().mapReduceConsume(topologies.oldestEpoch(), topologies.currentEpoch(), this);
-            long expiresAt = node.agent().selfExpiresAt(txnId, Status.Phase.PreAccept, MICROSECONDS);
-            RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
-            synchronized (this)
-            {
-                switch (state)
-                {
-                    case PENDING:
-                        this.cancel = cancel;
-                        this.timeout = timeout;
-                        break;
-                    case TIMEOUT:
-                        if (cancel != null)
-                            cancel.cancel();
-                        break;
-                    case SUCCESS:
-                        if (timeout != null)
-                            timeout.cancel();
-                        break;
-                }
-            }
+            return node.agent().selfExpiresAt(txnId, PRE_ACCEPT_REQ, MICROSECONDS);
         }
 
         @Override
-        public void accept(PreAcceptReply result, Throwable failure)
+        Cancellable submit()
         {
-            done();
-            executor.executeMaybeImmediately(() -> {
-                if (failure != null)
+            return node.commandStores().mapReduceConsume(topologies.oldestEpoch(), topologies.currentEpoch(), this);
+        }
+
+        @Override
+        public void acceptInternal(PreAcceptReply result, Throwable failure)
+        {
+            if (failure != null)
+            {
+                finishOnFailure(failure);
+            }
+            else
+            {
+                if (result.isOk())
                 {
-                    finishOnFailure(failure);
+                    PreAcceptOk ok = (PreAcceptOk) result;
+                    // TODO (desired): we can probably still process and record fast path votes from peers, just with different quorum requirements
+                    boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
+                    if (!hasCoordinatorVote) fastPathEnabled = false;
+                    Deps deps = hasCoordinatorVote && txnId.is(PrivilegedCoordinatorWithDeps) ? ok.deps : null;
+                    contactNotSelf(deps, hasCoordinatorVote);
+                    onSuccess(node.id(), ok);
                 }
                 else
                 {
-                    if (result.isOk())
-                    {
-                        PreAcceptOk ok = (PreAcceptOk) result;
-                        // TODO (desired): we can probably still process and record fast path votes from peers, just with different quorum requirements
-                        boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
-                        if (!hasCoordinatorVote) fastPathEnabled = false;
-                        Deps deps = hasCoordinatorVote && txnId.is(PrivilegedCoordinatorWithDeps) ? ok.deps : null;
-                        contactNotSelf(deps, hasCoordinatorVote);
-                        onSuccess(node.id(), ok);
-                    }
-                    else
-                    {
-                        finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
-                    }
+                    finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                 }
-            });
+            }
         }
 
         @Override
@@ -336,62 +282,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         public PreAcceptReply reduce(PreAcceptReply r1, PreAcceptReply r2)
         {
             return PreAcceptReply.reduce(r1, r2);
-        }
-
-        @Override
-        public void timeout()
-        {
-            Cancellable cancel;
-            synchronized (this)
-            {
-                if (state != PENDING)
-                    return;
-
-                state = TIMEOUT;
-                timeout = null;
-                if (this.cancel == null)
-                    return;
-                cancel = this.cancel;
-                this.cancel = null;
-            }
-            cancel.cancel();
-        }
-
-        void done()
-        {
-            RegisteredTimeout cancel;
-            synchronized (this)
-            {
-                if (state != PENDING)
-                    return;
-
-                state = SUCCESS;
-                this.cancel = null;
-                if (timeout == null)
-                    return;
-                cancel = timeout;
-                timeout = null;
-            }
-            cancel.cancel();
-        }
-
-        @Override
-        public int stripe()
-        {
-            return txnId == null ? 0 : txnId.hashCode();
-        }
-
-        @Nullable
-        @Override
-        public TxnId primaryTxnId()
-        {
-            return txnId;
-        }
-
-        @Override
-        public String reason()
-        {
-            return "Local PreAccept";
         }
 
         @Override

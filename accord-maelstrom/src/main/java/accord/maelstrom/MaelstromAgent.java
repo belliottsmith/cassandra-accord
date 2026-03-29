@@ -28,12 +28,11 @@ import accord.api.Result;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
-import accord.messages.ReplyContext;
+import accord.messages.MessageType;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
-import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -60,7 +59,7 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
         if (success != null)
         {
             MaelstromResult result = (MaelstromResult) success;
-            node.reply(result.client, MaelstromReplyContext.contextFor(result.requestId), new MaelstromReply(result.requestId, result), null);
+            node.reply(result.client, MaelstromReplyContext.contextFor(result.requestId), new MaelstromReply(result.requestId, result), null, null);
         }
     }
 
@@ -104,12 +103,6 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     }
 
     @Override
-    public long maxConflictsPruneInterval()
-    {
-        return 0;
-    }
-
-    @Override
     public int cfkPruneInterval()
     {
         return 1;
@@ -131,12 +124,6 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     public boolean rejectPreAccept(TimeService time, TxnId txnId)
     {
         return false;
-    }
-
-    @Override
-    public long expiresAt(ReplyContext replyContext, TimeUnit units)
-    {
-        return -1;
     }
 
     @Override
@@ -200,13 +187,13 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     }
 
     @Override
-    public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return unit.convert(100L, MICROSECONDS);
     }
 
     @Override
-    public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return unit.convert(1L, SECONDS);
     }
