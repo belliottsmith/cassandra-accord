@@ -48,6 +48,15 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         return key;
     }
 
+    public abstract void overrideSink(NotifySink overrideSink);
+    public abstract NotifySink overrideSink();
+
+    private NotifySink defaultSink()
+    {
+        NotifySink overrideSink = overrideSink();
+        return overrideSink == null ? DefaultNotifySink.INSTANCE : overrideSink;
+    }
+
     public void updateUniqueHlc(SafeCommandStore safeStore, long uniqueHlc)
     {
         CommandsForKey prevCfk = current();
@@ -57,7 +66,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     // equivalent to update, but for async callbacks with additional validation around pruning
     public void callback(SafeCommandStore safeStore, Command nextCommand, boolean forceNotify)
     {
-        callback(safeStore, nextCommand, DefaultNotifySink.INSTANCE, forceNotify);
+        callback(safeStore, nextCommand, defaultSink(), forceNotify);
     }
 
     public void callback(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink, boolean forceNotify)
@@ -68,7 +77,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, boolean forceNotify)
     {
-        update(safeStore, command, prevCfk, updateCfk, DefaultNotifySink.INSTANCE, forceNotify);
+        update(safeStore, command, prevCfk, updateCfk, defaultSink(), forceNotify);
     }
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, NotifySink notifySink, boolean forceNotify)

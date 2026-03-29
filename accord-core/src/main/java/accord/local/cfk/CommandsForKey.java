@@ -1165,6 +1165,21 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return Arrays.binarySearch(byId, txnId);
     }
 
+    public int committedIndexOf(Timestamp executeAt)
+    {
+        return committedIndexOf(executeAt, 0, committedByExecuteAt.length);
+    }
+
+    public int unappliedCommittedIndexOf(Timestamp executeAt)
+    {
+        return committedIndexOf(executeAt, Math.max(0, maxAppliedWriteByExecuteAt), committedByExecuteAt.length);
+    }
+
+    public int committedIndexOf(Timestamp executeAt, int from, int to)
+    {
+        return SortedArrays.binarySearch(committedByExecuteAt, from, to, executeAt, (f, v) -> f.compareTo(v.executeAt), FAST);
+    }
+
     public TxnId txnId(int i)
     {
         return byId[i];
@@ -1173,6 +1188,16 @@ public class CommandsForKey extends CommandsForKeyUpdate
     public TxnInfo get(int i)
     {
         return byId[i];
+    }
+
+    public int committedSize()
+    {
+        return committedByExecuteAt.length;
+    }
+
+    public TxnInfo committedByExecuteAt(int i)
+    {
+        return committedByExecuteAt[i];
     }
 
     @VisibleForImplementation

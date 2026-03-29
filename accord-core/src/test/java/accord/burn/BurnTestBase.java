@@ -240,7 +240,7 @@ public class BurnTestBase
                     int[] prefixes = prefixes(n.topology().current());
 
                     boolean isWrite = random.nextBoolean();
-                    int readCount = 1 + random.nextInt(2);
+                    int readCount = (isWrite ? 0 : 1) + random.nextInt(2);
                     int writeCount = isWrite ? 1 + random.nextInt(2) : 0;
                     Kind kind = isWrite ? Kind.Write : readCount == 1 ? EphemeralRead : Kind.Read;
 

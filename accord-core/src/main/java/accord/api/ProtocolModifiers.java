@@ -317,5 +317,9 @@ public class ProtocolModifiers
         private static boolean dataStoreDetectsFutureReads;
         public static boolean dataStoreDetectsFutureReads() { return dataStoreDetectsFutureReads; }
         public static void setDataStoreDetectsFutureReads(boolean newDataStoreDetectsFutureReads) { dataStoreDetectsFutureReads = newDataStoreDetectsFutureReads; }
+
+        private static boolean executeBacklog = true;
+        public static boolean executeBacklog() { return executeBacklog; }
+        public static void setExecuteBacklog(boolean newExecuteBacklog) { executeBacklog = newExecuteBacklog; }
     }
 }

@@ -746,6 +746,17 @@ public class CommandsForKeyTest
         {
             current = command;
         }
+
+        @Override
+        public void overrideSink(NotifySink overrideSink)
+        {
+        }
+
+        @Override
+        public NotifySink overrideSink()
+        {
+            return null;
+        }
     }
 
     static class TestSafeStore extends SafeCommandStore
@@ -1182,6 +1193,12 @@ public class CommandsForKeyTest
         public long minStaleHlc(Node node, boolean requested)
         {
             return 0;
+        }
+
+        @Override
+        public boolean reportRemoteSuccess(Result success)
+        {
+            return false;
         }
     }
 }

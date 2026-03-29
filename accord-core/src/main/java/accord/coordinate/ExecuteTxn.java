@@ -24,6 +24,7 @@ import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import accord.api.Data;
+import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.api.Timeouts;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
@@ -39,6 +40,9 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.SequentialAsyncExecutor;
 import accord.local.StoreParticipants;
+import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
 import accord.messages.Callback;
 import accord.messages.Commit;
@@ -68,6 +72,7 @@ import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
+import static accord.api.ProtocolModifiers.Toggles.executeBacklog;
 import static accord.api.ProtocolModifiers.Toggles.recoverReads;
 import static accord.api.ProtocolModifiers.Toggles.fastReadExecMayResendTxn;
 import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
@@ -81,14 +86,17 @@ import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
+import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.messages.Commit.Kind.StableSlowPath;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
+import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.DurablyStable;
 import static accord.primitives.Status.Phase.Execute;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (expected): return Waiting from ReadData if not ready to execute, and do not submit more than one speculative retry in this case
@@ -306,6 +314,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         {
             default: throw UnhandledEnum.unknown(path);
             case EPHEMERAL: throw UnhandledEnum.invalid(EPHEMERAL);
+            case BACKLOG:
             case FAST:    return StableFastPath;
             case MEDIUM:  return StableMediumPath;
             case SLOW:    return StableSlowPath;
@@ -450,6 +459,18 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         return node.coordinationAdapter(txnId, Standard);
     }
 
+    public void onRemoteSuccess(Result result)
+    {
+        executor.executeMaybeImmediately(() -> {
+            if (!trySetDone())
+                return;
+
+            BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
+            if (callback != null)
+                callback.accept(result, null);
+        });
+    }
+
     @Override
     public String toString()
     {
@@ -493,6 +514,27 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         {
             if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind()))
                 return CommitOrReadNack.Rejected;
+
+            if (executeBacklog() && txnId.is(SingleKey) && txnId.is(Key))
+            {
+                SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(scope.get(0).asRoutingKey());
+                if (safeCfk != null)
+                {
+                    CommandsForKey cfk = safeCfk.current();
+                    int i = cfk.unappliedCommittedIndexOf(executeAt);
+                    if (i < 0) i = -1 -i;
+                    else ++i;
+
+                    boolean executeBacklog = false;
+                    if (i < cfk.committedSize())
+                    {
+                        TxnInfo next = cfk.get(i);
+                        executeBacklog = next.is(STABLE) && next.is(SingleKey);
+                    }
+                    if (executeBacklog) safeCfk.overrideSink(node.executeBacklogSink());
+                    else safeCfk.overrideSink(null);
+                }
+            }
 
             return super.applyInternal(safeStore, safeCommand, participants);
         }

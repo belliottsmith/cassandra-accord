@@ -283,6 +283,14 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
             Coordination.traceStop(tracing, this);
     }
 
+    boolean trySetDone()
+    {
+        if (isDone)
+            return false;
+        setDone();
+        return true;
+    }
+
     private void invokeOnDone(Success success, Throwable failure)
     {
         setDone();
@@ -423,6 +431,16 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         BiConsumer<? super Result, Throwable> callback = this.callback;
         this.callback = null;
         Invariants.require(callback != null);
+        return callback;
+    }
+
+    protected BiConsumer<? super Result, Throwable> tryTakeCallback()
+    {
+        BiConsumer<? super Result, Throwable> callback = this.callback;
+        if (callback == null)
+            return null;
+
+        this.callback = null;
         return callback;
     }
 

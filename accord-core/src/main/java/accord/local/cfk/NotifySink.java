@@ -38,7 +38,7 @@ import static accord.local.LoadKeys.SYNC;
 import static accord.local.LoadKeysFor.WRITE;
 import static accord.primitives.Status.Truncated;
 
-interface NotifySink
+public interface NotifySink
 {
     void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc);
 

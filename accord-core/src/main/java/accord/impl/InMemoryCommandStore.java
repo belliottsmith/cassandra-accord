@@ -41,6 +41,7 @@ import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.local.cfk.NotifySink;
 import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -607,6 +608,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     {
         private final RoutingKey key;
         private final List<Snapshot> pendingSnapshots = new ArrayList<>();
+        NotifySink overrideSink;
 
         public GlobalCommandsForKey(RoutableKey key)
         {

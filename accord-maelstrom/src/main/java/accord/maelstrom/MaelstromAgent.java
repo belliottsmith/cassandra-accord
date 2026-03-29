@@ -210,4 +210,10 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     {
         return unit.convert(1L, SECONDS);
     }
+
+    @Override
+    public boolean reportRemoteSuccess(Result success)
+    {
+        return false;
+    }
 }

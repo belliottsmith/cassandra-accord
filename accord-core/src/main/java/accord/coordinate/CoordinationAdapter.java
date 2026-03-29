@@ -103,7 +103,7 @@ public interface CoordinationAdapter<R>
 
     class Adapters
     {
-        public static CoordinationAdapter<Result> standard()
+        public static TxnAdapter standard()
         {
             return TxnAdapter.STANDARD;
         }
@@ -283,6 +283,7 @@ public interface CoordinationAdapter<R>
                     return;
                 }
                 execute.start();
+
             }
 
             @Override
