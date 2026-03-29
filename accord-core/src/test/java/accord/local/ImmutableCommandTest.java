@@ -107,7 +107,7 @@ public class ImmutableCommandTest
         Node node = new Node(id, null, new MockTopologyService(ignore -> null, storeSupport.local.get()),
                              clock, new AtomicUniqueTime(clock),
                              () -> storeSupport.data, new ShardDistributor.EvenSplit(8, ignore -> new IntKey.Splitter()), agent, random.fork(), Scheduler.NEVER_RUN_SCHEDULED,
-                             SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new, ignore -> ignore2 -> new NoOpProgressLog(), DefaultLocalListeners.Factory::new,
+                             SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, time -> new DefaultTimeouts(time, Runnable::run), ignore -> ignore2 -> new NoOpProgressLog(), DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.Synchronized::new,
                              new CoordinationAdapter.DefaultFactory(),
                              DurableBefore.NOOP_PERSISTER,

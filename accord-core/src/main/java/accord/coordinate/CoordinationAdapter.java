@@ -53,7 +53,7 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
-import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
+import static accord.api.ProtocolModifiers.dataStoreRequiresUniqueHlcs;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Recovery;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecutePath.FAST;
@@ -103,16 +103,16 @@ public interface CoordinationAdapter<R>
 
     class Adapters
     {
-        public static CoordinationAdapter<Result> standard()
+        public static TxnAdapter standard()
         {
-            return TxnAdapter.STANDARD;
+            return ProtocolModifiers.sendMinimal() ? TxnAdapter.MINIMAL : TxnAdapter.MAXIMAL;
         }
 
         // note that by default the recovery adapter is only used for the initial recovery decision - if e.g. propose is initiated
         // then we revert back to standard adapter behaviour for later steps
         public static CoordinationAdapter<Result> recover()
         {
-            return TxnAdapter.RECOVERY;
+            return TxnAdapter.MAXIMAL;
         }
 
         public static SyncPointAdapter<SyncPoint> exclusiveSyncPoint()
@@ -127,8 +127,8 @@ public interface CoordinationAdapter<R>
 
         public static class TxnAdapter implements CoordinationAdapter<Result>
         {
-            static final TxnAdapter STANDARD = new TxnAdapter(Minimal);
-            static final TxnAdapter RECOVERY = new TxnAdapter(Maximal);
+            static final TxnAdapter MINIMAL = new TxnAdapter(Minimal);
+            static final TxnAdapter MAXIMAL = new TxnAdapter(Maximal);
 
             final Apply.Kind applyKind;
             public TxnAdapter(Apply.Kind applyKind)
@@ -248,7 +248,7 @@ public interface CoordinationAdapter<R>
                 {
                     Topologies all = execution(node, any, route, route, txnId, executeAt);
 
-                    if ((flags.all().contains(HAS_UNIQUE_HLC) || !requiresUniqueHlcs()) && txn.read().keys().isEmpty() && (path != FAST || !txnId.hasPrivilegedCoordinator()))
+                    if ((flags.all().contains(HAS_UNIQUE_HLC) || !dataStoreRequiresUniqueHlcs()) && txn.read().keys().isEmpty() && (path != FAST || !txnId.hasPrivilegedCoordinator()))
                     {
                         // TODO (expected): enable this optimisation with privileged coordinator to support faster blind writes
                         //   (only unsafe because we don't guarantee the stable record goes to the coordinator first)

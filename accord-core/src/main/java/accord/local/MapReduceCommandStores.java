@@ -18,6 +18,9 @@
 
 package accord.local;
 
+import javax.annotation.Nullable;
+
+import accord.api.Tracing;
 import accord.primitives.Participants;
 import accord.primitives.Unseekables;
 import accord.utils.MapReduce;
@@ -26,6 +29,7 @@ import accord.utils.async.AsyncChain;
 public abstract class MapReduceCommandStores<P extends Participants<?>, O> implements PreLoadContext, MapReduce<SafeCommandStore, O>
 {
     public final P scope;
+    private Tracing tracing;
 
     protected MapReduceCommandStores(P scope)
     {
@@ -35,7 +39,14 @@ public abstract class MapReduceCommandStores<P extends Participants<?>, O> imple
     public final O apply(SafeCommandStore safeStore)
     {
         if (refuses(safeStore))
+        {
+            if (tracing != null)
+                tracing.trace(safeStore.commandStore(), "Refused");
             return refuseInternal(safeStore);
+        }
+        if (tracing != null)
+            tracing.trace(safeStore.commandStore(), "Processing");
+
         return applyInternal(safeStore);
     }
 
@@ -44,7 +55,7 @@ public abstract class MapReduceCommandStores<P extends Participants<?>, O> imple
         return applyAsyncInternal(commandStore);
     }
 
-    AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
+    protected AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
     {
         return commandStore.chain(this, this);
     }
@@ -71,5 +82,15 @@ public abstract class MapReduceCommandStores<P extends Participants<?>, O> imple
     public Unseekables<?> keys()
     {
         return scope;
+    }
+
+    public void setTracing(Tracing tracing)
+    {
+        this.tracing = tracing;
+    }
+
+    public final @Nullable Tracing tracing()
+    {
+        return tracing;
     }
 }

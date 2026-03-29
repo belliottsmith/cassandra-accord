@@ -48,8 +48,8 @@ import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
-import static accord.api.ProtocolModifiers.Toggles.filterDuplicateDependenciesFromAcceptReply;
-import static accord.api.ProtocolModifiers.Toggles.syncPointsTrackUnstableMediumPathDependencies;
+import static accord.api.ProtocolModifiers.filterDuplicateDependenciesFromAcceptReply;
+import static accord.api.ProtocolModifiers.syncPointsTrackUnstableMediumPathDependencies;
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
@@ -84,7 +84,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
         NO_CALCULATE_DEPS,
 
         /**
-         * See {@link accord.api.ProtocolModifiers.Toggles#filterDuplicateDependenciesFromAcceptReply()}.
+         * See {@link accord.api.ProtocolModifiers#filterDuplicateDependenciesFromAcceptReply()}.
          */
         NO_FILTER_DEPS;
 
@@ -271,8 +271,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
     {
         // finished processing, null out large objects
         partialDeps = null;
-        if (reply != null || failure != null) super.acceptInternal(reply, failure);
-        else Invariants.require(isCancelled());
+        super.acceptInternal(reply, failure);
     }
 
     @Override

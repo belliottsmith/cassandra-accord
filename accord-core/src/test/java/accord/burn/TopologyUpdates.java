@@ -51,9 +51,7 @@ public class TopologyUpdates
         }
         pendingSyncTopologies.put(update.epoch(), nodeToNewRanges);
         return MessageTask.begin(originator, nodes, executors.apply(originator.id()), "TopologyNotify:" + update.epoch(), (node, from, onDone) -> {
-            long nodeEpoch = node.epoch();
-            if (nodeEpoch + 1 < update.epoch())
-                onDone.accept(false);
+            // used to callback with both false and true, but reports anyway... not clear what intention was, so just reporting success
             node.topology().reportTopology(update);
             onDone.accept(true);
         });

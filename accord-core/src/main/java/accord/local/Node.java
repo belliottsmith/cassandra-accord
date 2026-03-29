@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -36,6 +37,14 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.TopologyService;
+import accord.api.Tracing;
+import accord.coordinate.ExecuteTxn;
+import accord.impl.LocalDelivery;
+import accord.local.cfk.ExecuteTxnBacklog;
+import accord.messages.RemoteSuccess;
+import accord.messages.ReplyContext.NoReplyContext;
+import accord.primitives.Route;
+import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
@@ -80,6 +89,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.TxnId.Cardinality;
+import accord.topology.Topology;
 import accord.topology.TopologyException;
 import accord.topology.TopologyManager;
 import accord.topology.TopologyRetiredException;
@@ -95,10 +105,12 @@ import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import net.nicoulaj.compilecommand.annotations.Inline;
 
-import static accord.api.ProtocolModifiers.Toggles.defaultMediumPath;
-import static accord.api.ProtocolModifiers.Toggles.ensurePermitted;
-import static accord.api.ProtocolModifiers.Toggles.usePrivilegedCoordinator;
+import static accord.api.ProtocolModifiers.defaultMediumPath;
+import static accord.api.ProtocolModifiers.ensurePermitted;
+import static accord.api.ProtocolModifiers.permitLocalDelivery;
+import static accord.api.ProtocolModifiers.usePrivilegedCoordinator;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Txn.Kind.Read;
@@ -184,6 +196,8 @@ public class Node implements NodeCommandStoreService
     private final Coordinations coordinations = new Coordinations();
     private final AtomicLong nextCoordinationId = new AtomicLong();
 
+    private final ExecuteTxnBacklog executeBacklogSink;
+
     /**
      * Used to guard some operations that should normally operate on consistent information, but in rare cases may need to repeat work.
      * For simplicity we have a global stamp counter for this.
@@ -203,7 +217,6 @@ public class Node implements NodeCommandStoreService
     {
         this.id = id;
         this.scheduler = scheduler; // we set scheduler first so that e.g. requestTimeoutsFactory and progressLogFactory can take references to it
-        this.messageSink = messageSink;
         this.coordinationAdapters = coordinationAdapters;
         this.time = time;
         this.uniqueTime = uniqueTime;
@@ -219,6 +232,8 @@ public class Node implements NodeCommandStoreService
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
         this.topology = new TopologyManager(topologySorter, this, topologyService, time, timeouts);
         this.durabilityService = new DurabilityService(this);
+        this.executeBacklogSink = new ExecuteTxnBacklog(this);
+        this.messageSink = messageSink;
 
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forAllUnsafe(store -> store.progressLog.maybeNotify()), 1, SECONDS);
@@ -492,80 +507,124 @@ public class Node implements NodeCommandStoreService
         return time.elapsed(timeUnit);
     }
 
-    public void send(Topologies topologies, Request send)
+    @Override
+    public void reportLocalExecution(TxnId txnId, Route<?> route, Ballot ballot, @Nullable Timestamp applyAt, @Nullable Writes writes, Result result)
+    {
+        if (applyAt != null && writes != null)
+        {
+            class Finder implements Consumer<Coordination>
+            {
+                ExecuteTxn coordinator;
+
+                @Override
+                public void accept(Coordination coordination)
+                {
+                    if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+                        coordinator = (ExecuteTxn) coordination;
+                }
+            }
+            Finder finder = new Finder();
+            coordinations().forEach(txnId, finder);
+            if (finder.coordinator != null)
+                finder.coordinator.onLocalDirectSuccess(applyAt, writes, result);
+        }
+
+        if (Ballot.ZERO.equals(ballot) && !txnId.node.equals(id) && agent.reportRemoteSuccess(result))
+        {
+            if (applyAt != null && applyAt.epoch() == txnId.epoch())
+            {
+                ActiveEpoch epoch = topology().active().ifExists(txnId.epoch());
+                if (epoch != null)
+                {
+                    Topology.NodeInfo info = epoch.all().nodeInfo(txnId.node);
+                    if (info != null && info.ranges.containsAll(route))
+                        return;
+                }
+            }
+            send(txnId.node, new RemoteSuccess(txnId, result), null);
+        }
+        agent.replicaEvents().onLocalExecution(this, txnId, result);
+    }
+
+    public void send(Topologies topologies, Request send, @Nullable Tracing tracing)
     {
         SortedArrayList<Node.Id> nodes = topologies.nodes();
         for (int i = 0 ; i < nodes.size() ; ++i)
         {
             Node.Id to = nodes.get(i);
             if (!topologies.isFaulty(nodes.get(i)))
-                send(to, send);
+                send(to, send, tracing);
         }
     }
 
-    public void send(Topologies topologies, Function<Id, Request> requestFactory)
+    public void send(Topologies topologies, Function<Id, Request> requestFactory, @Nullable Tracing tracing)
     {
         SortedArrayList<Node.Id> nodes = topologies.nodes();
         for (int i = 0 ; i < nodes.size() ; ++i)
         {
             Node.Id to = nodes.get(i);
             if (!topologies.isFaulty(nodes.get(i)))
-                send(to, requestFactory.apply(to));
-        }
-    }
-
-    public <T> void send(Topologies topologies, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
-    {
-        SortedArrayList<Node.Id> nodes = topologies.nodes();
-        for (int i = 0 ; i < nodes.size() ; ++i)
-        {
-            Node.Id to = nodes.get(i);
-            if (!topologies.isFaulty(nodes.get(i)))
-                messageSink.send(to, send, executor, callback);
-        }
-    }
-
-    // TODO (required): callback must be invoked if for any reason send fails
-    public <T> void send(Topologies topologies, Function<Id, Request> requestFactory, @Nonnull AsyncExecutor executor, Callback<T> callback)
-    {
-        SortedArrayList<Node.Id> nodes = topologies.nodes();
-        for (int i = 0 ; i < nodes.size() ; ++i)
-        {
-            Node.Id to = nodes.get(i);
-            if (!topologies.isFaulty(nodes.get(i)))
-                messageSink.send(to, requestFactory.apply(to), executor, callback);
+                send(to, requestFactory.apply(to), tracing);
         }
     }
 
     // send to a specific node
-    public <T> Cancellable send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
+    public <T extends Reply> Cancellable send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback, @Nullable Tracing tracing)
     {
-        return messageSink.send(to, send, executor, callback);
+        maybeTraceRemote(to, send, tracing);
+        if (permitLocalDelivery() && to.equals(id)) return new LocalDelivery<>(this, callback).deliver(send);
+        else return messageSink.send(to, send, executor, callback);
     }
 
     // send to a specific node
-    public void send(Id to, Request send)
+    public void send(Id to, Request send, @Nullable Tracing tracing)
     {
-        messageSink.send(to, send);
+        maybeTrace(to, send, tracing);
+        if (to.equals(id)) send.process(this, to, new NoReplyContext(this, send));
+        else messageSink.send(to, send);
     }
 
-    public void reply(Id replyingToNode, ReplyContext replyContext, Reply send, Throwable failure)
+    private void maybeTrace(Node.Id to, Request send, @Nullable Tracing tracing)
+    {
+        if (tracing != null)
+        {
+            if (to.equals(id)) tracing.trace(null, "Delivering locally: %s", send);
+            else tracing.trace(null, "Sending to %s: %s", to, send);
+        }
+    }
+
+    public void maybeTraceRemote(Node.Id to, Request send, @Nullable Tracing tracing)
+    {
+        if (tracing != null  && send instanceof MapReduceCommandStores<?, ?> && (tracing = tracing.send()) != null)
+        {
+            if (to.equals(id)) tracing.trace(null, "Delivering locally: %s", send);
+            else tracing.trace(null, "Sending to %s: %s", to, send);
+            ((MapReduceCommandStores<?, ?>)send).setTracing(tracing);
+        }
+    }
+
+    public void reply(Id replyingToNode, ReplyContext replyContext, Reply success, Throwable failure, @Nullable Tracing tracing)
     {
         if (failure != null)
         {
+            if (tracing != null)
+                tracing.trace(null, "Replying: %s", failure);
             agent.onException(failure);
-            if (send != null)
-                agent().onException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, send)));
-            messageSink.replyWithUnknownFailure(replyingToNode, replyContext, failure);
-            return;
+            if (success != null)
+                agent().onException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, success)));
         }
-        else if (send == null)
+        else if (success == null)
         {
             NullPointerException e = new NullPointerException();
             agent.onException(e);
             throw e;
         }
-        messageSink.reply(replyingToNode, replyContext, send);
+        else
+        {
+            if (tracing != null)
+                tracing.trace(null, "Replying: %s", success);
+        }
+        replyContext.reply(replyingToNode, messageSink, success, failure);
     }
 
     public TxnId nextTxnIdWithDefaultFlags(Seekables<?, ?> keys, Txn.Kind kind, Domain domain)
@@ -755,7 +814,7 @@ public class Node implements NodeCommandStoreService
             }
             catch (Throwable t)
             {
-                reply(from, replyContext, null, t);
+                reply(from, replyContext, null, t, null);
             }
         });
     }
@@ -858,6 +917,11 @@ public class Node implements NodeCommandStoreService
     public Coordinations coordinations()
     {
         return coordinations;
+    }
+
+    public ExecuteTxnBacklog executeBacklogSink()
+    {
+        return executeBacklogSink;
     }
 
     public boolean isCoordinatingWithBallot(TxnId txnId, Ballot ballot)

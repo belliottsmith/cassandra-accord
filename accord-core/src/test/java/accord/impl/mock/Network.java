@@ -18,7 +18,10 @@
 
 package accord.impl.mock;
 
+import java.util.concurrent.TimeUnit;
+
 import accord.api.AsyncExecutor;
+import accord.api.MessageSink;
 import accord.local.Node.Id;
 import accord.messages.Callback;
 import accord.messages.Reply;
@@ -35,6 +38,18 @@ public interface Network
         public MessageId(long msgId)
         {
             this.msgId = msgId;
+        }
+
+        @Override
+        public long expiresAt(TimeUnit units)
+        {
+            return 0;
+        }
+
+        @Override
+        public void reply(Id to, MessageSink sink, Reply success, Throwable failure)
+        {
+            ((MessageSink.ReplySink)sink).reply(to, this, success, failure);
         }
     }
 

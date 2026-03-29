@@ -34,6 +34,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.ProgressLog;
+import accord.api.ProtocolModifiers;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.local.Command;
@@ -73,6 +74,7 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
 import static accord.utils.ArrayBuffers.cachedAny;
@@ -131,7 +133,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private final Object2ObjectHashMap<TxnId, PendingTask> pendingHome = new Object2ObjectHashMap<>();
 
     private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
-    private final Map<TxnId, Boolean> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
+    private final Map<TxnId, Boolean> debugDeleted = Invariants.debug() && Invariants.isParanoid() ? new Object2ObjectHashMap<>() : null;
 
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
     private static final RunInvoker[] EMPTY_AWAITING_EPOCH_BUFFER = new RunInvoker[0];
@@ -238,11 +240,16 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
         boolean recordWaiting = force || beforeSaveStatus != afterSaveStatus;
         boolean updatedDurability = force || !before.durability().isAtLeast(after.durability());
-        boolean updateWaiting = updatedDurability && afterSaveStatus.compareTo(after.durability().durablyUnblocked().unblockedFrom) < 0;
         boolean update = recordWaiting || updatedDurability || (afterRoute != null && beforeRoute == null);
         if (update)
         {
             TxnState state = get(txnId);
+            boolean updateWaiting = afterSaveStatus.compareTo(after.durability().durablyUnblocked().unblockedFrom) < 0;
+            if (updateWaiting)
+            {
+                if (after.durability.durablyUnblocked() != CanApply) updateWaiting = updatedDurability;
+                else updateWaiting = afterSaveStatus.compareTo(ReadyToExecute) >= 0 && beforeSaveStatus.compareTo(ReadyToExecute) < 0;
+            }
             if (updateWaiting)
             {
                 if (state == null)
@@ -258,6 +265,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     boolean isHomeDone(Command command)
     {
+        if (ProtocolModifiers.isHomeDoneIfNotDurable(command.saveStatus(), command.txnId(), command.executeAt(), command.partialTxn()))
+            return true;
         return command.durability().isDurableOrInvalidated() && isHomeDoneIfDurable(command);
     }
 
@@ -568,7 +577,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private int runBufferHomeCount() { return runBufferHomeIndex - runBufferHomeLastIndex; }
     private int runBufferTotalCount() { return runBufferWaitingCount() + runBufferHomeCount(); }
 
-    private void addToRunBuffer(RunInvoker readyToRun)
+    void addToRunBuffer(RunInvoker readyToRun)
     {
         if (runBufferWaitingEndIndex == runBufferHomeLastIndex)
         {
@@ -962,6 +971,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         return TinyEnumSet.contains(modeFlags, ModeFlag.HOME_EXPECTS_LOCALLY_APPLIED);
     }
 
+    @Override
     public void maybeNotify()
     {
         if (stopped)

@@ -54,7 +54,7 @@ import accord.utils.RelationMultiMap;
 import accord.utils.SortedArrays;
 import accord.utils.SortedList.MergeCursor;
 
-import static accord.api.ProtocolModifiers.Toggles.isTransitiveDependencyVisible;
+import static accord.api.ProtocolModifiers.isTransitiveDependencyVisible;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.LoadKeys.SYNC;
 import static accord.local.LoadKeysFor.WRITE;
@@ -161,7 +161,8 @@ class Updating
         if (testParanoia(SUPERLINEAR, NONE, LOW))
             validateMissing(newById, additions, additionCount, curInfo, newInfo, witnessedBy);
 
-        int newMinUndecidedById = updateMinUndecidedById(newInfo, insertPos, updatePos, cfk, byId, newById, additions, additionCount);
+        int newMinUndecidedManagedById = updateMinUndecidedById(true, newInfo, insertPos, updatePos, cfk, byId, newById, additions, additionCount);
+        int newMinUndecidedById = updateMinUndecidedById(false, newInfo, insertPos, updatePos, cfk, byId, newById, additions, additionCount);
         // we don't insert anything before prunedBeforeById (we LoadPruned instead), so we can simply bump it by 0 or 1
         int newPrunedBeforeById = advanceByIdIndex(cfk.prunedBeforeById, insertPos, updatePos);
         Invariants.paranoid(cfk.prunedBeforeById < 0 || newById[newPrunedBeforeById].equals(byId[cfk.prunedBeforeById]));
@@ -169,7 +170,7 @@ class Updating
         long newMaxHlc = updateMaxUniqueHlc(cfk, newInfo, command);
 
         cachedTxnIds().forceDiscard(additions, additionAndPrunedCount);
-        return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
+        return LoadPruned.load(prunedIds, cfk.update(newById, newMinUndecidedManagedById, newMinUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo));
     }
 
     static int advanceByIdIndex(int curIndex, TxnInfo[] byId, int insertPos, int updatePos, TxnId[] additions, int additionCount)
@@ -213,9 +214,9 @@ class Updating
     }
 
     // TODO (expected): this method is a mess; clean it up.
-    static int updateMinUndecidedById(TxnInfo newInfo, int insertPos, int updatePos, CommandsForKey cfk, TxnInfo[] byId, TxnInfo[] newById, TxnId[] additions, int additionCount)
+    static int updateMinUndecidedById(boolean managed, TxnInfo newInfo, int insertPos, int updatePos, CommandsForKey cfk, TxnInfo[] byId, TxnInfo[] newById, TxnId[] additions, int additionCount)
     {
-        int curIndex = cfk.minUndecidedById;
+        int curIndex = managed ? cfk.minUndecidedManagedById : cfk.minUndecidedUnmanagedById;
         int additionsBeforeOldUndecided = additionCount;
         TxnInfo cur = null;
         if (curIndex >= 0)
@@ -233,14 +234,14 @@ class Updating
         for (int i = 0 ; i < additionsBeforeOldUndecided ; ++i)
         {
             TxnId addition = additions[i];
-            if (!cfk.mayExecute(addition) || cfk.isUnready(addition))
+            if (managed != cfk.mayExecute(addition) || cfk.isUnready(addition))
                 continue;
 
             min = addition;
             break;
         }
 
-        if ((min == null || min.compareTo(newInfo) > 0) && newInfo.compareTo(COMMITTED) < 0 && cfk.mayExecute(newInfo) && !cfk.isUnready(newInfo))
+        if ((min == null || min.compareTo(newInfo) > 0) && newInfo.compareTo(COMMITTED) < 0 && (managed == cfk.mayExecute(newInfo)) && !cfk.isUnready(newInfo))
             min = newInfo;
 
         if (min != null && cur != null && cur.compareTo(min) < 0)
@@ -251,7 +252,7 @@ class Updating
 
         int newIndex = curIndex;
         if (min == null && insertPos == newIndex)
-            newIndex = nextUndecided(newById, insertPos + 1, cfk);
+            newIndex = nextUndecided(managed, newById, insertPos + 1, cfk);
         else if (min == null && newIndex >= 0)
             newIndex += additionsBeforeOldUndecided;
         else if (min == newInfo)
@@ -306,14 +307,14 @@ class Updating
         deps.find(cfk.redundantBefore());
 
         boolean durablyCommitted = command.durability().isDurablyCommitted();
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, plainTxnId, newStatus, mayExecute, durablyCommitted, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
+        return computeInfoAndAdditions(cfk.byId, cfk.minUndecidedById(), insertPos, updatePos, plainTxnId, newStatus, mayExecute, durablyCommitted, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
     }
 
     /**
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, boolean durablyCommitted, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int minUndecidedById, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, boolean durablyCommitted, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -330,7 +331,18 @@ class Updating
                 depsKnownBeforePos = -1 - depsKnownBeforePos;
         }
 
-        int txnIdsIndex = 0;
+        int txnIdsIndex;
+        if (deps.hasCur())
+        {
+            txnIdsIndex = Arrays.binarySearch(byId, 0, minUndecidedById < 0 ? byId.length : minUndecidedById, deps.cur());
+            if (txnIdsIndex < 0)
+                txnIdsIndex = -1 - txnIdsIndex;
+        }
+        else
+        {
+            txnIdsIndex = minUndecidedById < 0 ? byId.length : minUndecidedById;
+        }
+
         while (txnIdsIndex < byId.length && deps.hasCur())
         {
             TxnInfo t = byId[txnIdsIndex];
@@ -440,7 +452,8 @@ class Updating
         TxnInfo[] newCommittedByExecuteAt = updateCommittedByExecuteAt(cfk, committedByExecuteAtUpdatePos, newInfo);
         int newMaxAppliedWriteByExecuteAt = updateMaxAppliedWriteByExecuteAt(cfk, committedByExecuteAtUpdatePos, newInfo, newCommittedByExecuteAt);
 
-        int newMinUndecidedById = cfk.minUndecidedById;
+        int newMinUndecidedManagedById = cfk.minUndecidedManagedById;
+        int newMinUndecidedUnmanagedById = cfk.minUndecidedUnmanagedById;
         TxnInfo[] byId = cfk.byId;
         TxnInfo[] newById;
         if (curInfo == null)
@@ -453,27 +466,39 @@ class Updating
             {
                 if (newInfo.compareTo(COMMITTED) >= 0)
                 {
-                    if (newMinUndecidedById < 0 || pos <= newMinUndecidedById)
+                    if (pos <= newMinUndecidedManagedById)
                     {
-                        if (pos < newMinUndecidedById) ++newMinUndecidedById;
-                        else newMinUndecidedById = nextUndecided(newById, pos + 1, cfk);
+                        if (pos < newMinUndecidedManagedById) ++newMinUndecidedManagedById;
+                        else newMinUndecidedManagedById = nextUndecided(true, newById, pos + 1, cfk);
                     }
                 }
                 else
                 {
-                    if (newMinUndecidedById < 0 || pos < newMinUndecidedById)
-                        newMinUndecidedById = pos;
+                    if (newMinUndecidedManagedById < 0 || pos < newMinUndecidedManagedById)
+                        newMinUndecidedManagedById = pos;
+                }
+                if (pos <= newMinUndecidedUnmanagedById)
+                    ++newMinUndecidedUnmanagedById;
+            }
+            else
+            {
+                if (pos <= newMinUndecidedManagedById)
+                    ++newMinUndecidedManagedById;
+                if (pos <= newMinUndecidedUnmanagedById)
+                {
+                    if (pos < newMinUndecidedUnmanagedById) ++newMinUndecidedUnmanagedById;
+                    else newMinUndecidedUnmanagedById = nextUndecided(false, newById, pos + 1, cfk);
                 }
             }
-            else if (pos <= newMinUndecidedById)
-                ++newMinUndecidedById;
         }
         else
         {
             newById = byId.clone();
             newById[pos] = newInfo;
-            if (pos == newMinUndecidedById && curInfo.compareTo(COMMITTED) < 0 && newInfo.compareTo(COMMITTED) >= 0)
-                newMinUndecidedById = nextUndecided(newById, pos + 1, cfk);
+            if (pos == newMinUndecidedManagedById && curInfo.compareTo(COMMITTED) < 0 && newInfo.compareTo(COMMITTED) >= 0)
+                newMinUndecidedManagedById = nextUndecided(true, newById, pos + 1, cfk);
+            if (pos == newMinUndecidedUnmanagedById && curInfo.compareTo(COMMITTED) < 0 && newInfo.compareTo(COMMITTED) >= 0)
+                newMinUndecidedUnmanagedById = nextUndecided(false, newById, pos + 1, cfk);
         }
 
         if (curInfo != null && curInfo.compareTo(COMMITTED) < 0 && newInfo.compareTo(COMMITTED) >= 0)
@@ -498,7 +523,7 @@ class Updating
         int newMaxAppliedUnreadyWriteById = updateMaxAppliedUnreadyWriteById(newInfo, pos, curInfo == null, cfk, byId, NO_INFOS, 0);
 
         long newMaxHlc = updateMaxUniqueHlc(cfk, newInfo, command);
-        return cfk.update(newById, newMinUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
+        return cfk.update(newById, newMinUndecidedManagedById, newMinUndecidedUnmanagedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, newMaxHlc, newLoadingPruned, newPrunedBeforeById, curInfo, newInfo);
     }
 
     /**
@@ -819,14 +844,14 @@ class Updating
         return appliedKind == Txn.Kind.Write ? appliedPos : cfk.maxAppliedWriteByExecuteAt;
     }
 
-    static int nextUndecided(TxnInfo[] infos, int pos, CommandsForKey cfk)
+    static int nextUndecided(boolean managed, TxnInfo[] infos, int pos, CommandsForKey cfk)
     {
         while (true)
         {
             if (pos == infos.length)
                 return -1;
 
-            if (infos[pos].compareTo(COMMITTED) < 0 && cfk.mayExecute(infos[pos]))
+            if (infos[pos].compareTo(COMMITTED) < 0 && (!managed ^ cfk.mayExecute(infos[pos])))
                 return pos;
 
             ++pos;
@@ -951,7 +976,7 @@ class Updating
                 // so we may be missing an execution dependency, and we require that we are transitively committed
                 int waitingOnCommit = Arrays.binarySearch(byId, txnIds.get(toIndex - 1));
                 if (waitingOnCommit < 0) waitingOnCommit = -1 - waitingOnCommit;
-                if (cfk.minUndecidedById >= 0 && cfk.minUndecidedById < waitingOnCommit)
+                if (cfk.minUndecidedManagedById >= 0 && cfk.minUndecidedManagedById < waitingOnCommit)
                     readyToApply = waitingToApply = false;
             }
 
@@ -1059,7 +1084,8 @@ class Updating
             {
                 if (newById == null) newById = byId;
                 TxnInfo[] newCommittedByExecuteAt = cfk.committedByExecuteAt;
-                int newMinUndecidedById = cfk.minUndecidedById;
+                int newMinUndecidedManagedById = cfk.minUndecidedManagedById;
+                int newMinUndecidedUnmanagedById = cfk.minUndecidedUnmanagedById;
                 int newMaxAppliedUnreadyWriteById = cfk.maxAppliedUnreadyWriteById;
                 Object[] newLoadingPruned = cfk.loadingPruned;
                 TxnId[] prunedIds = NO_TXNIDS;
@@ -1081,17 +1107,32 @@ class Updating
                         missingCount -= prunedIndex;
                         System.arraycopy(missing, prunedIndex, missing, 0, missingCount);
                         removeNonIdentityFlags(missing, missingCount);
-                        int minUndecidedMissingIndex = 0;
-                        while (minUndecidedMissingIndex < missingCount && !cfk.mayExecute(missing[minUndecidedMissingIndex]))
-                            ++minUndecidedMissingIndex;
-                        TxnId minUndecidedMissing = minUndecidedMissingIndex == missingCount ? null : missing[minUndecidedMissingIndex];
-                        TxnId minUndecided = TxnId.nonNullOrMin(minUndecidedMissing, cfk.minUndecided());
+                        TxnId minUndecidedManaged, minUndecidedUnmanaged;
+                        {
+                            int minManagedIndex = 0, minUnmanagedIndex = 0;
+                            while (minManagedIndex < missingCount && !cfk.mayExecute(missing[minManagedIndex]))
+                                ++minManagedIndex;
+
+                            if (minManagedIndex == 0)
+                            {
+                                do { ++minUnmanagedIndex; }
+                                while (minUnmanagedIndex < missingCount && cfk.mayExecute(missing[minUnmanagedIndex]));
+                            }
+
+                            TxnId minManaged = minManagedIndex == missingCount ? null : missing[minManagedIndex];
+                            TxnId minUnmanaged = minUnmanagedIndex == missingCount ? null : missing[minUnmanagedIndex];
+
+                            minUndecidedManaged = TxnId.nonNullOrMin(minManaged, cfk.minUndecidedManaged());
+                            minUndecidedUnmanaged = TxnId.nonNullOrMin(minUnmanaged, cfk.minUndecidedUnmanaged());
+                        }
                         TxnInfo[] copyById = newById;
                         newById = new TxnInfo[byId.length + missingCount];
                         newCommittedByExecuteAt = insertAdditionsOnly(copyById, cfk.committedByExecuteAt, newById, missing, missingCount, cfk.bounds, waitingTxnId);
                         // we can safely use missing[prunedIndex] here because we only fill missing with transactions for which we manage execution
-                        if (minUndecided != null)
-                            newMinUndecidedById = Arrays.binarySearch(newById, minUndecided);
+                        if (minUndecidedManaged != null)
+                            newMinUndecidedManagedById = Arrays.binarySearch(newById, minUndecidedManaged);
+                        if (minUndecidedUnmanaged != null)
+                            newMinUndecidedUnmanagedById = Arrays.binarySearch(newById, minUndecidedUnmanaged);
                         newMaxAppliedUnreadyWriteById = advanceByIdIndex(newMaxAppliedUnreadyWriteById, byId, Integer.MAX_VALUE, false, missing, missingCount);
                     }
                 }
@@ -1119,7 +1160,7 @@ class Updating
                 {
                     int prunedBeforeById = cfk.prunedBeforeById;
                     Invariants.require(prunedBeforeById < 0 || newById[prunedBeforeById].equals(cfk.prunedBefore()));
-                    newCfk = new CommandsForKey(cfk.key(), cfk.bounds, newById, newMinUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged, true);
+                    newCfk = new CommandsForKey(cfk.key(), cfk.bounds, newById, newMinUndecidedManagedById, newMinUndecidedUnmanagedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, cfk.maxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, newLoadingPruned, prunedBeforeById, newUnmanaged, true);
                 }
 
                 CommandsForKeyUpdate result = newCfk;

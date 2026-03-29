@@ -22,59 +22,130 @@ import accord.primitives.Routables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.BTreeReducingRangeMap;
+import accord.utils.Invariants;
 import accord.utils.btree.ReducingBTree;
+
+import static accord.primitives.Timestamp.Flag.REJECTED;
 
 // TODO (expected): track read/write conflicts separately
 public class MaxConflicts extends BTreeReducingRangeMap<MaxConflicts.Entry>
 {
     public static class Entry extends ReducingBTree.Entry<Entry>
     {
-        public final Timestamp any, write;
-        public Entry(RoutingKey start, RoutingKey end, Timestamp any, Timestamp write)
+        public final Timestamp any, write, reject;
+
+        private Entry(RoutingKey start, RoutingKey end, Timestamp any, Timestamp write, Timestamp reject)
         {
             super(start, end);
+            if (Invariants.isParanoid())
+            {
+                Invariants.require(!any.hasNonIdentityFlags());
+                Invariants.require(!write.hasNonIdentityFlags());
+            }
             this.any = any;
             this.write = write;
+            this.reject = reject;
         }
 
-        public Entry(Timestamp any, Timestamp write)
+        private Entry(Timestamp any, Timestamp write, Timestamp reject)
         {
             super(null, null, UnsafeMarker.NULLS);
+            if (Invariants.isParanoid())
+            {
+                Invariants.require(!any.hasNonIdentityFlags());
+                Invariants.require(!write.hasNonIdentityFlags());
+            }
             this.any = any;
             this.write = write;
+            this.reject = reject;
+        }
+
+        public static Entry create(Timestamp any, Timestamp write, Timestamp reject)
+        {
+            if (any == write)
+            {
+                any = write = ensureNoFlags(any);
+            }
+            else
+            {
+                any = ensureNoFlags(any);
+                write = ensureNoFlags(write);
+            }
+            return new Entry(any, write, reject);
+        }
+
+        public static Entry create(RoutingKey start, RoutingKey end, Timestamp any, Timestamp write, Timestamp reject)
+        {
+            if (any == write)
+            {
+                any = write = ensureNoFlags(any);
+            }
+            else
+            {
+                any = ensureNoFlags(any);
+                write = ensureNoFlags(write);
+            }
+            return new Entry(start, end, any, write, reject);
+        }
+
+        private static Timestamp ensureNoFlags(Timestamp ts)
+        {
+            if (ts.hasNonIdentityFlags())
+                return ts.withoutNonIdentityFlags().next();
+            return ts;
         }
 
         @Override
         public boolean equalsIgnoreRange(Entry that)
         {
-            return this.any.equals(that.any) && this.write.equals(that.write);
+            return this.any.equals(that.any) && this.write.equals(that.write) && this.reject.equals(that.reject);
         }
 
         @Override
         public Entry with(RoutingKey start, RoutingKey end)
         {
-            return new Entry(start, end, any, write);
+            return new Entry(start, end, any, write, reject);
         }
 
-        public Timestamp mergeMax(Timestamp atLeast)
+        public Timestamp get(Timestamp atLeast, TxnId txnId)
         {
-            return Timestamp.mergeMax(atLeast, any);
+            return get(reject, any, atLeast, txnId);
         }
 
-        public Timestamp mergeMaxWrite(Timestamp atLeast)
+        public Timestamp getWrite(Timestamp atLeast, TxnId txnId)
         {
-            return Timestamp.mergeMax(atLeast, write);
+            return get(reject, write, atLeast, txnId);
+        }
+
+        private static Timestamp get(Timestamp reject, Timestamp conflict, Timestamp atLeast, TxnId txnId)
+        {
+            if (rejects(reject, txnId))
+                atLeast = atLeast.addFlag(REJECTED);
+
+            if (atLeast.compareSimultaneousEpochAndHlc(conflict) >= 0)
+                return atLeast;
+
+            Timestamp result = Timestamp.mergeMax(atLeast, conflict);
+            if (atLeast.is(REJECTED))
+                result = result.addFlag(REJECTED);
+            return result;
+        }
+
+        private static boolean rejects(Timestamp rejectIfBefore, TxnId test)
+        {
+            return rejectIfBefore.compareSimultaneousEpochAndHlc(test) >= 0;
         }
 
         public static Entry reduce(RoutingKey start, RoutingKey end, Entry a, Entry b)
         {
             Timestamp any = Timestamp.mergeMax(a.any, b.any);
             Timestamp write = Timestamp.mergeMax(a.write, b.write);
-            if (any == a.any && write == a.write && a.equalsRange(start, end))
+            Timestamp reject = Timestamp.mergeMax(a.reject, b.reject);
+            if (any == a.any && write == a.write && reject == a.reject && a.equalsRange(start, end))
                 return a;
-            if (any.equals(b.any) && write.equals(b.write) && b.equalsRange(start, end))
+            if (any.equals(b.any) && write.equals(b.write) && reject.equals(b.reject) && b.equalsRange(start, end))
                 return b;
-            return new Entry(start, end, any, write);
+            return new Entry(start, end, any, write, reject);
         }
     }
     public static final MaxConflicts EMPTY = new MaxConflicts();
@@ -91,30 +162,40 @@ public class MaxConflicts extends BTreeReducingRangeMap<MaxConflicts.Entry>
 
     Timestamp get(TxnId txnId, Routables<?> keysOrRanges)
     {
-        return txnId.isSomeRead() ? getMaxWrite(keysOrRanges) : getMax(keysOrRanges);
+        return txnId.isSomeRead() ? getWrite(txnId, keysOrRanges) : getAny(txnId, keysOrRanges);
     }
 
-    Timestamp getMaxWrite(Routables<?> keysOrRanges)
+    Timestamp getWrite(TxnId txnId, Routables<?> keysOrRanges)
     {
-        return foldl(keysOrRanges, Entry::mergeMaxWrite, Timestamp.NONE);
+        return foldl(keysOrRanges, Entry::getWrite, Timestamp.NONE, txnId);
     }
 
-    Timestamp getMax(Routables<?> keysOrRanges)
+    Timestamp getAny(TxnId txnId, Routables<?> keysOrRanges)
     {
-        return foldl(keysOrRanges, Entry::mergeMax, Timestamp.NONE);
+        return foldl(keysOrRanges, Entry::get, Timestamp.NONE, txnId);
     }
 
     public MaxConflicts update(TxnId txnId, Routables<?> keysOrRanges, Timestamp executeAt)
     {
-        return update(keysOrRanges, executeAt, txnId.isSomeRead() ? Timestamp.NONE : executeAt);
+        return update(keysOrRanges, executeAt, txnId.isSomeRead() ? Timestamp.NONE : executeAt, Timestamp.NONE);
     }
 
-    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp all, Timestamp write)
+    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp any, Timestamp write)
+    {
+        return update(keysOrRanges, any, write, Timestamp.NONE);
+    }
+
+    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp any, Timestamp write, Timestamp reject)
     {
         // note: we use mergeMax to ensure we take the maximum epoch and hlc independently from any conflict
         //  this is particularly essential for propagating unique HLCs, so that bootstrap recipients don't
         //  begin serving reads too early
-        return add(this, keysOrRanges, new Entry(all, write), Entry::reduce, MaxConflicts::new);
+        return add(this, keysOrRanges, Entry.create(any, write, reject), Entry::reduce, MaxConflicts::new);
+    }
+
+    public MaxConflicts with(MaxConflicts that)
+    {
+        return merge(this, that, Entry::reduce, MaxConflicts::new);
     }
 
     public static class Builder extends BTreeReducingRangeMap.Builder<Entry, MaxConflicts>

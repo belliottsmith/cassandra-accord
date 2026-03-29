@@ -19,8 +19,10 @@
 package accord.api;
 
 import accord.local.Command;
+import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
+import accord.primitives.TxnId;
 
 public interface ReplicaEventListener
 {
@@ -46,6 +48,8 @@ public interface ReplicaEventListener
     default void onPreApplied(SafeCommandStore safeStore, Command cmd) {}
     // startedApplyAt may be less than zero, indicating it has not been populated
     default void onApplied(SafeCommandStore safeStore, Command cmd) {}
+
+    default void onLocalExecution(Node node, TxnId txnId, Result result) {}
 
     ReplicaEventListener NOOP = new ReplicaEventListener()
     {

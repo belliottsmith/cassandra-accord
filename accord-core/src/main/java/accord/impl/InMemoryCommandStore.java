@@ -41,6 +41,7 @@ import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.local.cfk.NotifySink;
 import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
@@ -71,7 +72,6 @@ import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
 import accord.local.PreLoadContext.Empty;
 import accord.local.RedundantBefore;
-import accord.local.RejectBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
@@ -88,8 +88,8 @@ import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import org.agrona.collections.ObjectHashSet;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
-import static accord.api.ProtocolModifiers.RangeSpec.isStartInclusive;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
+import static accord.api.ProtocolModifiers.isRangeStartInclusive;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.LoadKeys.NONE;
 import static accord.local.LoadKeysFor.RECOVERY;
@@ -378,7 +378,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         {
             if (added.valueAt(i) != null)
             {
-                commandsForKey.subMap(added.startAt(i), isStartInclusive(), added.startAt(i + 1), isEndInclusive()).forEach((forKey, forValue) -> {
+                commandsForKey.subMap(added.startAt(i), isRangeStartInclusive(), added.startAt(i + 1), isRangeEndInclusive()).forEach((forKey, forValue) -> {
                     if (!forValue.isEmpty())
                     {
                         InMemorySafeCommandsForKey safeCfk = forValue.createSafeReference();
@@ -607,6 +607,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     {
         private final RoutingKey key;
         private final List<Snapshot> pendingSnapshots = new ArrayList<>();
+        NotifySink overrideSink;
 
         public GlobalCommandsForKey(RoutableKey key)
         {
@@ -1230,7 +1231,6 @@ public abstract class InMemoryCommandStore extends CommandStore
         commandsForKey.clear();
         commandsForRanges.clear();
         progressLog.clear();
-        unsafeSetRejectBefore(RejectBefore.EMPTY);
         hasResumedBootstraps = false;
     }
 

@@ -21,6 +21,7 @@ package accord.impl;
 import accord.api.RoutingKey;
 import accord.impl.InMemoryCommandStore.GlobalCommandsForKey;
 import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.NotifySink;
 import accord.local.cfk.SafeCommandsForKey;
 
 public class InMemorySafeCommandsForKey extends SafeCommandsForKey
@@ -44,6 +45,18 @@ public class InMemorySafeCommandsForKey extends SafeCommandsForKey
     protected void set(CommandsForKey update)
     {
         global.value(update);
+    }
+
+    @Override
+    public void overrideSink(NotifySink overrideSink)
+    {
+        global.overrideSink = overrideSink;
+    }
+
+    @Override
+    public NotifySink overrideSink()
+    {
+        return global.overrideSink;
     }
 
     public void invalidate()

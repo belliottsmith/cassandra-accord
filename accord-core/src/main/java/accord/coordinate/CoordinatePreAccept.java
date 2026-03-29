@@ -95,8 +95,10 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
             case NoChange:
                 break;
             case Failed:
-                proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, null);
+                // TODO (expected): can we improve reentrancy logic to avoid these surprising cases without losing benefits?
+                // finishOnFailure first as can trigger reentrancy via proposeAndCommitInvalidate triggering timeouts
                 finishOnFailure();
+                proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, tracing, null);
                 break;
             case Success:
                 onPreAcceptedOrNewEpoch();
@@ -137,6 +139,25 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
          * participating keys/ranges, so we propose that the transaction is invalidated in its coordination epoch
          */
         finishWithFailure(mismatch);
+    }
+
+    @Override
+    protected void finishWithFailure(Throwable failure)
+    {
+        if (failure instanceof Preempted)
+        {
+            // cannot expect to successfully propose invalidation, and no point as already being recovered
+            super.finishWithFailure(failure);
+        }
+        else
+        {
+            BiConsumer<?, Throwable> callback = finishAndTakeCallback();
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, tracing, (success, invalidated) -> {
+                failure.addSuppressed(invalidated);
+                callback.accept(null, failure);
+                node.agent().coordinatorEvents().onFailed(failure, txnId, scope, this);
+            });
+        }
     }
 
     @Override

@@ -46,6 +46,7 @@ import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
 import accord.local.LogUnavailableException;
+import accord.local.MinimalCommand;
 import accord.local.Node;
 import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
@@ -191,14 +192,14 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public MinimalCommand loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         CommandChange.Builder builder = loadMinimalInternal(MINIMAL, commandStoreId, txnId, redundantBefore, durableBefore);
         return builder == null ? null : builder.asMinimal();
     }
 
     @Override
-    public Command.MinimalWithDeps loadMinimalWithDeps(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public MinimalCommand.MinimalWithDeps loadMinimalWithDeps(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         CommandChange.Builder builder = loadMinimalInternal(MINIMAL_WITH_DEPS, commandStoreId, txnId, redundantBefore, durableBefore);
         return builder == null ? null : builder.asMinimalWithDeps();

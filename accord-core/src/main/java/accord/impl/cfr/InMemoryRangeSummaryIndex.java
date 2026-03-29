@@ -55,7 +55,7 @@ import accord.utils.btree.BTree;
 import accord.utils.btree.IntervalBTree;
 import accord.utils.btree.IntervalBTree.FastIntervalTreeBuilder;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
 import static accord.impl.cfr.ListenerEntry.LISTENER_ENTRIES;
 import static accord.impl.cfr.ListenerEntry.LISTENER_WITH_KEYS;
 import static accord.impl.cfr.ListenerEntry.LISTENER_WITH_RANGES;
@@ -81,7 +81,7 @@ public class InMemoryRangeSummaryIndex extends SemiSyncIntervalTree<IdEntry>
     public InMemoryRangeSummaryIndex()
     {
         super(ENTRIES);
-        Invariants.require(isEndInclusive(), "Need to implement range-exclusive IntervalComparators");
+        Invariants.require(isRangeEndInclusive(), "Need to implement range-exclusive IntervalComparators");
     }
 
     private boolean update(Command command)

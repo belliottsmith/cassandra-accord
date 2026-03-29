@@ -261,7 +261,7 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
             // TODO (desired, efficiency): commitInvalidate (and others) should skip the network for local applications,
             //  so we do not need to explicitly do so here before notifying the waiter
             Participants<?> commitTo = Participants.merge(route, (Participants) scope);
-            Commit.Invalidate.commitInvalidate(node, txnId, commitTo, txnId);
+            Commit.Invalidate.commitInvalidate(node, txnId, commitTo, txnId, tracing);
             commitInvalidateLocal(commitTo, reportTo.refine(txnId, null, commitTo), callback);
         }
         catch (Throwable t)

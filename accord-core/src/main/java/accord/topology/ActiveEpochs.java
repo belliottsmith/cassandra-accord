@@ -38,7 +38,6 @@ import accord.api.ProtocolModifiers;
 import accord.api.VisibleForImplementation;
 import accord.local.Node;
 import accord.primitives.EpochSupplier;
-import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.RoutableKey;
 import accord.primitives.Routables;
@@ -113,6 +112,11 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
     public boolean isEmpty()
     {
         return epochs.length == 0;
+    }
+
+    public int size()
+    {
+        return epochs.length;
     }
 
     public long nextEpoch()
@@ -243,6 +247,11 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
         return epochs[index];
     }
 
+    public ActiveEpoch atIndex(int index)
+    {
+        return epochs[index];
+    }
+
     // caller is expected to have verified that epoch is known to this ActiveEpochs
     public ActiveEpoch getKnown(long epoch)
     {
@@ -356,11 +365,6 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
                 return withUnsyncedEpochs(select, minEpoch, maxEpoch, selectShards);
         }
 
-    }
-
-    public <U extends Participants<?>> @Nullable U unsyncedOnly(U select, long beforeEpoch)
-    {
-        return extra(select, 0, beforeEpoch, ActiveEpoch::quorumReady, (TopologyCollector.Simple.UnsyncedSelector<U>) TopologyCollector.Simple.UnsyncedSelector.INSTANCE);
     }
 
     public Topologies withUnsyncedEpochs(Unseekables<?> select, long minEpoch, long maxEpoch, SelectShards selectShards) throws TopologyException
@@ -510,40 +514,6 @@ public final class ActiveEpochs implements Iterable<ActiveEpoch>
                 break;
 
             cur = epochs[i];
-        }
-
-        return collectors.multi(collector);
-    }
-
-    private <C, K extends Routables<?>, T, E extends Exception> T extra(K select, long minEpoch, long maxEpoch, Function<ActiveEpoch, Ranges> remove,
-                                                   TopologyCollector<C, K, T, E> collectors)
-    {
-        Invariants.requireArgument(minEpoch <= maxEpoch);
-
-        minEpoch = Math.max(minEpoch(), minEpoch);
-        maxEpoch = Math.min(maxEpoch, currentEpoch);
-        if (maxEpoch <= minEpoch)
-            return collectors.none();
-
-        ActiveEpoch cur = getKnown(maxEpoch);
-        select = (K) select.without(remove.apply(cur));
-        if (select.isEmpty())
-            return collectors.none();
-
-        int i = (int)(currentEpoch - maxEpoch);
-        int maxi = (int)(Math.min(1 + currentEpoch - minEpoch, epochs.length));
-        C collector = collectors.allocate(maxi - i);
-
-        while (!select.isEmpty())
-        {
-            collector = collectors.updateIfExists(collector, cur, select);
-            select = (K)select.without(cur.addedRanges);
-
-            if (++i == maxi)
-                break;
-
-            cur = epochs[i];
-            select = (K)select.without(remove.apply(cur));
         }
 
         return collectors.multi(collector);

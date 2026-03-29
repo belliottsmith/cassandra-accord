@@ -52,6 +52,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.TopologyException;
 import accord.topology.TopologyRetiredException;
+import accord.utils.async.Cancellable;
 
 import javax.annotation.Nullable;
 
@@ -172,39 +173,39 @@ public class ListRequest implements Request
                 listener.onClientAction(MessageListener.ClientAction.FAILURE, node.id(), id, fail);
                 if (id.kind() == Txn.Kind.EphemeralRead)
                 {
-                    node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, id), null);
+                    node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, id), null, null);
                 }
                 else if (fail instanceof CoordinationFailed)
                 {
                     RoutingKey homeKey = ((CoordinationFailed) fail).homeKey();
                     if (fail instanceof Invalidated)
                     {
-                        node.reply(client, replyContext, ListResult.invalidated(client, ((Packet)replyContext).requestId, id), null);
+                        node.reply(client, replyContext, ListResult.invalidated(client, ((Packet)replyContext).requestId, id), null, null);
                         return;
                     }
 
-                    node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
+                    node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null, null);
                     node.scheduler().once(() -> checkOnResult(homeKey, id, 0, null), 1L, TimeUnit.MINUTES);
                 }
                 else if (fail instanceof SimulatedFault)
                 {
-                    node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
+                    node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null, null);
                     node.scheduler().once(() -> checkOnResult(null, id, 0, null), 1L, TimeUnit.MINUTES);
                 }
                 else if (fail instanceof CancellationException)
                 {
-                    node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null);
+                    node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, id), null, null);
                     node.scheduler().once(() -> checkOnResult(null, id, 0, null), 1L, TimeUnit.MINUTES);
                 }
                 else
                 {
-                    node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, id), null);
+                    node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, id), null, null);
                 }
             }
             else if (success != null)
             {
                 listener.onClientAction(MessageListener.ClientAction.SUCCESS, node.id(), id, success);
-                node.reply(client, replyContext, (ListResult) success, null);
+                node.reply(client, replyContext, (ListResult) success, null, null);
             }
             else
             {
@@ -223,7 +224,7 @@ public class ListRequest implements Request
 
             if (txnId.epoch() < node.topology().minEpoch())
             {
-                node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null);
+                node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null, null);
                 node.agent().onException(new TopologyRetiredException(txnId.epoch(), node.topology().minEpoch()));
                 return;
             }
@@ -245,7 +246,7 @@ public class ListRequest implements Request
                 {
                     if (f instanceof Truncated)
                     {
-                        node.reply(client, replyContext, ListResult.truncated(client, ((Packet)replyContext).requestId, txnId), null);
+                        node.reply(client, replyContext, ListResult.truncated(client, ((Packet)replyContext).requestId, txnId), null, null);
                         return;
                     }
                     // some arbitrarily large limit to attempts
@@ -256,7 +257,7 @@ public class ListRequest implements Request
                     }
                     else
                     {
-                        node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null);
+                        node.reply(client, replyContext, ListResult.failure(client, ((Packet)replyContext).requestId, txnId), null, null);
                         node.agent().onException(f);
                     }
                     return;
@@ -264,26 +265,26 @@ public class ListRequest implements Request
                 switch (s.kind)
                 {
                     case Applied:
-                        node.reply(client, replyContext, new ListResult(RecoveryApplied, client, ((Packet)replyContext).requestId, txnId, s.result.readKeys, s.result.responseKeys, s.result.read, s.result.update), null);
+                        node.reply(client, replyContext, new ListResult(RecoveryApplied, client, ((Packet)replyContext).requestId, txnId, s.result.readKeys, s.result.responseKeys, s.result.read, s.result.update), null, null);
                         break;
                     case Truncated:
-                        node.reply(client, replyContext, ListResult.truncated(client, ((Packet)replyContext).requestId, txnId), null);
+                        node.reply(client, replyContext, ListResult.truncated(client, ((Packet)replyContext).requestId, txnId), null, null);
                         break;
                     case Invalidated:
-                        node.reply(client, replyContext, ListResult.invalidated(client, ((Packet)replyContext).requestId, txnId), null);
+                        node.reply(client, replyContext, ListResult.invalidated(client, ((Packet)replyContext).requestId, txnId), null, null);
                         break;
                     case Lost:
-                        node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, txnId), null);
+                        node.reply(client, replyContext, ListResult.lost(client, ((Packet)replyContext).requestId, txnId), null, null);
                         break;
                     case Other:
                         if (attempt < 100)
                         {
-                            node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, txnId), null);
-                            node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), retryDelay(attempt), TimeUnit.MINUTES);
+                            node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, txnId), null, null);
+                            node.scheduler().selfRecurring(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), retryDelay(attempt), TimeUnit.MINUTES);
                         }
                         else
                         {
-                            node.reply(client, replyContext, ListResult.other(client, ((Packet)replyContext).requestId, txnId), null);
+                            node.reply(client, replyContext, ListResult.other(client, ((Packet)replyContext).requestId, txnId), null, null);
                         }
                         break;
                     default:
@@ -314,7 +315,7 @@ public class ListRequest implements Request
     }
 
     @Override
-    public void process(Node node, Id client, ReplyContext replyContext)
+    public Cancellable process(Node node, Id client, ReplyContext replyContext)
     {
         if (id != null)
             throw illegalState("Called process multiple times");
@@ -322,6 +323,7 @@ public class ListRequest implements Request
         id = txnIdGen.apply(node, txn);
         listener.onClientAction(MessageListener.ClientAction.SUBMIT, node.id(), id, txn);
         node.coordinate(id, txn).begin(new ResultCallback(node, client, replyContext, listener, id, txn));
+        return null;
     }
 
     @Override

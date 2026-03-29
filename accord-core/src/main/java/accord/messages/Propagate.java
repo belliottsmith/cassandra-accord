@@ -484,7 +484,7 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
         Participants<?> staleOnlyTouches = staleTouches.without(staleOwnsOrMayExecute);
         Invariants.expect(txnId.awaitsPreviouslyOwned() || staleOnlyTouches.isEmpty(), "%s is SHARD_ONLY_APPLIED, so we expect it to have been filtered from StoreParticipants", staleOnlyTouches);
         // TODO (expected): if the above last ditch doesn't work, see if only the stale ranges can't apply and do some shenanigans to apply partially and move on
-        if (ProtocolModifiers.Toggles.markStaleIfCannotExecute(txnId))
+        if (ProtocolModifiers.markStaleIfCannotExecute(txnId))
         {
             if (tracing != null)
                 tracing.trace(safeStore.commandStore(), "Has participants %s that could not be fetched and the shard(s) have been marked universally durable. We have marked ourselves stale, and will apply the remaining ranges.", stale);

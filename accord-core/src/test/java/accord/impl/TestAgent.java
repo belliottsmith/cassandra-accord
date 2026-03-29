@@ -32,12 +32,11 @@ import accord.impl.mock.MockStore;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
-import accord.messages.ReplyContext;
+import accord.messages.MessageType;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
-import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -162,12 +161,6 @@ public class TestAgent implements Agent, OwnershipEventListener
     }
 
     @Override
-    public long maxConflictsPruneInterval()
-    {
-        return 0;
-    }
-
-    @Override
     public Txn emptySystemTxn(Txn.Kind kind, Domain domain)
     {
         return new Txn.InMemory(kind, domain == Domain.Key ? Keys.EMPTY : Ranges.EMPTY, MockStore.read(Keys.EMPTY), MockStore.QUERY, null);
@@ -222,21 +215,15 @@ public class TestAgent implements Agent, OwnershipEventListener
     }
 
     @Override
-    public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return clock.elapsed(unit) + unit.convert(100L, MICROSECONDS);
     }
 
     @Override
-    public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return clock.elapsed(unit) + unit.convert(1L, SECONDS);
-    }
-
-    @Override
-    public long expiresAt(ReplyContext replyContext, TimeUnit unit)
-    {
-        return -1;
     }
 
     @Override

@@ -33,13 +33,11 @@ import accord.local.SequentialAsyncExecutor;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
-import accord.messages.MessageType;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadOkWithFutureEpoch;
 import accord.messages.ReadData.ReadReply;
 import accord.messages.ReadEphemeralTxnData;
-import accord.messages.SafeCallback;
 import accord.messages.StableThenRead;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -52,11 +50,12 @@ import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
-import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
+import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
-import static accord.primitives.Status.Phase.Execute;
+import static accord.messages.MessageType.StandardMessage.READ_EPHEMERAL_REQ;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.topology.SelectShards.LIVE;
 import static accord.utils.Invariants.illegalState;
@@ -92,9 +91,9 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     protected void startOnceInitialised()
     {
         node.agent().coordinatorEvents().onExecuting(txnId, Ballot.ZERO, deps, EPHEMERAL);
-        if (permitLocalExecution() && tryIfUniversal(node.id()))
+        if (permitCoordinatorLocalExecution() && tryIfUniversal(node.id()))
         {
-            new LocalExecute(txnId, node.id()).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
+            new LocalExecute(txnId, node.id()).process(node, node.agent().selfExpiresAt(txnId, READ_EPHEMERAL_REQ, MICROSECONDS));
         }
         else
         {
@@ -105,7 +104,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     @Override
     public void contact(Id to)
     {
-        node.send(to, new ReadEphemeralTxnData(to, allTopologies, txnId, route, txn, deps, route, flags.get(to)), executor, this);
+        node.send(to, new ReadEphemeralTxnData(to, allTopologies, txnId, route, txn, deps, route, flags.get(to)), executor, this, tracing);
     }
 
     @Override
@@ -184,13 +183,11 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
 
     class LocalExecute extends ReadEphemeralTxnData
     {
-        private final SafeCallback<ReadReply> callback;
         private Timeouts.RegisteredTimeout slowTimeout;
 
         public LocalExecute(TxnId txnId, Node.Id self)
         {
             super(txnId, route, txn.intersecting(route, true), deps.intersecting(route), route, ExecuteEphemeralRead.this.flags.get(self));
-            this.callback = new SafeCallback<>(executor, ExecuteEphemeralRead.this);
         }
 
         @Override
@@ -207,11 +204,11 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
             if (reply != null && reply.kind == CommitOrReadNack.Kind.Waiting)
             {
                 // TODO (expected): share implementation with ExecuteTxn
-                long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
+                long slowAt = node.agent().selfSlowAt(txnId, READ_EPHEMERAL_REQ, MICROSECONDS);
                 slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
                 {
                     @Override public void timeout() { executor.executeMaybeImmediately(() -> {
-                        onSlowResponse(node.id());
+                        onSlow(node.id());
                         slowTimeout = null;
                     }); }
                     @Override public int stripe() { return txnId.hashCode(); }
@@ -233,7 +230,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
                 return false;
 
             // TODO (desired): if we fail to commit locally we can submit a slow/medium path request
-            callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
+            ExecuteEphemeralRead.this.onFailure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
             return true;
         }
 
@@ -246,21 +243,18 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
                 slowTimeout = null;
             }
             // TODO (expected): execute immediately if already on CommandStore
-            if (fail == null) callback.success(node.id(), reply);
-            else callback.failure(node.id(), fail);
+            if (fail == null) ExecuteEphemeralRead.this.onSuccess(node.id(), reply);
+            else ExecuteEphemeralRead.this.onFailure(node.id(), fail);
         }
 
         @Override
         public ReadType kind() { throw new UnsupportedOperationException(); }
-
-        @Override
-        public MessageType type() { throw new UnsupportedOperationException(); }
     }
 
     @Override
     public CoordinationKind kind()
     {
-        return CoordinationKind.Execute;
+        return Execute;
     }
 
     @Override

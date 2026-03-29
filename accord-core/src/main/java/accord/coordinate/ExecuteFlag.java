@@ -79,6 +79,7 @@ public enum ExecuteFlag
     public interface CoordinationFlags
     {
         boolean isReadyToExecute(Node.Id node);
+        boolean isAnyReadyToExecute();
         ExecuteFlags all();
 
         void setNoWait();
@@ -127,6 +128,12 @@ public enum ExecuteFlag
         }
 
         @Override
+        public boolean isAnyReadyToExecute()
+        {
+            return !isEmpty();
+        }
+
+        @Override
         public ExecuteFlags all()
         {
             return all;
@@ -161,6 +168,12 @@ public enum ExecuteFlag
         public boolean isReadyToExecute(Node.Id node)
         {
             return contains(node);
+        }
+
+        @Override
+        public boolean isAnyReadyToExecute()
+        {
+            return !isEmpty();
         }
 
         @Override

@@ -42,6 +42,7 @@ import accord.topology.Topology;
 import accord.utils.RandomSource;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 
 public class BurnTestTopologyService implements TopologyService, TopologyListener
 {
@@ -81,11 +82,12 @@ public class BurnTestTopologyService implements TopologyService, TopologyListene
         }
 
         @Override
-        public void process(Node on, Node.Id from, ReplyContext replyContext)
+        public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
         {
             ActiveEpoch e = on.topology().active().ifExists(epoch);
             Topology topology = e == null ? null : e.all();
-            on.reply(from, replyContext, new FetchTopologyReply(topology), null);
+            on.reply(from, replyContext, new FetchTopologyReply(topology), null, null);
+            return null;
         }
 
         @Override
@@ -146,7 +148,7 @@ public class BurnTestTopologyService implements TopologyService, TopologyListene
 
             int idx = randomSupplier.get().nextInt(candidates.size());
             Node.Id node = candidates.remove(idx);
-            originator().send(node, request, executor, this);
+            originator().send(node, request, executor, this, null);
         }
 
         @Override

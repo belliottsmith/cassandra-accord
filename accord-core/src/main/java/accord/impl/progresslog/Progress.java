@@ -48,10 +48,10 @@ public enum Progress
 
     private static final Progress[] lookup = values();
 
-    public static Progress forOrdinal(int ordinal)
+    public static Progress forId(int id)
     {
-        if (ordinal < 0 || ordinal > lookup.length)
-            throw new IndexOutOfBoundsException(ordinal);
-        return lookup[ordinal];
+        if (id < 0 || id > lookup.length)
+            throw new IndexOutOfBoundsException(id);
+        return lookup[id];
     }
 }

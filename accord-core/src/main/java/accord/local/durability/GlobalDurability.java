@@ -33,12 +33,13 @@ import accord.local.Node;
 import accord.messages.Callback;
 import accord.messages.GetDurableBefore;
 import accord.messages.GetDurableBefore.DurableBeforeReply;
+import accord.messages.Reply;
 import accord.messages.SetGloballyDurable;
 import accord.topology.Topology;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-public class GlobalDurability implements Callback<Object>
+public class GlobalDurability implements Callback<Reply>
 {
     private static final Logger logger = LoggerFactory.getLogger(GlobalDurability.class);
 
@@ -157,8 +158,8 @@ public class GlobalDurability implements Callback<Object>
                 inflight += 2;
             }
 
-            node.send(selectSendTo.apply(currentGlobalTopology), new SetGloballyDurable(node.durableBefore()), executor, this);
-            node.send(selectReadFrom.apply(currentGlobalTopology), new GetDurableBefore(), executor, this);
+            node.send(selectSendTo.apply(currentGlobalTopology), new SetGloballyDurable(node.durableBefore()), executor, this, null);
+            node.send(selectReadFrom.apply(currentGlobalTopology), new GetDurableBefore(), executor, this, null);
         }
         catch (Exception e)
         {
@@ -210,7 +211,7 @@ public class GlobalDurability implements Callback<Object>
     }
 
     @Override
-    public synchronized void onSuccess(Node.Id from, Object reply)
+    public synchronized void onSuccess(Node.Id from, Reply reply)
     {
         --inflight;
         if (reply instanceof DurableBeforeReply)

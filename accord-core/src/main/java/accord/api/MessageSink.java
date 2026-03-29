@@ -18,6 +18,7 @@
 
 package accord.api;
 
+import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Callback;
 import accord.messages.Reply;
@@ -33,14 +34,16 @@ public interface MessageSink
         return send(to, request, 1, executor, callback);
     }
     Cancellable send(Id to, Request request, int attempt, AsyncExecutor executor, Callback<?> callback);
-    void reply(Id replyingToNode, ReplyContext replyContext, Reply reply);
-    void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure);
 
-    class NoOpSink implements MessageSink
+    interface ReplySink extends MessageSink
+    {
+        void reply(Node.Id to, ReplyContext context, Reply success, Throwable failure);
+    }
+
+    class NoOpSink implements ReplySink
     {
         @Override public void send(Id to, Request request) {}
         @Override public Cancellable send(Id to, Request request, int attempt, AsyncExecutor executor, Callback<?> callback) { return null; }
-        @Override public void reply(Id replyingToNode, ReplyContext replyContext, Reply reply) {}
-        @Override public void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure) {}
+        @Override public void reply(Id to, ReplyContext context, Reply success, Throwable failure) {}
     }
 }

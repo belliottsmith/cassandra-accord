@@ -18,11 +18,18 @@
 
 package accord.coordinate;
 
+import java.util.function.BiConsumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+
+import javax.annotation.Nullable;
+
 import accord.api.Result;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.RequestStatus;
+import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SequentialAsyncExecutor;
@@ -57,14 +64,19 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     protected final Result result;
     protected final CoordinationFlags flags;
     // TODO (expected): track separate ALL and Quorum, so we can report Universal durability to permit faster GC
-    protected final QuorumTracker tracker;
+    protected final SimpleTracker<?> tracker;
     protected final Apply.Factory factory;
     protected final Apply.Kind applyKind;
     protected final boolean informDurableOnDone;
 
     protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind)
     {
-        super(node, executor, txnId, route, all.nodes(), node.agent());
+        this(node, executor, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags, informDurableOnDone, factory, applyKind, QuorumTracker::new, node.agent());
+    }
+
+    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind, Function<Topologies, SimpleTracker<?>> trackerFactory, BiConsumer<? super Void, Throwable> callback)
+    {
+        super(node, executor, txnId, route, all.nodes(), callback);
         this.ballot = ballot;
         this.sendTo = sendTo;
         this.txn = txn;
@@ -73,7 +85,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
         this.writes = writes;
         this.result = result;
         this.flags = flags;
-        this.tracker = new QuorumTracker(all);
+        this.tracker = trackerFactory.apply(all);
         this.factory = factory;
         this.informDurableOnDone = informDurableOnDone;
         this.applyKind = applyKind;
@@ -95,7 +107,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                     // but we make this explicit for the caller with informDurableOnDone
                     finishWithSuccess(null);
                     if (informDurableOnDone)
-                        InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, AllQuorums);
+                        InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, stableDeps, AllQuorums, tracing);
                 }
                 break;
             case RaceWithRecovery:
@@ -107,7 +119,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                 break;
             case Insufficient:
                 Invariants.expect(applyKind != Maximal, "Received Insufficient reply from %s, but already sent Maximal", from);
-                node.send(from, factory.create(Maximal, from, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
+                node.send(from, factory.create(Maximal, from, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)), tracing);
                 break;
 
             case InsufficientEpochs:
@@ -115,7 +127,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                 Topologies topologies = tracker.topologies();
                 try { topologies = node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), ALL); }
                 catch (TopologyException e) { node.agent().onException(e); }
-                node.send(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
+                node.send(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)), tracing);
                 break;
         }
     }
@@ -133,10 +145,22 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     protected void start()
     {
         node.agent().coordinatorEvents().onExecuted(txnId, ballot);
+        super.start();
+        contact();
+    }
+
+    void contact()
+    {
         // applyMinimal is used for transaction execution by the original coordinator so it's important to use
         // Node's Apply factory in case the factory has to do synchronous Apply.
-        super.start();
-        contact(to -> factory.create(applyKind, to, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(to)));
+        contact((Predicate<Id>) null);
+    }
+
+    void contact(@Nullable Predicate<Node.Id> include)
+    {
+        // applyMinimal is used for transaction execution by the original coordinator so it's important to use
+        // Node's Apply factory in case the factory has to do synchronous Apply.
+        contact(to -> factory.create(applyKind, to, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(to)), include);
     }
 
     @Override

@@ -825,7 +825,7 @@ public class Serialize
             {
                 int flags = ((globalFlags & HAS_BOUNDS_FLAGS_HEADER_BIT) == 0) ? RX_FLAGS : VIntCoding.readUnsignedVInt32(in);
                 Id node = (Id)nodeIds[VIntCoding.readUnsignedVInt32(in)];
-                bounds = bounds.withGcBeforeBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
+                bounds = bounds.withShardAppliedHlcBoundBeforeAtLeast(TxnId.fromValues(prevEpoch, prevHlc, flags, node));
             }
             if (0 != (globalFlags & HAS_BOOTSTRAPPED_AT_HEADER_BIT))
             {
@@ -836,7 +836,7 @@ public class Serialize
                 bounds = bounds.withReadyAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
             }
             if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
-                maxUniqueHlc = bounds.gcBefore.hlc() + VIntCoding.readVInt(in);
+                maxUniqueHlc = bounds.cleanCfkBefore().hlc() + VIntCoding.readVInt(in);
         }
         int prunedBeforeIndex = VIntCoding.readUnsignedVInt32(in) - 1;
 

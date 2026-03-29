@@ -18,9 +18,12 @@
 
 package accord.impl;
 
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.IntFunction;
 import java.util.function.Predicate;
@@ -51,7 +54,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
             @Override
             public void cancel()
             {
-                tryCancel(lock -> { lock.lock(); return true; });
+                tryCancel(AbstractTimeouts::lock);
             }
 
             protected void tryCancel()
@@ -113,19 +116,21 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
 
         private final ReentrantLock lock = new ReentrantLock();
         final TimeService time;
+        final Executor executor;
         final LogGroupTimers<AbstractRegistered> timeouts = new LogGroupTimers<>(TimeUnit.MICROSECONDS);
+        boolean scheduledNotify;
 
-        public Stripe(TimeService time)
+        public Stripe(TimeService time, Executor executor)
         {
             this.time = time;
+            this.executor = executor;
         }
 
         @Override
         public void run()
         {
             long now = time.recentElapsed(MICROSECONDS);
-            lock();
-            unlock(now);
+            notify(now, AbstractTimeouts::lock);
         }
 
         @Override
@@ -164,12 +169,34 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
 
         protected void unlock(long nowMicros)
         {
+            boolean notify = false;
+            try
+            {
+                if (!scheduledNotify && timeouts.shouldWake(nowMicros))
+                    scheduledNotify = notify = true;
+            }
+            finally
+            {
+                lock.unlock();
+            }
+
+            if (notify)
+            {
+                try { executor.execute(this); }
+                catch (RejectedExecutionException t) { notify(nowMicros, AbstractTimeouts::lock); }
+            }
+        }
+
+        private void notify(long nowMicros, Predicate<ReentrantLock> tryLock)
+        {
             int i = 0;
             BufferList<Expiring> expire = null;
             try
             {
+                if (!tryLock.test(lock)) return;
                 try
                 {
+                    scheduledNotify = false;
                     if (!timeouts.shouldWake(nowMicros))
                         return;
 
@@ -211,6 +238,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
                         }
                     }
                 }
+                throw t;
             }
             finally
             {
@@ -220,22 +248,24 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
         }
     }
 
+    final Executor executor;
     final TimeService time;
     final S[] stripes;
 
-    protected AbstractTimeouts(TimeService time, IntFunction<S[]> arrayAllocator, Function<TimeService, S> stripeFactory)
+    protected AbstractTimeouts(TimeService time, Executor executor, IntFunction<S[]> arrayAllocator, BiFunction<TimeService, Executor, S> stripeFactory)
     {
-        this(time, 8, arrayAllocator, stripeFactory);
+        this(time, executor, 8, arrayAllocator, stripeFactory);
     }
 
-    public AbstractTimeouts(TimeService time, int stripeCount, IntFunction<S[]> allocator, Function<TimeService, S> stripeFactory)
+    public AbstractTimeouts(TimeService time, Executor executor, int stripeCount, IntFunction<S[]> allocator, BiFunction<TimeService, Executor, S> stripeFactory)
     {
         if (stripeCount > 1024)
             throw new IllegalArgumentException("Far too many stripes requested");
         this.stripes = allocator.apply(stripeCount);
         for (int i = 0 ; i < stripes.length ; ++i)
-            stripes[i] = stripeFactory.apply(time);
+            stripes[i] = stripeFactory.apply(time, executor);
         this.time = time;
+        this.executor = executor;
     }
 
     @Override
@@ -268,5 +298,12 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
             if (stripe.timeouts.shouldWake(nowMicros) && stripe.tryLock())
                 stripe.unlock(nowMicros);
         }
+    }
+
+    private static boolean lock(ReentrantLock lock)
+    {
+        //noinspection LockAcquiredButNotSafelyReleased
+        lock.lock();
+        return true;
     }
 }

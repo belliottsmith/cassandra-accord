@@ -21,6 +21,8 @@ package accord.impl;
 import java.util.Arrays;
 import java.util.concurrent.ConcurrentHashMap;
 
+import javax.annotation.Nullable;
+
 import com.google.common.annotations.VisibleForTesting;
 
 import org.slf4j.Logger;
@@ -66,7 +68,7 @@ public class DefaultRemoteListeners implements RemoteListeners
                 Node.Id replyTo = new Node.Id(listenerNodeId(listener));
                 int callbackId = listenerCallbackId(listener);
                 if (route == null) logger.warn("{}/{} attempting to notify {} with callbackId {} but no route", txnId, saveStatus, replyTo, callbackId);
-                else node.send(replyTo, new AsyncAwaitComplete(txnId, route, saveStatus, callbackId));
+                else node.send(replyTo, new AsyncAwaitComplete(txnId, route, saveStatus, callbackId), null);
             }
         }
     }
@@ -345,7 +347,7 @@ public class DefaultRemoteListeners implements RemoteListeners
             return this;
         }
 
-        synchronized Listeners notify(NotifySink notifySink, SafeCommandStore safeStore, SafeCommand safeCommand, Command prev)
+        synchronized Listeners notify(NotifySink notifySink, SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable Command prev)
         {
             int storeId = safeStore.commandStore().id();
             SaveStatus newStatus = safeCommand.current().saveStatus();
@@ -467,7 +469,7 @@ public class DefaultRemoteListeners implements RemoteListeners
     }
 
     @Override
-    public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev)
+    public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable Command prev)
     {
         TxnId txnId = safeCommand.txnId();
         Listeners entry = listeners.get(txnId);

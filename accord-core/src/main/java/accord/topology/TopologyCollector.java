@@ -20,7 +20,6 @@ package accord.topology;
 
 import accord.api.TopologySorter;
 import accord.local.Node;
-import accord.primitives.Participants;
 import accord.primitives.Routables;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
@@ -232,60 +231,6 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         public Boolean apply(Shard shard, Boolean prev, int index)
         {
             return prev && shard.isInFastPath(self);
-        }
-    }
-
-    static class UnsyncedSelector<K extends Participants<?>> extends TopologyCollector<K, K, K, TopologyException>
-    {
-        static final UnsyncedSelector INSTANCE = new UnsyncedSelector();
-
-        @Override
-        public K allocate(int size)
-        {
-            return null;
-        }
-
-        @Override
-        public K none()
-        {
-            return null;
-        }
-
-        @Override
-        public K multi(K collector)
-        {
-            return collector;
-        }
-
-        @Override
-        K retired(long requestedEpoch, long minEpoch) throws TopologyRetiredException
-        {
-            throw new TopologyRetiredException(requestedEpoch, minEpoch);
-        }
-
-        @Override
-        K notReady(long requestedEpoch, long maxEpoch) throws TopologyException
-        {
-            throw new TopologyNotReadyException(requestedEpoch, maxEpoch);
-        }
-
-        @Override
-        public K one(ActiveEpoch e, K select)
-        {
-            return (K) select.without(e.quorumReady());
-        }
-
-        @Override
-        public K update(K collector, ActiveEpoch e, K select)
-        {
-            select = (K)select.without(e.quorumReady());
-            return collector == null ? select : (K)collector.with((Participants) select);
-        }
-
-        @Override
-        public K updateIfExists(K collector, ActiveEpoch e, K select)
-        {
-            return update(collector, e, select);
         }
     }
 

@@ -479,7 +479,7 @@ public class DefaultLocalListeners implements LocalListeners
     }
 
     @Override
-    public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, Command prev)
+    public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, @Nullable Command prev)
     {
         notifyTxnListeners(safeStore, safeCommand);
         notifyComplexListeners(safeStore, safeCommand);

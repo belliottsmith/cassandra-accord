@@ -21,6 +21,7 @@ package accord.local.cfk;
 import javax.annotation.Nullable;
 
 import accord.api.Agent;
+import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.SafeState;
 import accord.local.Command;
@@ -28,12 +29,46 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.NotifySink.DefaultNotifySink;
+import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Status.Durability;
 import accord.primitives.TxnId;
 
 public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
 {
+    public static class RecordingNotifySink implements NotifySink
+    {
+        TxnId[] notified = new TxnId[16];
+        long[] notifiedAt = new long[16];
+        int notifiedCounter = 0;
+
+        TxnId[] applied = new TxnId[16];
+        CommandsForKey[] atApplied = new CommandsForKey[16];
+        int appliedCounter = 0;
+
+        public void postApplied(TxnId txnId, CommandsForKey cfk)
+        {
+            appliedCounter = (appliedCounter + 1) & 15;
+            applied[appliedCounter] = txnId;
+            atApplied[appliedCounter] = cfk;
+        }
+
+        @Override
+        public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
+        {
+            DefaultNotifySink.INSTANCE.notWaiting(safeStore, txnId, key, uniqueHlc);
+            notifiedCounter = (notifiedCounter + 1) & 15;
+            notified[notifiedCounter] = txnId;
+            notifiedAt[notifiedCounter] = safeStore.node().now();
+        }
+
+        @Override
+        public void waitingOn(SafeCommandStore safeStore, CommandsForKey.TxnInfo txn, RoutingKey key, SaveStatus waitingOnStatus, ProgressLog.BlockedUntil blockedUntil, boolean notifyCfk)
+        {
+            DefaultNotifySink.INSTANCE.waitingOn(safeStore, txn, key, waitingOnStatus, blockedUntil, notifyCfk);
+        }
+    }
+
     private final RoutingKey key;
 
     public SafeCommandsForKey(RoutingKey key)
@@ -48,6 +83,15 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
         return key;
     }
 
+    public abstract void overrideSink(NotifySink overrideSink);
+    public abstract NotifySink overrideSink();
+
+    private NotifySink defaultSink()
+    {
+        NotifySink overrideSink = overrideSink();
+        return overrideSink == null ? DefaultNotifySink.INSTANCE : overrideSink;
+    }
+
     public void updateUniqueHlc(SafeCommandStore safeStore, long uniqueHlc)
     {
         CommandsForKey prevCfk = current();
@@ -57,7 +101,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
     // equivalent to update, but for async callbacks with additional validation around pruning
     public void callback(SafeCommandStore safeStore, Command nextCommand, boolean forceNotify)
     {
-        callback(safeStore, nextCommand, DefaultNotifySink.INSTANCE, forceNotify);
+        callback(safeStore, nextCommand, defaultSink(), forceNotify);
     }
 
     public void callback(SafeCommandStore safeStore, Command nextCommand, NotifySink notifySink, boolean forceNotify)
@@ -68,7 +112,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, boolean forceNotify)
     {
-        update(safeStore, command, prevCfk, updateCfk, DefaultNotifySink.INSTANCE, forceNotify);
+        update(safeStore, command, prevCfk, updateCfk, defaultSink(), forceNotify);
     }
 
     private void update(SafeCommandStore safeStore, @Nullable Command command, CommandsForKey prevCfk, CommandsForKeyUpdate updateCfk, NotifySink notifySink, boolean forceNotify)

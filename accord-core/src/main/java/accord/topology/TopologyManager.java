@@ -474,7 +474,21 @@ public class TopologyManager
             if (fail == null) reportTopology(success);
             else if (active.currentEpoch < pending.epoch && pending.topology() == null)
             {
-                // TODO (expected): special casing of TopologyRetiredException?
+                if (fail instanceof TopologyRetiredException)
+                {
+                    synchronized (this)
+                    {
+                        if (active.isEmpty())
+                        {
+                            while (this.pending.minEpoch() <= pending.epoch)
+                                this.pending.removeFirst(this.pending.minEpoch());
+                            if (!this.pending.isEmpty() && this.pending.atIndex(0).topology() != null)
+                                updateActive();
+                            // don't retry
+                            return;
+                        }
+                    }
+                }
                 logger.warn("Failed to fetch epoch {}. Retrying.", pending.epoch, fail);
                 node.agent().onException(fail, "Fetch epoch " + pending.epoch);
                 long retryInMicros = node.agent().retryTopologyDelay(node, 1 + ++pending.fetchAttempts, TimeUnit.MICROSECONDS);

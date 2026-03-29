@@ -19,9 +19,15 @@
 package accord.local;
 
 import accord.api.AsyncExecutorFactory;
+import accord.api.Result;
 import accord.api.Timeouts;
+import accord.coordinate.Coordinations;
 import accord.local.durability.DurabilityService;
+import accord.primitives.Ballot;
+import accord.primitives.Route;
 import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
+import accord.primitives.Writes;
 import accord.topology.TopologyManager;
 
 public interface NodeCommandStoreService extends TimeService, UniqueTimeService, AsyncExecutorFactory
@@ -32,10 +38,11 @@ public interface NodeCommandStoreService extends TimeService, UniqueTimeService,
     DurableBefore durableBefore();
     DurabilityService durability();
     TopologyManager topology();
+    Coordinations coordinations();
     long currentStamp();
     void updateStamp();
     boolean isReplaying();
-
+    void reportLocalExecution(TxnId txnId, Route<?> route, Ballot ballot, Timestamp applyAt, Writes writes, Result result);
     default Timestamp uniqueTimestamp()
     {
         return uniqueTimestamp(Timestamp::fromValues);

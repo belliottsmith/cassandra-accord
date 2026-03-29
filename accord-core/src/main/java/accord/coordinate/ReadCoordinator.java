@@ -78,7 +78,7 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
 
         /**
          * This response is unsuitable by itself, but if a quorum of such responses is received for the shard
-         * we will Success.Quorum
+         * we will report Success.Quorum
          */
         ApproveIfQuorum,
 
@@ -140,7 +140,36 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
     protected Ranges unavailable(Reply reply) { throw new UnsupportedOperationException(); }
 
     @Override
-    public void onSuccess(Id from, Reply reply)
+    public final void onSuccess(Node.Id from, Reply reply)
+    {
+        executor.executeMaybeImmediately(() -> {
+            try { onSuccessExclusive(from, reply); }
+            catch (Throwable t) { exclusiveOnCallbackFailure(from, t); }
+        });
+    }
+
+    @Override
+    public final void onSlow(Node.Id from)
+    {
+        try { exclusiveOnSlowResponse(from); }
+        catch (Throwable t) { exclusiveOnCallbackFailure(from, t); }
+    }
+
+    @Override
+    public final void onFailure(Node.Id from, Throwable failure)
+    {
+        try { exclusiveOnFailure(from, failure); }
+        catch (Throwable t) { exclusiveOnCallbackFailure(from, t); }
+    }
+
+    @Override
+    public final boolean onCallbackFailure(Node.Id from, Throwable failure)
+    {
+        node.agent().onException(failure, from.toString());
+        return true;
+    }
+
+    protected void onSuccessExclusive(Id from, Reply reply)
     {
         if (isDone)
             return;
@@ -162,7 +191,7 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
 
             case TryAlternative:
                 Invariants.require(!reply.isFinal());
-                onSlowResponse(from);
+                onSlow(from);
                 break;
 
             case Reject:
@@ -183,46 +212,62 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         }
     }
 
-    @Override
-    public void onSlowResponse(Id from)
+    protected void exclusiveOnSlowResponse(Id from)
     {
-        if (!isDone)
+        if (isDone)
+            return;
+
+        try
         {
             if (tracing != null)
                 tracing.trace(null, "marking %s slow", from);
             handle(recordSlowResponse(from));
         }
+        catch (Throwable t)
+        {
+            exclusiveOnCallbackFailure(from, t);
+        }
     }
 
-    @Override
-    public void onFailure(Id from, Throwable failure)
+    protected void exclusiveOnFailure(Id from, Throwable failure)
     {
         if (isDone)
             return;
 
-        if (debug != null)
-            debug.debug(from, failure);
-
-        if (tracing != null)
+        try
         {
-            if (failure == null) tracing.trace(null, "timeout %s", from);
-            else tracing.trace(null, "received failure response from %s: %s", from, failure);
-        }
+            if (debug != null)
+                debug.debug(from, failure);
 
-        this.failure = FailureAccumulator.append(this.failure, failure);
-        handle(recordFailure(from));
+            if (tracing != null)
+            {
+                if (failure == null) tracing.trace(null, "timeout %s", from);
+                else tracing.trace(null, "received failure response from %s: %s", from, failure);
+            }
+
+            this.failure = FailureAccumulator.append(this.failure, failure);
+            handle(recordFailure(from));
+        }
+        catch (Throwable t)
+        {
+            exclusiveOnCallbackFailure(from, t);
+        }
     }
 
-    @Override
-    public boolean onCallbackFailure(Id from, Throwable failure)
+    protected void exclusiveOnCallbackFailure(Id from, Throwable failure)
     {
-        if (isDone) return false;
+        try
+        {
+            if (tracing != null)
+                tracing.trace(null, "callback failed processing reply from %s: %s", from, failure);
 
-        if (tracing != null)
-            tracing.trace(null, "callback failed processing reply from %s: %s", from, failure);
-
-        finishWithFailureOverride(failure);
-        return true;
+            finishWithFailureOverride(failure);
+        }
+        catch (Throwable t)
+        {
+            t.addSuppressed(failure);
+            node.agent().onException(t);
+        }
     }
 
     protected void finishWithFailureOverride(Throwable failure)
@@ -274,6 +319,11 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         finishOnFailure();
     }
 
+    boolean isDone()
+    {
+        return isDone;
+    }
+
     void setDone()
     {
         Invariants.require(!isDone);
@@ -281,6 +331,14 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         node.unregister(this);
         if (tracing != null)
             Coordination.traceStop(tracing, this);
+    }
+
+    boolean trySetDone()
+    {
+        if (isDone)
+            return false;
+        setDone();
+        return true;
     }
 
     private void invokeOnDone(Success success, Throwable failure)
@@ -423,6 +481,16 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         BiConsumer<? super Result, Throwable> callback = this.callback;
         this.callback = null;
         Invariants.require(callback != null);
+        return callback;
+    }
+
+    protected BiConsumer<? super Result, Throwable> tryTakeCallback()
+    {
+        BiConsumer<? super Result, Throwable> callback = this.callback;
+        if (callback == null)
+            return null;
+
+        this.callback = null;
         return callback;
     }
 

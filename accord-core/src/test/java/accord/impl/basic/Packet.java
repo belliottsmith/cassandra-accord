@@ -18,6 +18,10 @@
 
 package accord.impl.basic;
 
+import java.util.concurrent.TimeUnit;
+
+import accord.api.MessageSink;
+import accord.api.MessageSink.ReplySink;
 import accord.impl.mock.Network;
 import accord.local.Node.Id;
 import accord.messages.Message;
@@ -32,32 +36,32 @@ public class Packet implements Pending, ReplyContext
     final Pending origin;
     public final Id src;
     public final Id dst;
-    public final long expiresAt;
+    public final long expiresAtLocalMillis;
     public final long requestId; // if message is Reply, this is the id of the message we are replying to
     public final long replyId; // if message is Reply, this is the id of the message we are replying to
     public final Message message;
 
-    public Packet(Id src, Id dst, long expiresAt, long requestId, Request request)
+    public Packet(Id src, Id dst, long expiresAtLocalMillis, long requestId, Request request)
     {
-        this(src, dst, expiresAt, requestId, request, src.id < 0);
+        this(src, dst, expiresAtLocalMillis, requestId, request, src.id < 0);
     }
 
-    public Packet(Id src, Id dst, long expiresAt, long requestId, Request request, boolean isSelfOrigin)
+    public Packet(Id src, Id dst, long expiresAtLocalMillis, long requestId, Request request, boolean isSelfOrigin)
     {
         this.src = src;
         this.dst = dst;
-        this.expiresAt = expiresAt;
+        this.expiresAtLocalMillis = expiresAtLocalMillis;
         this.requestId = requestId;
         this.replyId = SENTINEL_MESSAGE_ID;
         this.message = request;
         this.origin = isSelfOrigin ? this : Pending.Global.activeOrigin();
     }
 
-    public Packet(Id src, Id dst, long expiresAt, long replyId, Reply reply)
+    public Packet(Id src, Id dst, long expiresAtLocalMillis, long replyId, Reply reply)
     {
         this.src = src;
         this.dst = dst;
-        this.expiresAt = expiresAt;
+        this.expiresAtLocalMillis = expiresAtLocalMillis;
         this.requestId = SENTINEL_MESSAGE_ID;
         this.replyId = replyId;
         this.message = reply;
@@ -87,10 +91,17 @@ public class Packet implements Pending, ReplyContext
         return ((Packet) context).requestId;
     }
 
-    public static long getExpiresAt(ReplyContext context)
+    @Override
+    public long expiresAt(TimeUnit units)
     {
-        if (context instanceof Network.MessageId)
-            return -1;
-        return ((Packet) context).expiresAt;
+        if (expiresAtLocalMillis == Long.MAX_VALUE)
+            return expiresAtLocalMillis;
+        return units.convert(expiresAtLocalMillis, TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public void reply(Id to, MessageSink sink, Reply success, Throwable failure)
+    {
+        ((ReplySink) sink).reply(to, this, success, failure);
     }
 }

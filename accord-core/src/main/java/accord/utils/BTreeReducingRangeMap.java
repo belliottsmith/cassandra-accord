@@ -35,7 +35,6 @@ import java.util.stream.StreamSupport;
 
 import javax.annotation.Nonnull;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
 import static accord.utils.Invariants.require;
 import static accord.utils.Invariants.requireArgument;
 
@@ -90,6 +89,15 @@ public class BTreeReducingRangeMap<E extends Entry<E>> implements Iterable<E>
         require(!isEmpty());
         for (E e : this)
             accumulator = reduce.apply(e, accumulator);
+        return accumulator;
+    }
+
+    public <V2, P1> V2 foldl(TriFunction<E, V2, P1, V2> reduce, V2 accumulator, P1 p1)
+    {
+        // TODO (expected): use BTree fold methods
+        require(!isEmpty());
+        for (E e : this)
+            accumulator = reduce.apply(e, accumulator, p1);
         return accumulator;
     }
 

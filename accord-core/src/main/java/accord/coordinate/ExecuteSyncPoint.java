@@ -172,12 +172,12 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
 
     protected void sendApply(Node.Id to)
     {
-        CoordinateSyncPoint.sendApply(node, to, syncPoint);
+        CoordinateSyncPoint.sendApply(node, to, syncPoint, tracing);
     }
 
     protected void sendApply(Node.Id to, long minEpoch)
     {
-        CoordinateSyncPoint.sendApply(node, to, syncPoint, minEpoch, tracker.topologies().currentEpoch());
+        CoordinateSyncPoint.sendApply(node, to, syncPoint, minEpoch, tracker.topologies().currentEpoch(), tracing);
     }
 
     @Override
@@ -243,11 +243,11 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
             if (result.min.remote == SyncRemote.All)
             {
                 node.topology().onEpochRetired(scope.toRanges(), syncPoint.syncId);
-                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Universal));
+                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Universal), tracing);
             }
             else if (result.min.remote == SyncRemote.Quorum)
             {
-                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Quorum));
+                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Quorum), tracing);
             }
             else
             {

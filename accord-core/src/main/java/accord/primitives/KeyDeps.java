@@ -43,8 +43,8 @@ import java.util.stream.Stream;
 
 import javax.annotation.Nullable;
 
-import static accord.api.ProtocolModifiers.RangeSpec.isEndInclusive;
-import static accord.api.ProtocolModifiers.RangeSpec.isStartExclusive;
+import static accord.api.ProtocolModifiers.isRangeEndInclusive;
+import static accord.api.ProtocolModifiers.isRangeStartExclusive;
 import static accord.primitives.RoutingKeys.toRoutingKeys;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
 import static accord.primitives.TxnId.NO_TXNIDS;
@@ -565,11 +565,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         keysToTxnIds();
         int startKeyIndex = keys.indexOf(range.start());
         if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
-        else if (isStartExclusive()) ++startKeyIndex;
+        else if (isRangeStartExclusive()) ++startKeyIndex;
 
         int endKeyIndex = keys.indexOf(range.end());
         if (endKeyIndex < 0) endKeyIndex = -1 - startKeyIndex;
-        else if (isEndInclusive()) ++endKeyIndex;
+        else if (isRangeEndInclusive()) ++endKeyIndex;
 
         if (endKeyIndex <= startKeyIndex)
             return orElse;
@@ -595,11 +595,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         keysToTxnIds();
         int startKeyIndex = keys.indexOf(range.start());
         if (startKeyIndex < 0) startKeyIndex = -1 - startKeyIndex;
-        else if (isStartExclusive()) ++startKeyIndex;
+        else if (isRangeStartExclusive()) ++startKeyIndex;
 
         int endKeyIndex = keys.indexOf(range.end());
         if (endKeyIndex < 0) endKeyIndex = -1 - startKeyIndex;
-        else if (isEndInclusive()) ++endKeyIndex;
+        else if (isRangeEndInclusive()) ++endKeyIndex;
 
         if (endKeyIndex <= startKeyIndex)
             return orElse;
@@ -687,12 +687,12 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
         int[] keysToTxnIds = keysToTxnIds();
         int start = keys.indexOf(range.start());
         if (start < 0) start = -1 - start;
-        else if (isStartExclusive()) ++start;
+        else if (isRangeStartExclusive()) ++start;
         start = startOffset(start);
 
         int end = keys.indexOf(range.end());
         if (end < 0) end = -1 - end;
-        else if (isEndInclusive()) ++end;
+        else if (isRangeEndInclusive()) ++end;
         end = startOffset(end);
 
         while (start < end)
@@ -773,11 +773,11 @@ public class KeyDeps implements Iterable<Map.Entry<RoutingKey, TxnId>>, KeyOrRan
     {
         int startIndex = keys.indexOf(range.start());
         if (startIndex < 0) startIndex = -1 - startIndex;
-        else if (isStartExclusive()) ++startIndex;
+        else if (isRangeStartExclusive()) ++startIndex;
 
         int endIndex = keys.indexOf(range.end());
         if (endIndex < 0) endIndex = -1 - endIndex;
-        else if (isEndInclusive()) ++endIndex;
+        else if (isRangeEndInclusive()) ++endIndex;
 
         if (startIndex == endIndex)
             return DepRelationList.EMPTY;

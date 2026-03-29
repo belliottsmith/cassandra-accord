@@ -35,7 +35,6 @@ import accord.local.Command;
 import accord.local.Command.Committed;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
-import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -60,9 +59,10 @@ import org.agrona.collections.IntHashSet;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
-import static accord.api.ProtocolModifiers.Toggles.dataStoreDetectsFutureReads;
-import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassCommandsForKey;
-import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
+import static accord.api.ProtocolModifiers.dataStoreDetectsFutureReads;
+import static accord.api.ProtocolModifiers.fastReadsMayBypassCommandsForKey;
+import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
+import static accord.api.ProtocolModifiers.fastWritesMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
@@ -79,7 +79,7 @@ import static java.util.concurrent.TimeUnit.MICROSECONDS;
 // TODO (required): (v1.1) if one shard times out waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)
 //   this means timing out a little earlier so the reply has time to arrive (but this should anyway be the case).
 //   This ensures a multi-key transaction interacting with replicas that have different stale shards on a replica can make progress
-public abstract class ReadData extends MapReduceConsumeCommandStores<Participants<?>, ReadData.CommitOrReadNack> implements Request, LocalListeners.ComplexListener, Timeouts.Timeout
+public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData.CommitOrReadNack> implements LocalListeners.ComplexListener, Timeouts.Timeout
 {
     private static final Logger logger = LoggerFactory.getLogger(ReadData.class);
 
@@ -133,7 +133,6 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         }
     }
 
-    public final TxnId txnId;
     public final long executeAtEpoch;
     public final ExecuteFlags flags;
     final boolean requiresListenersDuringExecution;
@@ -152,10 +151,6 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
     transient Cancellable cancel;
     transient RegisteredTimeout timeout;
 
-    protected transient Node node;
-    protected transient Node.Id replyTo;
-    protected transient ReplyContext replyContext;
-
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch)
     {
         this(to, topologies, txnId, scope, txn, executeAt, executeAtEpoch, ExecuteFlags.none());
@@ -163,8 +158,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
 
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
-        super(RouteRequest.computeScope(to, topologies, scope, latestRelevantEpochIndex(to, topologies, scope), Participants::overlapping, Participants::with));
-        this.txnId = txnId;
+        super(txnId, RouteRequest.computeScope(to, topologies, scope, latestRelevantEpochIndex(to, topologies, scope), Participants::overlapping, Participants::with));
         this.flags = flags;
         this.partialTxn = txn == null ? null : txn.intersecting(scope, true);
         this.executeAt = executeAt;
@@ -179,8 +173,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
 
     protected ReadData(TxnId txnId, Participants<?> scope, @Nullable PartialTxn partialTxn, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
     {
-        super(scope);
-        this.txnId = txnId;
+        super(txnId, scope);
         this.partialTxn = partialTxn;
         this.executeAt = executeAt;
         this.executeAtEpoch = executeAtEpoch;
@@ -213,28 +206,22 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         return executeAtEpoch;
     }
 
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
-    }
-
     protected long minEpoch()
     {
         return executeAtEpoch;
     }
 
     @Override
-    public final void process(Node on, Node.Id replyTo, ReplyContext replyContext)
+    public final Cancellable process(Node on, Node.Id replyTo, ReplyContext replyContext)
     {
         this.replyTo = replyTo;
         this.replyContext = replyContext;
-        long expiresAt = on.agent().expiresAt(replyContext, MICROSECONDS);
-        process(on, expiresAt);
+        long expiresAt = replyContext.expiresAt(MICROSECONDS);
+        return process(on, expiresAt);
     }
 
     // TODO (expected): register slowAt
-    public void process(Node on, long expiresAt)
+    public Cancellable process(Node on, long expiresAt)
     {
         this.node = on;
         waitingOn = new IntHashSet();
@@ -248,7 +235,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
                 case PENDING:
                     this.cancel = cancel;
                     this.timeout = timeout;
-                    return;
+                    return cancel;
                 case PENDING_OBSOLETE:
                 case OBSOLETE:
                     timeout = null;
@@ -258,6 +245,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         }
         if (cancel != null) cancel.cancel();
         if (timeout != null) timeout.cancel();
+        return null;
     }
 
     protected boolean mayFastExecute() { return false; }
@@ -754,13 +742,22 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
 
     protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (data != null && !data.validateReply(txnId, executeAt, !requiresListenersDuringExecution)) reply(CommitOrReadNack.Redundant, null);
-        else reply(new ReadOk(unavailable, data, uniqueHlc), null);
+        if (data != null && !txnId.awaitsOnlyDeps() && !data.validateReply(txnId, executeAt, validateHlc()))
+            reply(CommitOrReadNack.Redundant, null);
+        else
+            reply(new ReadOk(unavailable, data, uniqueHlc), null);
+    }
+
+    private long validateHlc()
+    {
+        if (!requiresListenersDuringExecution || (fastWritesMayBypassSafeStore() && txnId.isWrite()))
+            return uniqueHlc == 0 ? executeAt.hlc() : uniqueHlc;
+        return 0;
     }
 
     protected void reply(ReadReply reply, Throwable fail)
     {
-        node.reply(replyTo, replyContext, reply, fail);
+        node.reply(replyTo, replyContext, reply, fail, tracing());
     }
 
     @Override
@@ -776,6 +773,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         boolean isOk();
     }
 
+    // TODO (expected): merge with ApplyReply
     public static class CommitOrReadNack implements ReadData.ReadReply
     {
         public enum Kind
@@ -913,7 +911,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         }
 
         @Override
-        public boolean isOk()
+        public final boolean isOk()
         {
             return true;
         }
@@ -936,18 +934,6 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
                    + (uniqueHlc == 0 ? "" : ", hlc:" + uniqueHlc)
                    + (futureEpoch == 0 ? "" : ", futureEpoch=" + futureEpoch)
                    + '}';
-        }
-
-        @Override
-        public MessageType type()
-        {
-            return READ_RSP;
-        }
-
-        @Override
-        public boolean isOk()
-        {
-            return true;
         }
     }
 

@@ -34,6 +34,7 @@ import javax.annotation.Nullable;
 import accord.api.CoordinatorEventListener;
 import accord.api.OwnershipEventListener;
 import accord.api.ProgressLog.BlockedUntil;
+import accord.api.ReplicaEventListener;
 import accord.api.Result;
 import accord.api.Scheduler;
 import accord.api.Tracing;
@@ -44,7 +45,6 @@ import accord.impl.InMemoryAgent;
 import accord.impl.InMemoryCommandStore;
 import accord.impl.InMemoryCommandStore.Snapshot;
 import accord.impl.basic.NodeSink;
-import accord.impl.basic.Packet;
 import accord.impl.basic.SimulatedFault;
 import accord.impl.mock.Network;
 import accord.local.CommandStore;
@@ -53,13 +53,12 @@ import accord.local.PreLoadContext;
 import accord.local.LogUnavailableException;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
-import accord.messages.ReplyContext;
+import accord.messages.MessageType;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
-import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -79,7 +78,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class ListAgent implements InMemoryAgent, CoordinatorEventListener, OwnershipEventListener
+public class ListAgent implements InMemoryAgent, CoordinatorEventListener, OwnershipEventListener, ReplicaEventListener
 {
     final Scheduler scheduler;
     final RandomSource rnd;
@@ -123,7 +122,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         {
             ListResult result = (ListResult) success;
             if (result.requestId > Integer.MIN_VALUE)
-                node.reply(result.client, Network.replyCtxFor(result.requestId), result, null);
+                node.reply(result.client, Network.replyCtxFor(result.requestId), result, null, null);
         }
     }
 
@@ -132,7 +131,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     public Tracing trace(TxnId txnId, Participants<?> participants, Coordination.CoordinationKind eventType)
     {
         if (rnd.nextFloat() < 0.01f)
-            return (store, message) -> {};
+            return (commandStore, message) -> {};
 
         return null;
     }
@@ -145,6 +144,12 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
 
     @Override
     public CoordinatorEventListener coordinatorEvents()
+    {
+        return this;
+    }
+
+    @Override
+    public ReplicaEventListener replicaEvents()
     {
         return this;
     }
@@ -196,12 +201,6 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     public long cfkHlcPruneDelta()
     {
         return 100;
-    }
-
-    @Override
-    public long maxConflictsPruneInterval()
-    {
-        return 0;
     }
 
     @Override
@@ -273,16 +272,6 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     }
 
     @Override
-    public long expiresAt(ReplyContext replyContext, TimeUnit unit)
-    {
-        long expiresAt = ((Packet)replyContext).expiresAt;
-        expiresAt -= queueTimeMillis.getAsLong();
-        expiresAt *= 1.8f - rnd.nextFloat();
-        expiresAt += time.elapsed(MILLISECONDS);
-        return unit.convert(expiresAt, MILLISECONDS);
-    }
-
-    @Override
     public AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean isRequested)
     {
         // TODO (expected): metarandomise
@@ -295,19 +284,20 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         return result.chain();
     }
 
+    @Override
     public long minStaleHlc(Node node, boolean isRequested)
     {
         return node.now() - SECONDS.toMillis(rnd.nextBoolean() ? 1 : 10);
     }
 
     @Override
-    public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return time.elapsed(unit) + unit.convert(timeoutSupplier.slowDelay(), timeoutSupplier.units());
     }
 
     @Override
-    public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return time.elapsed(unit) + unit.convert(timeoutSupplier.expiresDelay(), timeoutSupplier.units());
     }
@@ -326,5 +316,13 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         if (snapshotter == null)
             return;
         snapshotter.restore(snapshot -> snapshot.restore(commandStore));
+    }
+
+    @Override
+    public void onLocalExecution(Node node, TxnId txnId, Result success)
+    {
+        ListResult result = (ListResult) success;
+        if (result.requestId > Integer.MIN_VALUE)
+            node.reply(result.client, Network.replyCtxFor(result.requestId), result, null, null);
     }
 }

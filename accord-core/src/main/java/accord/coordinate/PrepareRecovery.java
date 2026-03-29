@@ -98,7 +98,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
     @Override
     public void contact(Id to)
     {
-        node.send(to, new CheckStatus(to, topologies(), txnId, query, sourceEpoch, IncludeInfo.All, bumpBallot), executor, this);
+        node.send(to, new CheckStatus(to, topologies(), txnId, query, sourceEpoch, IncludeInfo.All, bumpBallot), executor, this, tracing);
     }
 
     @Override
@@ -205,7 +205,7 @@ public class PrepareRecovery extends CheckShards<Outcome, FullRoute<?>>
                             {
                                 if (tracing != null)
                                     tracing.trace(null, "found partially truncated Invalidate; committing to shards " + trySendTo);
-                                Commit.Invalidate.commitInvalidate(node, txnId, trySendTo, txnId);
+                                Commit.Invalidate.commitInvalidate(node, txnId, trySendTo, txnId, tracing);
                             }
                             else
                             {

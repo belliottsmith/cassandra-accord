@@ -38,6 +38,14 @@ public class DebugMap extends SortedListMap<Node.Id, Object>
     {
         if (reply == null)
             reply = timeoutInstance;
-        merge(from, reply, (a, b) -> a instanceof List<?> ? ((List<Object>) a).add(b) : Lists.newArrayList(a, b));
+
+        merge(from, reply, (a, b) -> {
+            if (a instanceof List<?>)
+            {
+                ((List<Object>) a).add(b);
+                return a;
+            }
+            return Lists.newArrayList(a, b);
+        });
     }
 }

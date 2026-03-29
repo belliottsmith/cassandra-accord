@@ -18,57 +18,45 @@
 
 package accord.messages;
 
-import javax.annotation.Nullable;
-
-import accord.local.DurableBefore;
+import accord.api.Result;
+import accord.coordinate.Coordinations;
+import accord.coordinate.ExecuteTxn;
 import accord.local.Node;
-import accord.local.PreLoadContext;
 import accord.primitives.TxnId;
 import accord.utils.async.Cancellable;
 
-import static accord.messages.MessageType.StandardMessage.SET_GLOBALLY_DURABLE_REQ;
-import static accord.messages.SimpleReply.Ok;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
+import static accord.messages.MessageType.StandardMessage.REMOTE_SUCCESS_REQ;
 
-public class SetGloballyDurable implements Request, PreLoadContext
+public class RemoteSuccess implements Request
 {
-    public final DurableBefore durableBefore;
+    public final TxnId txnId;
+    public final Result result;
 
-    public SetGloballyDurable(DurableBefore durableBefore)
+    public RemoteSuccess(TxnId txnId, Result result)
     {
-        this.durableBefore = durableBefore;
+        this.txnId = txnId;
+        this.result = result;
     }
 
     @Override
-    public Cancellable process(Node node, Node.Id from, ReplyContext replyContext)
+    public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
     {
-        node.markDurable(durableBefore).invoke((success, fail) -> {
-            node.reply(from, replyContext, fail == null ? Ok : null, fail, null);
-        });
+        report(on.coordinations(), txnId, result);
         return null;
     }
 
-    @Override
-    public String toString()
+    public static void report(Coordinations coordinations, TxnId txnId, Result result)
     {
-        return "SetGloballyDurable{" + durableBefore + '}';
+        coordinations.forEach(txnId, coordination -> {
+            if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+                ((ExecuteTxn) coordination).onRemoteSuccess(result);
+        });
     }
 
     @Override
     public MessageType type()
     {
-        return SET_GLOBALLY_DURABLE_REQ;
-    }
-
-    @Nullable
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return null;
-    }
-
-    @Override
-    public String reason()
-    {
-        return "SetGloballyDurable";
+        return REMOTE_SUCCESS_REQ;
     }
 }
