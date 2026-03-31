@@ -1531,6 +1531,11 @@ public abstract class Command implements ICommand
         return committed(command, SaveStatus.ReadyToExecute);
     }
 
+    static Command.Executed preapplied(Command command, Writes writes, Result result)
+    {
+        return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), command.participants(), command.promised(), command.executeAt(), command.partialTxn(), command.partialDeps(), command.acceptedOrCommitted(), command.waitingOn(), writes, result);
+    }
+
     static Command.Executed preapplied(Command command, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
     {
         return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), participants, promised, executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);

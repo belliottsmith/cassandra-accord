@@ -18,13 +18,13 @@
 
 package accord.coordinate;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
 import accord.api.Data;
-import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.api.Timeouts;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
@@ -68,6 +68,7 @@ import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
@@ -215,11 +216,14 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
              */
             boolean mayFastExecute = !isPrivilegedVoteCommitting
                                      && executeFlags.contains(READY_TO_EXECUTE)
+                                     && sendNoStableIfFastExec()
                                      && fastReadsMayBypassSafeStore(txnId);
 
             if (mayFastExecute)
                 markUnstableFastRead(node.id());
             new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
+            if (!isDone() && !stable.isDone)
+                start(Collections.emptyList(), Collections.singletonList(node.id()));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
@@ -237,12 +241,17 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void start(List<Id> readFrom)
     {
+        start(readFrom, readFrom);
+    }
+
+    protected void start(List<Id> sendReadTo, List<Id> readingFrom)
+    {
         // TODO (desired): migrate to SortedListSet; or introduce a specialised version for integer keys; or introduce a hash equivalent
         Topologies all = allTopologies;
         Commit.Kind kind = commitKind();
-        for (int i = 0, size = readFrom.size() ; i < size ; ++i)
+        for (int i = 0, size = sendReadTo.size() ; i < size ; ++i)
         {
-            Node.Id to = readFrom.get(i);
+            Node.Id to = sendReadTo.get(i);
             ExecuteFlags flags = this.flags.get(to);
             Invariants.require(kind.compareTo(StableFastPath) >= 0);
             boolean sendUnstable = flags.contains(READY_TO_EXECUTE) && sendNoStableIfFastExec() && path != RECOVER;
@@ -250,18 +259,19 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             else sendStableRead(to, kind);
         }
 
-        if (sendOnlyReadStableMessages() && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
+        boolean sendOnlyReadStableMessages = sendOnlyReadStableMessages(txnId);
+        if (sendOnlyReadStableMessages && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
             return;
 
         IntHashSet readSet = new IntHashSet();
-        readFrom.forEach(i -> readSet.add(i.id));
-        SortedArrays.SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
+        sendReadTo.forEach(i -> readSet.add(i.id));
+        SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
         for (Node.Id to : contact)
         {
             if (readSet.contains(to.id))
                 continue;
 
-            if (sendOnlyReadStableMessages() && all.current().contains(to))
+            if (sendOnlyReadStableMessages && all.current().contains(to))
                 continue;
 
             sendStableOnly(to, kind);
@@ -326,7 +336,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     public void contact(Id to)
     {
         ExecuteFlags flags = this.flags.get(to);
-        boolean sendUnstable = !sendOnlyReadStableMessages() || path == RECOVER || flags.contains(READY_TO_EXECUTE);
+        boolean sendUnstable = !sendOnlyReadStableMessages(txnId) || path == RECOVER || flags.contains(READY_TO_EXECUTE);
         if (sendUnstable) sendUnstableRead(to, flags);
         else sendStableRead(to, commitKind());
     }
@@ -418,7 +428,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 else
                 {
                     stable.informStableOnceQuorum();
-                    if (sendOnlyReadStableMessages())
+                    if (sendOnlyReadStableMessages(txnId))
                     {
                         // send additional stable messages to record the transaction outcome
                         Commit.Kind kind = commitKind();
@@ -468,6 +478,17 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
             if (callback != null)
                 callback.accept(result, null);
+        });
+    }
+
+    public void onSuccess(Timestamp executeAt, Writes writes, Result result)
+    {
+        executor.executeMaybeImmediately(() -> {
+            if (!trySetDone())
+                return;
+
+            stable.setDone();
+            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
         });
     }
 

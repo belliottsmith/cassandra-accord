@@ -75,6 +75,7 @@ import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -258,6 +259,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     boolean isHomeDone(Command command)
     {
+        if (command.txnId().is(SingleKey) && command.hasBeen(PreApplied))
+            return true;
         return command.durability().isDurableOrInvalidated() && isHomeDoneIfDurable(command);
     }
 

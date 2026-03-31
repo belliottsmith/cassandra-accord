@@ -32,20 +32,25 @@ import accord.api.ProtocolModifiers.Toggles.DependencyElision;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.ViolationHandler.ViolationHandlerHolder;
+import accord.coordinate.ExecuteTxn;
 import accord.local.Command.WaitingOn;
 import accord.local.Command.WaitingOn.Update;
 import accord.local.CommandStores.RangesForEpochSupplier;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
+import accord.local.cfk.ExecuteTxnBacklog;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
 import accord.messages.Commit;
+import accord.messages.RemoteSuccess;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
+import accord.primitives.FullRoute;
 import accord.primitives.Known;
 import accord.primitives.Known.KnownExecuteAt;
+import accord.primitives.Known.KnownRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
@@ -72,6 +77,7 @@ import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.OFF;
 import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
 import static accord.api.ProtocolModifiers.Toggles.markStaleIfCannotExecute;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.NO;
 import static accord.local.Cleanup.shouldCleanup;
@@ -119,7 +125,6 @@ import static accord.primitives.Status.Applied;
 import static accord.primitives.Status.Committed;
 import static accord.primitives.Status.Durability;
 import static accord.primitives.Status.Invalidated;
-import static accord.primitives.Known.KnownRoute.FullRoute;
 import static accord.primitives.Status.NotDefined;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
@@ -128,6 +133,7 @@ import static accord.primitives.Status.Truncated;
 import static accord.primitives.Route.isFullRoute;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
@@ -799,11 +805,49 @@ public class Commands
         {
             default: throw UnhandledEnum.invalid(command.status());
             case Stable:
-                // TODO (required): maintain distinct ReadyToRead and ReadyToWrite states
-                safeCommand.readyToExecute(safeStore);
-                logger.trace("{}: set to ReadyToExecute", txnId);
-                safeStore.notifyListeners(safeCommand, command);
-                break;
+                StoreParticipants participants = command.participants();
+                if (txnId.is(SingleKey) && command.partialTxn().read().keys().isEmpty() && !command.participants().executes().isEmpty())
+                {
+                    FullRoute<?> route = (FullRoute<?>) command.route();
+                    Txn txn = command.partialTxn().reconstitute(route);
+
+                    // TODO (required): compute ApplyAt
+                    Timestamp executeAt = command.executeAt();
+                    Writes writes = txn.execute(txnId, executeAt, null);
+                    Result result = txn.result(txnId, executeAt, null);
+
+                    safeStore.node().coordinations().forEach(txnId, coordination -> {
+                        if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+                            ((ExecuteTxn) coordination).onSuccess(executeAt, writes, result);
+                    });
+
+//                    RemoteSuccess.report(safeStore.node().coordinations(), txnId, result);
+                    command = safeCommand.preapplied(safeStore, writes, result);
+                    // fall-through
+
+//                    if (txn.read().keys().isEmpty())
+//                    {
+//                    }
+//                    else
+//                    {
+//                        // TODO (expected): maintain distinct ReadyToRead and ReadyToWrite states
+//                        safeCommand.readyToExecute(safeStore);
+//                        logger.trace("{}: set to ReadyToExecute", txnId);
+//                        safeStore.notifyListeners(safeCommand, command);
+//                        txn.read(safeStore, executeAt, participants.executes()).begin((success, fail) -> {
+//
+//                        });
+//                        break;
+//                    }
+                }
+                else
+                {
+                    // TODO (expected): maintain distinct ReadyToRead and ReadyToWrite states
+                    safeCommand.readyToExecute(safeStore);
+                    logger.trace("{}: set to ReadyToExecute", txnId);
+                    safeStore.notifyListeners(safeCommand, command);
+                    break;
+                }
 
             case PreApplied:
                 Command.Executed executed = command.asExecuted();
@@ -1713,7 +1757,7 @@ public class Commands
         //   but it might be nice to impose this earlier, or with some clearer semantics
         Invariants.require(addRoute == participants.route());
         Route<?> fullRoute = null;
-        if (expectKnown.has(FullRoute))
+        if (expectKnown.has(KnownRoute.FullRoute))
         {
             if (isFullRoute(cur.route())) fullRoute = cur.route();
             else if (isFullRoute(addRoute)) fullRoute = addRoute;

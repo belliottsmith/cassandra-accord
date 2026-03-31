@@ -20,6 +20,7 @@ package accord.local;
 
 import accord.api.AsyncExecutorFactory;
 import accord.api.Timeouts;
+import accord.coordinate.Coordinations;
 import accord.local.durability.DurabilityService;
 import accord.primitives.Timestamp;
 import accord.topology.TopologyManager;
@@ -32,6 +33,7 @@ public interface NodeCommandStoreService extends TimeService, UniqueTimeService,
     DurableBefore durableBefore();
     DurabilityService durability();
     TopologyManager topology();
+    Coordinations coordinations();
     long currentStamp();
     void updateStamp();
     boolean isReplaying();

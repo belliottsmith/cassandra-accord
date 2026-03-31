@@ -37,8 +37,10 @@ import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_
 import static accord.api.ProtocolModifiers.Toggles.InformOfDurability.ALL;
 import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS;
 import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC;
+import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.TO_ALL_IF_SINGLE_KEY_WRITE;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 
 /**
  * Configure various protocol behaviours. Many of these switches are correctness impacting, and should not be touched.
@@ -251,10 +253,10 @@ public class ProtocolModifiers
         public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
         public static void setFilterDuplicateDependenciesFromAcceptReply(boolean newFilterDuplicateDependenciesFromAcceptReply) { filterDuplicateDependenciesFromAcceptReply = newFilterDuplicateDependenciesFromAcceptReply; }
 
-        public enum SendStableMessages { TO_ALL, FOR_READS, FOR_READS_OR_NONE_IF_FASTEXEC}
+        public enum SendStableMessages { TO_ALL, TO_ALL_IF_SINGLE_KEY_WRITE, FOR_READS, FOR_READS_OR_NONE_IF_FASTEXEC}
         private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;
         public static void setSendStableMessages(SendStableMessages newSendStableMessages) { sendStableMessages = newSendStableMessages; }
-        public static boolean sendOnlyReadStableMessages() { return sendStableMessages.compareTo(FOR_READS) >= 0; }
+        public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_IF_SINGLE_KEY_WRITE && (!txnId.is(SingleKey) || !txnId.is(Txn.Kind.Write))); }
         public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
         private static boolean permitLocalExecution = true;
@@ -318,7 +320,7 @@ public class ProtocolModifiers
         public static boolean dataStoreDetectsFutureReads() { return dataStoreDetectsFutureReads; }
         public static void setDataStoreDetectsFutureReads(boolean newDataStoreDetectsFutureReads) { dataStoreDetectsFutureReads = newDataStoreDetectsFutureReads; }
 
-        private static boolean executeBacklog = true;
+        private static boolean executeBacklog = false;
         public static boolean executeBacklog() { return executeBacklog; }
         public static void setExecuteBacklog(boolean newExecuteBacklog) { executeBacklog = newExecuteBacklog; }
     }

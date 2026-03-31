@@ -19,6 +19,7 @@
 package accord.messages;
 
 import accord.api.Result;
+import accord.coordinate.Coordinations;
 import accord.coordinate.ExecuteTxn;
 import accord.local.Node;
 import accord.primitives.TxnId;
@@ -29,20 +30,25 @@ import static accord.messages.MessageType.StandardMessage.REMOTE_SUCCESS_REQ;
 public class RemoteSuccess implements Request
 {
     public final TxnId txnId;
-    public final Result success;
+    public final Result result;
 
-    public RemoteSuccess(TxnId txnId, Result success)
+    public RemoteSuccess(TxnId txnId, Result result)
     {
         this.txnId = txnId;
-        this.success = success;
+        this.result = result;
     }
 
     @Override
     public void process(Node on, Node.Id from, ReplyContext replyContext)
     {
-        on.coordinations().forEach(txnId, coordination -> {
+        report(on.coordinations(), txnId, result);
+    }
+
+    public static void report(Coordinations coordinations, TxnId txnId, Result result)
+    {
+        coordinations.forEach(txnId, coordination -> {
             if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
-                ((ExecuteTxn) coordination).onRemoteSuccess(success);
+                ((ExecuteTxn) coordination).onRemoteSuccess(result);
         });
     }
 
