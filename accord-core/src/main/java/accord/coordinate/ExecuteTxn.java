@@ -386,7 +386,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 return Action.None;
 
             case Redundant:
-                if (txnId.is(SingleKey) && txn.read().keys().isEmpty())
+                if (txnId.is(SingleKey))
                     return Action.None;
 
             case Rejected:
