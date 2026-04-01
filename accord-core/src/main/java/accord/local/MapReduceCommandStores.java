@@ -44,7 +44,7 @@ public abstract class MapReduceCommandStores<P extends Participants<?>, O> imple
         return applyAsyncInternal(commandStore);
     }
 
-    AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
+    protected AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
     {
         return commandStore.chain(this, this);
     }

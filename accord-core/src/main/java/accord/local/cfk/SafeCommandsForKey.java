@@ -21,6 +21,7 @@ package accord.local.cfk;
 import javax.annotation.Nullable;
 
 import accord.api.Agent;
+import accord.api.ProgressLog;
 import accord.api.RoutingKey;
 import accord.impl.SafeState;
 import accord.local.Command;
@@ -28,12 +29,46 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.NotifySink.DefaultNotifySink;
+import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Status.Durability;
 import accord.primitives.TxnId;
 
 public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
 {
+    public static class RecordingNotifySink implements NotifySink
+    {
+        TxnId[] notified = new TxnId[16];
+        long[] notifiedAt = new long[16];
+        int notifiedCounter = 0;
+
+        TxnId[] applied = new TxnId[16];
+        CommandsForKey[] atApplied = new CommandsForKey[16];
+        int appliedCounter = 0;
+
+        public void postApplied(TxnId txnId, CommandsForKey cfk)
+        {
+            appliedCounter = (appliedCounter + 1) & 15;
+            applied[appliedCounter] = txnId;
+            atApplied[appliedCounter] = cfk;
+        }
+
+        @Override
+        public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
+        {
+            DefaultNotifySink.INSTANCE.notWaiting(safeStore, txnId, key, uniqueHlc);
+            notifiedCounter = (notifiedCounter + 1) & 15;
+            notified[notifiedCounter] = txnId;
+            notifiedAt[notifiedCounter] = safeStore.node().now();
+        }
+
+        @Override
+        public void waitingOn(SafeCommandStore safeStore, CommandsForKey.TxnInfo txn, RoutingKey key, SaveStatus waitingOnStatus, ProgressLog.BlockedUntil blockedUntil, boolean notifyCfk)
+        {
+            DefaultNotifySink.INSTANCE.waitingOn(safeStore, txn, key, waitingOnStatus, blockedUntil, notifyCfk);
+        }
+    }
+
     private final RoutingKey key;
 
     public SafeCommandsForKey(RoutingKey key)
@@ -92,6 +127,7 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
             {
                 Agent agent = safeStore.agent();
                 nextCfk = nextCfk.maybePrune(agent.cfkPruneInterval(), agent.cfkHlcPruneDelta());
+//                ((RecordingNotifySink)overrideSink()).postApplied(command.txnId(), nextCfk);
             }
             set(nextCfk);
         }

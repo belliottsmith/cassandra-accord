@@ -323,6 +323,16 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public abstract AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
     public abstract <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
 
+    public AsyncChain<Void> priorityChain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+    {
+        return chain(context, consumer);
+    }
+
+    public <T> AsyncChain<T> priorityChain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+    {
+        return chain(context, function);
+    }
+
     public Cancellable execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
         return chain(context, consumer).begin(callback);

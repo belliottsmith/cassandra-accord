@@ -701,7 +701,7 @@ public class Commands
         @Override
         public AsyncChain<Void> apply(V v)
         {
-            return commandStore.chain(this, this);
+            return commandStore.priorityChain(this, this);
         }
 
         @Override

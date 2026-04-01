@@ -18,12 +18,16 @@
 
 package accord.coordinate;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
+import accord.api.AsyncExecutor;
 import accord.api.Data;
 import accord.api.Result;
 import accord.api.Timeouts;
@@ -33,6 +37,7 @@ import accord.coordinate.tracking.QuorumIdTracker;
 import accord.coordinate.tracking.RequestStatus;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
+import accord.local.LoadKeys;
 import accord.local.LogUnavailableException;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -53,6 +58,7 @@ import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
 import accord.messages.ReadTxnData;
+import accord.messages.Request;
 import accord.messages.SafeCallback;
 import accord.messages.StableThenRead;
 import accord.primitives.Ballot;
@@ -67,7 +73,6 @@ import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
-import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
@@ -222,8 +227,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (mayFastExecute)
                 markUnstableFastRead(node.id());
             new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
-            if (!isDone() && !stable.isDone)
-                start(Collections.emptyList(), Collections.singletonList(node.id()));
+            start(Collections.emptyList(), Collections.singletonList(node.id()));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
@@ -264,7 +268,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             return;
 
         IntHashSet readSet = new IntHashSet();
-        sendReadTo.forEach(i -> readSet.add(i.id));
+        readingFrom.forEach(i -> readSet.add(i.id));
         SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
         for (Node.Id to : contact)
         {
@@ -325,9 +329,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             default: throw UnhandledEnum.unknown(path);
             case EPHEMERAL: throw UnhandledEnum.invalid(EPHEMERAL);
             case BACKLOG:
-            case FAST:    return StableFastPath;
-            case MEDIUM:  return StableMediumPath;
-            case SLOW:    return StableSlowPath;
+            case FAST:    //return StableFastPath;
+            case MEDIUM:  //return StableMediumPath;
+            case SLOW:    //return StableSlowPath;
             case RECOVER: return StableWithTxnAndDeps;
         }
     }
@@ -386,6 +390,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 return Action.None;
 
             case Redundant:
+                if (txnId.is(SingleKey) && txn.read().keys().isEmpty())
+                    return Action.None;
+
             case Rejected:
                 invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
                 return Action.Aborted;
@@ -471,10 +478,11 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     public void onRemoteSuccess(Result result)
     {
-        executor.executeMaybeImmediately(() -> {
+        executor.execute(() -> {
             if (!trySetDone())
                 return;
 
+            stable.setDone();
             BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
             if (callback != null)
                 callback.accept(result, null);
@@ -483,13 +491,16 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     public void onSuccess(Timestamp executeAt, Writes writes, Result result)
     {
-        executor.executeMaybeImmediately(() -> {
-            if (!trySetDone())
-                return;
-
-            stable.setDone();
-            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
-        });
+        onRemoteSuccess(result);
+//        executor.executeMaybeImmediately(() -> {
+//            if (!trySetDone())
+//                return;
+//
+//            stable.setDone();
+//            BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
+//            if (callback != null)
+//                callback.accept(result, null);
+//        });
     }
 
     @Override
@@ -514,6 +525,12 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             super(txnId, route, mayFastExecute ? txn.intersecting(route, true) : null, ExecuteTxn.this.executeAt, ExecuteTxn.this.executeAt.epoch(), flags);
             this.callback = new SafeCallback<>(executor, ExecuteTxn.this);
             this.mayFastExecute = mayFastExecute;
+        }
+
+        @Override
+        public LoadKeys loadKeys()
+        {
+            return LoadKeys.SYNC;
         }
 
         @Override

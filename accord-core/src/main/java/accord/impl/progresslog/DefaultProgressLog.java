@@ -42,6 +42,7 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
+import accord.primitives.PartialTxn;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.primitives.Participants;
@@ -75,6 +76,7 @@ import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
+import static accord.primitives.Status.Stable;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
@@ -259,8 +261,12 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     boolean isHomeDone(Command command)
     {
-        if (command.txnId().is(SingleKey) && command.hasBeen(PreApplied))
-            return true;
+        if (command.txnId().is(SingleKey) && command.hasBeen(Stable))
+        {
+            PartialTxn partialTxn = command.partialTxn();
+            if (partialTxn != null && partialTxn.read().keys().isEmpty())
+                return true;
+        }
         return command.durability().isDurableOrInvalidated() && isHomeDoneIfDurable(command);
     }
 

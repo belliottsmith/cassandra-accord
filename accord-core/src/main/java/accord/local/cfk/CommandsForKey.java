@@ -101,6 +101,7 @@ import static accord.primitives.Status.Durability.DurablyCommitted;
 import static accord.primitives.Status.Durability.NotDurable;
 import static accord.primitives.Timestamp.Flag.HLC_BOUND;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
+import static accord.primitives.Txn.Kind.All;
 import static accord.primitives.Txn.Kind.AnyVisible;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Read;
@@ -1897,10 +1898,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     void postProcess(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink, boolean forceNotify)
     {
+        postProcessInternal(safeStore, prevCfk, updated, notifySink, forceNotify);
         TxnInfo minUndecided = minUndecided();
         if (minUndecided != null && (forceNotify || !minUndecided.equals(prevCfk.minUndecided())))
             notifySink.waitingOn(safeStore, minUndecided, key, SaveStatus.Stable, HasStableDeps, true);
-
+    }
+    private void postProcessInternal(SafeCommandStore safeStore, CommandsForKey prevCfk, @Nullable Command updated, NotifySink notifySink, boolean forceNotify)
+    {
         if (updated == null || forceNotify)
         {
             notifyManaged(safeStore, AnyVisible, 0, committedByExecuteAt.length, -1, notifySink);
@@ -1968,7 +1972,35 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 return;
         }
 
-        notifyManaged(safeStore, updatedTxnId.witnessedBy(), 0, mayExecuteToIndex, mayExecuteAnyAtIndex, notifySink);
+        notifyManaged(safeStore, All, 0, mayExecuteToIndex, mayExecuteAnyAtIndex, notifySink);
+        if (Invariants.isParanoid() && safeStore.get(key).current() == this)
+        {
+            int unappliedWrites = 0, unappliedReads = 0;
+            for (TxnInfo txn : committedByExecuteAt)
+            {
+                int i = indexOf(txn);
+                Invariants.require(i >= 0 && txn == byId[i]);
+                if (txn.compareTo(APPLIED) >= 0)
+                    continue;
+                if (txn.is(STABLE) && !txn.hasNotifiedReady())
+                {
+                    int j = Arrays.binarySearch(byId, txn.executeAt);
+                    if (j < 0) j = -1 - j;
+                    if ((minUndecidedById < 0 || j < minUndecidedById))
+                    {
+                        int missingCount = 0;
+                        for (TxnId missing : txn.missing())
+                        {
+                            if (!missing.is(UNSTABLE) && managesExecution(missing) && !isUnready(missing))
+                                ++missingCount;
+                        }
+                        Invariants.require(isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds) || (unappliedWrites + (txn.is(Write) ? unappliedReads : 0) != missingCount));
+                    }
+                }
+                if (txn.is(Write)) ++unappliedWrites;
+                else if (txn.is(Read)) ++unappliedReads;
+            }
+        }
     }
 
     private void notifyManaged(SafeCommandStore safeStore, Kinds kinds, int mayNotExecuteBeforeIndex, int mayExecuteToIndex, int mayExecuteAny, NotifySink notifySink)
@@ -1987,13 +2019,13 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
             if (txn.mayExecute() && !txn.hasNotifiedReady())
             {
-                if (i >= mayNotExecuteBeforeIndex && (kinds.test(txn) || i == mayExecuteAny) && !isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
+                if (i >= mayNotExecuteBeforeIndex && (kinds.test(txn) || i == mayExecuteAny))
                 {
                     switch (txn.status())
                     {
                         case COMMITTED:
                         {
-                            if (txn.hasNotifiedWaiting())
+                            if (txn.hasNotifiedWaiting() || isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
                                 break;
 
                             // cannot execute as dependencies not stable, so notify progress log to get or decide stable deps
@@ -2004,7 +2036,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
                         case STABLE:
                         {
-                            if (txn.hasNotifiedReady())
+                            if (txn.hasNotifiedReady() || isWaitingOnPruned(loadingPruned, txn, txn.executeAt, bounds))
                                 break;
 
                             if (undecidedIndex < byId.length)
@@ -2075,6 +2107,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         Invariants.require(Write.ordinal() == 1);
         Invariants.require((Read.ordinal() & 1) == 0);
         Invariants.require((EphemeralRead.ordinal() & 1) == 0);
+        Invariants.require(unappliedCountersDelta(EphemeralRead.ordinal()) == 0);
     }
     private static long unappliedCountersDelta(int kindOrdinal)
     {
@@ -2290,8 +2323,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 Invariants.requireArgument(SortedArrays.isSortedUnique(byId));
                 Invariants.requireArgument(SortedArrays.isSortedUnique(committedByExecuteAt, TxnInfo::compareExecuteAt));
 
-                for (TxnInfo txn : byId)
+                for (int i = 0 ; i < byId.length ; ++i)
                 {
+                    TxnInfo txn = byId[i];
                     Invariants.require(mayExecute(txn) == txn.mayExecute());
                     Invariants.require(txn.hasDeps() || txn.missing() == NO_TXNIDS);
                 }
@@ -2321,7 +2355,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             {
                 for (TxnInfo txn : committedByExecuteAt)
                 {
-                    Invariants.require(txn == get(txn, byId));
+                    Invariants.require(txn == get(txn));
                 }
                 for (TxnInfo txn : byId)
                 {

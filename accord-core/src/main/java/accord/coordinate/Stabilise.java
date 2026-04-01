@@ -76,12 +76,12 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
     void start()
     {
         super.start();
-        contact(to -> new Commit(CommitSlowPath, to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
+        contact(to -> new Commit(CommitWithTxn, to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
         if (allTopologies.size() > 1)
         {
             SortedArrayList<Node.Id> extra = allTopologies.nodes().without(tracker.nodes()).without(allTopologies::isFaulty);
             for (Node.Id to : extra)
-                node.send(to, new Commit(CommitSlowPath, to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
+                node.send(to, new Commit(CommitWithTxn, to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
         }
     }
 
