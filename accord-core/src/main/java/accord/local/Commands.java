@@ -70,11 +70,10 @@ import accord.utils.async.AsyncChains;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.HasDecidedExecuteAt;
+import static accord.api.ProtocolModifiers.Toggles.*;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_PREAPPLIED;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.OFF;
-import static accord.api.ProtocolModifiers.Toggles.dependencyElision;
-import static accord.api.ProtocolModifiers.Toggles.markStaleIfCannotExecute;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Cleanup.NO;
@@ -853,17 +852,18 @@ public class Commands
         {
             default: throw UnhandledEnum.invalid(command.status());
             case Stable:
-                if (txnId.is(SingleKey) && txnId.is(Write) && !command.participants().executes().isEmpty())
+                if (txnId.is(SingleKey) && directExecute(txnId, command.partialTxn()) && !command.participants().executes().isEmpty())
                 {
                     FullRoute<?> route = (FullRoute<?>) command.route();
                     Txn txn = command.partialTxn().reconstitute(route);
                     // TODO (required): compute ApplyAt
                     Timestamp executeAt = command.executeAt();
-                    if (!command.partialTxn().read().keys().isEmpty())
+                    if (!txn.read().keys().isEmpty())
                     {
                         PartialTxn partialTxn = command.partialTxn();
                         Participants<?> executes = command.participants().executes();
                         CommandStore unsafeStore = safeStore.commandStore();
+                        safeCommand.readyToExecute(safeStore);
                         safeStore = safeStore;
                         safeCommand = safeCommand;
                         txn.read(safeStore, executeAt, executes).begin((success, fail) -> {
@@ -875,8 +875,6 @@ public class Commands
                                     Command command0 = safeCommand0.current();
                                     if (command0.saveStatus().compareTo(ReadyToExecute) < 0)
                                     {
-                                        safeCommand0.readyToExecute(safeStore0);
-                                        logger.trace("{}: set to ReadyToExecute", txnId);
                                         safeStore0.notifyListeners(safeCommand0, safeCommand0.current());
                                     }
                                 }, unsafeStore.agent());
