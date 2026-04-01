@@ -109,14 +109,16 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         public final long startEpoch, endEpoch;
         public final TxnId readyAt;
         public final TxnId gcBefore;
+        public final TxnId shardAppliedBefore;
         public final TxnId locallyAppliedBefore;
 
-        public QuickBounds(long startEpoch, long endEpoch, TxnId readyAt, TxnId gcBefore, TxnId locallyAppliedBefore)
+        public QuickBounds(long startEpoch, long endEpoch, TxnId readyAt, TxnId gcBefore, TxnId shardAppliedBefore, TxnId locallyAppliedBefore)
         {
             this.startEpoch = startEpoch;
             this.endEpoch = endEpoch;
             this.readyAt = readyAt;
             this.gcBefore = gcBefore;
+            this.shardAppliedBefore = shardAppliedBefore;
             this.locallyAppliedBefore = locallyAppliedBefore;
         }
 
@@ -124,31 +126,41 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         {
             if (startEpoch == this.startEpoch && endEpoch == this.endEpoch)
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, shardAppliedBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withReadyAtLeast(TxnId newReadyAt)
         {
             if (newReadyAt.compareTo(readyAt) <= 0)
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, newReadyAt, gcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, newReadyAt, gcBefore, shardAppliedBefore, locallyAppliedBefore);
         }
 
         public QuickBounds withLocallyAppliedAtLeast(TxnId newLocallyAppliedBefore)
         {
             if (newLocallyAppliedBefore.compareTo(locallyAppliedBefore) <= 0)
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, newLocallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, shardAppliedBefore, newLocallyAppliedBefore);
         }
 
-        public QuickBounds withGcBeforeBeforeAtLeast(TxnId newGcBefore)
+        public QuickBounds withShardAppliedBeforeAtLeast(TxnId newShardAppliedBefore)
+        {
+            if (newShardAppliedBefore.compareTo(this.shardAppliedBefore) <= 0)
+                return this;
+            // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
+            if (newShardAppliedBefore.hlc() < this.shardAppliedBefore.hlc())
+                return this;
+            return new QuickBounds(startEpoch, endEpoch, readyAt, gcBefore, newShardAppliedBefore, locallyAppliedBefore);
+        }
+
+        public QuickBounds withGcBeforeAtLeast(TxnId newGcBefore)
         {
             if (newGcBefore.compareTo(this.gcBefore) <= 0)
                 return this;
             // we can't let HLC epoch go backwards as this breaks assumptions around maxUniqueHlc tracking
             if (newGcBefore.hlc() < this.gcBefore.hlc())
                 return this;
-            return new QuickBounds(startEpoch, endEpoch, readyAt, newGcBefore, locallyAppliedBefore);
+            return new QuickBounds(startEpoch, endEpoch, readyAt, newGcBefore, shardAppliedBefore, locallyAppliedBefore);
         }
 
         @Override
@@ -193,6 +205,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             super(startEpoch, endEpoch,
                   maxBound(bounds, statuses, UNREADY),
                   maxBound(bounds, statuses, GC_BEFORE),
+                  maxBound(bounds, statuses, SHARD_APPLIED),
                   maxBound(bounds, statuses, LOCALLY_APPLIED));
             Invariants.require(statuses.length == bounds.length * 2);
             this.range = range;

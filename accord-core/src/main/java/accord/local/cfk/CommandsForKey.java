@@ -234,7 +234,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     private static boolean reportLinearizabilityViolations = true;
 
-    public static final QuickBounds NO_BOUNDS_INFO = new QuickBounds(0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE);
+    public static final QuickBounds NO_BOUNDS_INFO = new QuickBounds(0, Long.MAX_VALUE, TxnId.NONE, TxnId.NONE, TxnId.NONE, TxnId.NONE);
     public static final TxnInfo NO_INFO = TxnInfo.create(TxnId.NONE, TRANSITIVE, false, TxnId.NONE, Ballot.ZERO);
     public static final TxnInfo[] NO_INFOS = new TxnInfo[0];
     static final TxnId[] NOT_LOADING_PRUNED = new TxnId[0];
@@ -1243,7 +1243,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     static TxnId readyAt(QuickBounds bounds)
     {
         TxnId readyAt = bounds.readyAt;
-        if (readyAt.compareTo(bounds.gcBefore) <= 0)
+        if (readyAt.compareTo(bounds.shardAppliedBefore) <= 0)
             readyAt = null;
         return readyAt;
     }
@@ -1256,7 +1256,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
     static TxnId redundantBefore(QuickBounds bounds)
     {
         // TODO (expected): this can be weakened to shardAppliedOrInvalidatedBefore
-        return bounds.gcBefore;
+        return bounds.shardAppliedBefore;
     }
 
     public TxnId appliedBefore()
@@ -1643,7 +1643,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (maxUniqueHlc >= minUniqueHlc)
             return this;
 
-        if (maxUniqueHlc <= bounds.gcBefore.hlc() && bounds.gcBefore.is(HLC_BOUND))
+        if (maxUniqueHlc <= bounds.shardAppliedBefore.hlc() && bounds.shardAppliedBefore.is(HLC_BOUND))
             return this;
 
         return new CommandsForKey(key, bounds, byId, minUndecidedById, maxAppliedUnreadyWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, minUniqueHlc, loadingPruned, prunedBeforeById, unmanageds, true);
@@ -1851,7 +1851,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
                 break;
         }
         if (maxAppliedWriteByExecuteAt >= 0) maxUniqueHlc = Math.max(maxUniqueHlc, committedByExecuteAt[maxAppliedWriteByExecuteAt].executeAt.hlc());
-        else maxUniqueHlc = Math.max(maxUniqueHlc, bounds.gcBefore.hlc() - 1); // only guaranteed to witness those with strictly lower hlc; might be some txn agreed with higher flag bits
+        else maxUniqueHlc = Math.max(maxUniqueHlc, bounds.shardAppliedBefore.hlc() - 1); // only guaranteed to witness those with strictly lower hlc; might be some txn agreed with higher flag bits
 
         return updater.update(key, bounds, isNewBoundsInfo, byId, minUndecidedById, maxAppliedUnreadyWriteById, committedByExecuteAt, maxAppliedWriteByExecuteAt, maxUniqueHlc, loadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate);
     }
@@ -2126,17 +2126,17 @@ public class CommandsForKey extends CommandsForKeyUpdate
 
     public CommandsForKeyUpdate withBoundsAtLeast(QuickBounds withBounds, boolean expectUpToDate)
     {
-        Invariants.expect(withBounds.gcBefore.compareTo(bounds.gcBefore) >= 0, "gcBefore %s may have moved backwards from %s for key %s", withBounds.gcBefore, bounds, key);
+        Invariants.expect(withBounds.shardAppliedBefore.compareTo(bounds.shardAppliedBefore) >= 0, "shardAppliedBefore %s may have moved backwards from %s for key %s", withBounds.gcBefore, bounds, key);
 
         QuickBounds newBounds = bounds.withEpochs(bounds.startEpoch, withBounds.endEpoch)
-                                      .withGcBeforeBeforeAtLeast(withBounds.gcBefore)
+                                      .withShardAppliedBeforeAtLeast(withBounds.shardAppliedBefore)
                                       .withReadyAtLeast(withBounds.readyAt)
                                       .withLocallyAppliedAtLeast(withBounds.locallyAppliedBefore);
 
         if (newBounds == bounds)
             return this;
 
-        if (newBounds.gcBefore.epoch() >= newBounds.endEpoch)
+        if (newBounds.shardAppliedBefore.epoch() >= newBounds.endEpoch)
         {
             // we should be completely finished; notify every unmanaged and return an empty CFK
             // we special case this to handle the case of future dependencies supplied to us by other CommandsForKey that had pruned their dependencies;
@@ -2152,7 +2152,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, redundantBefore(newBounds));
         TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds, expectUpToDate);
         int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), redundantBefore(newBounds));
-        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.gcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
+        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newBounds.shardAppliedBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
 
         return notifyManagedUnready(this, newBounds, reconstructAndUpdateUnmanaged(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate));
     }
@@ -2163,19 +2163,19 @@ public class CommandsForKey extends CommandsForKeyUpdate
      * on load and not no-op due to e.g. newSafelyPrunedBefore or newReadyAt being non-null.
      */
     @VisibleForImplementation
-    public CommandsForKey withGcBeforeAtLeast(TxnId newGcBefore, boolean expectUpToDate)
+    public CommandsForKey withShardAppliedBeforeAtLeast(TxnId newShardAppliedBefore, boolean expectUpToDate)
     {
-        QuickBounds newBounds = bounds.withGcBeforeBeforeAtLeast(newGcBefore);
+        QuickBounds newBounds = bounds.withShardAppliedBeforeAtLeast(newShardAppliedBefore);
         if (newBounds == bounds)
         {
-            Invariants.expect(newGcBefore.compareTo(bounds.gcBefore) >= 0, "gcBefore %s may have moved backwards from %s for key %s", newGcBefore, bounds, key);
+            Invariants.expect(newShardAppliedBefore.compareTo(bounds.shardAppliedBefore) >= 0, "gcBefore %s may have moved backwards from %s for key %s", newShardAppliedBefore, bounds, key);
             return this;
         }
 
-        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newGcBefore);
+        Object[] newLoadingPruned = Pruning.removeRedundantLoadingPruned(loadingPruned, newShardAppliedBefore);
         TxnInfo[] newById = removeRedundantById(byId, newLoadingPruned != loadingPruned, bounds, newBounds, expectUpToDate);
-        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newGcBefore);
-        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newGcBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
+        int newPrunedBeforeById = prunedBeforeId(newById, prunedBefore(), newShardAppliedBefore);
+        Invariants.paranoid(!expectUpToDate || (newPrunedBeforeById < 0 ? prunedBeforeById < 0 || byId[prunedBeforeById].compareTo(newShardAppliedBefore) < 0 : newById[newPrunedBeforeById].equals(byId[prunedBeforeById])));
 
         return reconstruct(key, newBounds, true, newById, maxUniqueHlc, newLoadingPruned, newPrunedBeforeById, unmanageds, expectUpToDate);
     }
