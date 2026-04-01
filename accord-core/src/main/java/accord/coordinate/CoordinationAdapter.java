@@ -283,7 +283,6 @@ public interface CoordinationAdapter<R>
                     return;
                 }
                 execute.start();
-
             }
 
             @Override

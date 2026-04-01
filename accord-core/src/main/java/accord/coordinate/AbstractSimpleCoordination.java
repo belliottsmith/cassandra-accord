@@ -50,16 +50,6 @@ public abstract class AbstractSimpleCoordination<P extends Participants<?>> impl
         this.tracing = node.agent().trace(txnId, scope, kind());
     }
 
-    protected AbstractSimpleCoordination(Node node, SequentialAsyncExecutor executor, TxnId txnId, P scope, @Nullable Tracing tracing)
-    {
-        this.coordinationId = node.nextCoordinationId();
-        this.node = node;
-        this.executor = executor;
-        this.txnId = Invariants.nonNull(txnId);
-        this.scope = scope;
-        this.tracing = tracing;
-    }
-
     @Override
     public final long coordinationId()
     {

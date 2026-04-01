@@ -39,11 +39,9 @@ import accord.local.CommandStores.RangesForEpochSupplier;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
-import accord.local.cfk.ExecuteTxnBacklog;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
 import accord.messages.Commit;
-import accord.messages.RemoteSuccess;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -889,7 +887,7 @@ public class Commands
                                 Result result = txn.result(txnId, executeAt, success);
                                 unsafeStore.node().coordinations().forEach(txnId, coordination -> {
                                     if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
-                                        ((ExecuteTxn) coordination).onSuccess(executeAt, writes, result);
+                                        ((ExecuteTxn) coordination).onLocalDirectSuccess(executeAt, writes, result);
                                 });
                                 writes.applyDirect(unsafeStore, executes, partialTxn)
                                               .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, writes, result, false))
@@ -904,7 +902,7 @@ public class Commands
 
                     safeStore.node().coordinations().forEach(txnId, coordination -> {
                         if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
-                            ((ExecuteTxn) coordination).onSuccess(executeAt, writes, result);
+                            ((ExecuteTxn) coordination).onLocalDirectSuccess(executeAt, writes, result);
                     });
 //                    RemoteSuccess.report(safeStore.node().coordinations(), txnId, result);
                     command = safeCommand.preapplied(safeStore, writes, result);

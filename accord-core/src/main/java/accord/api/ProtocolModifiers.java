@@ -18,6 +18,7 @@
 
 package accord.api;
 
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,13 +29,14 @@ import accord.primitives.TxnId.FastPaths;
 import accord.primitives.TxnId.MediumPath;
 import accord.utils.Invariants;
 import accord.utils.TinyEnumSet;
+import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.Chase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.DoNotChase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
+import static accord.api.ProtocolModifiers.Toggles.CleanCfkBefore.SHARD_APPLIED;
 import static accord.api.ProtocolModifiers.Toggles.DependencyElision.IF_DURABLY_COMMITTED;
-import static accord.api.ProtocolModifiers.Toggles.InformOfDurability.ALL;
 import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS;
 import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC;
 import static accord.api.ProtocolModifiers.Toggles.SendStableMessages.TO_ALL_IF_SINGLE_KEY_WRITE;
@@ -259,6 +261,10 @@ public class ProtocolModifiers
         public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_IF_SINGLE_KEY_WRITE && (!txnId.is(SingleKey) || !txnId.is(Txn.Kind.Write))); }
         public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
+        private static boolean sendMinimalCommits;
+        public static boolean sendMinimalCommits() { return sendMinimalCommits; }
+        public static void setSendMinimalCommits(boolean newSendMinimalCommits) { sendMinimalCommits = newSendMinimalCommits; }
+
         private static boolean permitLocalExecution = true;
         public static boolean permitLocalExecution() { return permitLocalExecution; }
         public static void setPermitLocalExecution(boolean newPermitLocalExecution) { permitLocalExecution = newPermitLocalExecution; }
@@ -287,6 +293,11 @@ public class ProtocolModifiers
             transitiveDependenciesAreVisible = newTransitiveDependenciesAreVisible;
         }
 
+        public enum CleanCfkBefore { SHARD_APPLIED, GC }
+        private static CleanCfkBefore cleanCfkBefore = SHARD_APPLIED;
+        public static CleanCfkBefore cleanCfkBefore() { return cleanCfkBefore; }
+        public static void setCleanCfkBefore(CleanCfkBefore newCleanCfkBefore) { cleanCfkBefore = newCleanCfkBefore; }
+
         public enum DependencyElision { OFF, ON, IF_DURABLY_COMMITTED, IF_DURABLY_PREAPPLIED }
         private static DependencyElision dependencyElision = IF_DURABLY_COMMITTED;
         public static DependencyElision dependencyElision() { return dependencyElision; }
@@ -297,7 +308,7 @@ public class ProtocolModifiers
         public static void setVisitMaybePruned(boolean newVisitMaybePruned) { visitMaybePruned = newVisitMaybePruned; }
 
         public enum InformOfDurability { HOME, ALL }
-        private static InformOfDurability informOfDurability = ALL;
+        private static InformOfDurability informOfDurability = InformOfDurability.ALL;
         public static InformOfDurability informOfDurability() { return informOfDurability; }
         public static void setInformOfDurability(InformOfDurability newInformOfDurability) { informOfDurability = newInformOfDurability; }
 
@@ -320,8 +331,32 @@ public class ProtocolModifiers
         public static boolean dataStoreDetectsFutureReads() { return dataStoreDetectsFutureReads; }
         public static void setDataStoreDetectsFutureReads(boolean newDataStoreDetectsFutureReads) { dataStoreDetectsFutureReads = newDataStoreDetectsFutureReads; }
 
-        private static boolean executeBacklog = false;
-        public static boolean executeBacklog() { return executeBacklog; }
-        public static void setExecuteBacklog(boolean newExecuteBacklog) { executeBacklog = newExecuteBacklog; }
+        private static boolean coordinatorExecuteBacklog = false;
+        public static boolean coordinatorExecuteBacklog() { return coordinatorExecuteBacklog; }
+        public static void setCoordinatorExecuteBacklog(boolean newCoordinatorExecuteBacklog) { coordinatorExecuteBacklog = newCoordinatorExecuteBacklog; }
+
+        public enum DirectExecute { NONE, BLIND_WRITE, ALL }
+        private static DirectExecute directExecute = DirectExecute.ALL;
+        public static boolean directExecute(TxnId txnId, Txn txn)
+        {
+            switch (directExecute)
+            {
+                default: throw new UnhandledEnum(directExecute);
+                case NONE: return false;
+                case ALL: txnId.is(Txn.Kind.Write);
+                case BLIND_WRITE: return txnId.is(Txn.Kind.Write) && txn.read().keys().isEmpty();
+            }
+        }
+        public static void setDirectExecute(DirectExecute newDirectExecute) { directExecute = newDirectExecute; }
+
+        private static float directExecuteDistributedPersistChance = 1.0f;
+        public static boolean directExecuteDistributedPersist()
+        {
+            float chance = directExecuteDistributedPersistChance;
+            if (chance <= 0f) return false;
+            if (chance >= 1f) return true;
+            return ThreadLocalRandom.current().nextFloat() < chance;
+        }
+        public static void setDirectExecuteDistributedPersistChance(float newChance) { directExecuteDistributedPersistChance = newChance; }
     }
 }

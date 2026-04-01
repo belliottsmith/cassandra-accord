@@ -256,7 +256,7 @@ abstract class PostProcess
                                                  @Nullable TxnInfo newInfo)
     {
         // TODO (expected): can we relax this to shardRedundantBefore?
-        TxnId redundantBefore = bounds.shardAppliedBefore;
+        TxnId redundantBefore = bounds.cleanCfkBefore();
         TxnId readyAt = bounds.readyAt;
         if (readyAt.compareTo(redundantBefore) <= 0) readyAt = null;
 

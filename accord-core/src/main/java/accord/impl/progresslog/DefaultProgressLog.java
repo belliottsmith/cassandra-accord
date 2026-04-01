@@ -64,6 +64,7 @@ import org.agrona.collections.Object2ObjectHashMap;
 
 import static accord.api.ProgressLog.BlockedUntil.CanApply;
 import static accord.api.ProgressLog.BlockedUntil.NotBlocked;
+import static accord.api.ProtocolModifiers.Toggles.directExecute;
 import static accord.impl.progresslog.HomePhase.Done;
 import static accord.impl.progresslog.HomePhase.Undecided;
 import static accord.impl.progresslog.Progress.NoneExpected;
@@ -261,7 +262,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     boolean isHomeDone(Command command)
     {
-        if (command.txnId().is(SingleKey) && command.hasBeen(Stable))
+        if (command.txnId().is(SingleKey) && command.hasBeen(Stable) && directExecute(command.txnId(), command.partialTxn()) && command.executeAt().epoch() == command.txnId().epoch())
         {
             PartialTxn partialTxn = command.partialTxn();
             if (partialTxn != null)

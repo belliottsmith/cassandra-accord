@@ -26,6 +26,7 @@ import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
 
 import accord.api.Data;
+import accord.api.ProtocolModifiers.Toggles;
 import accord.api.Result;
 import accord.api.Timeouts;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
@@ -74,11 +75,13 @@ import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
-import static accord.api.ProtocolModifiers.Toggles.executeBacklog;
+import static accord.api.ProtocolModifiers.Toggles.coordinatorExecuteBacklog;
+import static accord.api.ProtocolModifiers.Toggles.directExecuteDistributedPersist;
 import static accord.api.ProtocolModifiers.Toggles.recoverReads;
 import static accord.api.ProtocolModifiers.Toggles.fastReadExecMayResendTxn;
 import static accord.api.ProtocolModifiers.Toggles.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.Toggles.permitLocalExecution;
+import static accord.api.ProtocolModifiers.Toggles.sendMinimalCommits;
 import static accord.api.ProtocolModifiers.Toggles.sendNoStableIfFastExec;
 import static accord.api.ProtocolModifiers.Toggles.sendOnlyReadStableMessages;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
@@ -320,14 +323,17 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private Commit.Kind commitKind()
     {
+        if (!sendMinimalCommits())
+            return StableWithTxnAndDeps;
+
         switch (path)
         {
             default: throw UnhandledEnum.unknown(path);
             case EPHEMERAL: throw UnhandledEnum.invalid(EPHEMERAL);
             case BACKLOG:
-            case FAST:    //return StableFastPath;
-            case MEDIUM:  //return StableMediumPath;
-            case SLOW:    //return StableSlowPath;
+            case FAST:    return StableFastPath;
+            case MEDIUM:  return StableMediumPath;
+            case SLOW:    return StableSlowPath;
             case RECOVER: return StableWithTxnAndDeps;
         }
     }
@@ -386,7 +392,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 return Action.None;
 
             case Redundant:
-                if (txnId.is(SingleKey))
+                if (txnId.is(SingleKey) && Toggles.directExecute(txnId, txn))
                     return Action.None;
 
             case Rejected:
@@ -472,7 +478,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         return node.coordinationAdapter(txnId, Standard);
     }
 
-    public void onRemoteSuccess(Result result)
+    private void onExternalSuccess(Result result)
     {
         executor.execute(() -> {
             if (!trySetDone())
@@ -485,9 +491,19 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         });
     }
 
-    public void onSuccess(Timestamp executeAt, Writes writes, Result result)
+    public void onRemoteSuccess(Result result)
     {
-        if (ThreadLocalRandom.current().nextFloat() < 0.05f)
+        if (tracing != null)
+            tracing.trace(null, "Remote Success");
+        onExternalSuccess(result);
+    }
+
+    public void onLocalDirectSuccess(Timestamp executeAt, Writes writes, Result result)
+    {
+        if (tracing != null)
+            tracing.trace(null, "Local Direct Success");
+
+        if (directExecuteDistributedPersist())
         {
             executor.executeMaybeImmediately(() -> {
                 if (!trySetDone())
@@ -499,7 +515,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         }
         else
         {
-            onRemoteSuccess(result);
+            onExternalSuccess(result);
         }
     }
 
@@ -553,7 +569,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind()))
                 return CommitOrReadNack.Rejected;
 
-            if (executeBacklog() && txnId.is(SingleKey) && txnId.is(Key))
+            if (coordinatorExecuteBacklog() && txnId.is(SingleKey) && txnId.is(Key))
             {
                 SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(scope.get(0).asRoutingKey());
                 if (safeCfk != null)

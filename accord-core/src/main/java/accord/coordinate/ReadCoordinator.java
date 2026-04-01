@@ -274,11 +274,6 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
         finishOnFailure();
     }
 
-    boolean isDone()
-    {
-        return isDone;
-    }
-
     void setDone()
     {
         Invariants.require(!isDone);

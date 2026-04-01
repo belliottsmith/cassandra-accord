@@ -35,6 +35,7 @@ import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers.Toggles;
 import accord.api.RoutingKey;
 import accord.api.VisibleForImplementation;
 import accord.local.RedundantStatus.Coverage;
@@ -55,6 +56,7 @@ import accord.utils.Functions;
 import accord.utils.Invariants;
 import accord.utils.ReducingIntervalMap;
 import accord.utils.ReducingRangeMap;
+import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.Toggles.requiresUniqueHlcs;
 import static accord.local.RedundantStatus.Coverage.SOME;
@@ -161,6 +163,26 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (newGcBefore.hlc() < this.gcBefore.hlc())
                 return this;
             return new QuickBounds(startEpoch, endEpoch, readyAt, newGcBefore, shardAppliedBefore, locallyAppliedBefore);
+        }
+
+        public TxnId cleanCfkBefore()
+        {
+            switch (Toggles.cleanCfkBefore())
+            {
+                default: throw new UnhandledEnum(Toggles.cleanCfkBefore());
+                case SHARD_APPLIED: return shardAppliedBefore;
+                case GC: return gcBefore;
+            }
+        }
+
+        public QuickBounds withCleanCfkBeforeAtLeast(TxnId atLeast)
+        {
+            switch (Toggles.cleanCfkBefore())
+            {
+                default: throw new UnhandledEnum(Toggles.cleanCfkBefore());
+                case SHARD_APPLIED: return withShardAppliedBeforeAtLeast(atLeast);
+                case GC: return withGcBeforeAtLeast(atLeast);
+            }
         }
 
         @Override

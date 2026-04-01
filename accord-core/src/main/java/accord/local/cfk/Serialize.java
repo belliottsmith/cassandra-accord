@@ -836,7 +836,7 @@ public class Serialize
                 bounds = bounds.withReadyAtLeast(TxnId.fromValues(epoch, hlc, flags, node));
             }
             if (0 != (globalFlags & HAS_MAX_HLC_HEADER_BIT))
-                maxUniqueHlc = bounds.shardAppliedBefore.hlc() + VIntCoding.readVInt(in);
+                maxUniqueHlc = bounds.cleanCfkBefore().hlc() + VIntCoding.readVInt(in);
         }
         int prunedBeforeIndex = VIntCoding.readUnsignedVInt32(in) - 1;
 
