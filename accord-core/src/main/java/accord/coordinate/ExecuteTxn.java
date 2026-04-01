@@ -18,16 +18,13 @@
 
 package accord.coordinate;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
-import accord.api.AsyncExecutor;
 import accord.api.Data;
 import accord.api.Result;
 import accord.api.Timeouts;
@@ -58,7 +55,6 @@ import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
 import accord.messages.ReadTxnData;
-import accord.messages.Request;
 import accord.messages.SafeCallback;
 import accord.messages.StableThenRead;
 import accord.primitives.Ballot;
@@ -491,16 +487,20 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     public void onSuccess(Timestamp executeAt, Writes writes, Result result)
     {
-        onRemoteSuccess(result);
-//        executor.executeMaybeImmediately(() -> {
-//            if (!trySetDone())
-//                return;
-//
-//            stable.setDone();
-//            BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
-//            if (callback != null)
-//                callback.accept(result, null);
-//        });
+        if (ThreadLocalRandom.current().nextFloat() < 0.05f)
+        {
+            executor.executeMaybeImmediately(() -> {
+                if (!trySetDone())
+                    return;
+
+                stable.setDone();
+                adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
+            });
+        }
+        else
+        {
+            onRemoteSuccess(result);
+        }
     }
 
     @Override

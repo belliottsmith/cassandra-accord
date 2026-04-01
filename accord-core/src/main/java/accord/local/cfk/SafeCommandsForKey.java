@@ -127,7 +127,6 @@ public abstract class SafeCommandsForKey implements SafeState<CommandsForKey>
             {
                 Agent agent = safeStore.agent();
                 nextCfk = nextCfk.maybePrune(agent.cfkPruneInterval(), agent.cfkHlcPruneDelta());
-//                ((RecordingNotifySink)overrideSink()).postApplied(command.txnId(), nextCfk);
             }
             set(nextCfk);
         }
