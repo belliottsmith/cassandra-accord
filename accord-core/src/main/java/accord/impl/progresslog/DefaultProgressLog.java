@@ -264,7 +264,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (command.txnId().is(SingleKey) && command.hasBeen(Stable))
         {
             PartialTxn partialTxn = command.partialTxn();
-            if (partialTxn != null && partialTxn.read().keys().isEmpty())
+            if (partialTxn != null)
                 return true;
         }
         return command.durability().isDurableOrInvalidated() && isHomeDoneIfDurable(command);
