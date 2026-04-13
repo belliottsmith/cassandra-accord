@@ -312,7 +312,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (newSaveStatus.known.isDefinitionKnown() && (force || !prevSaveStatus.known.isDefinitionKnown()))
         {
             Ranges ranges = updated.participants().touches().toRanges();
-            commandStore().upsertRejectBefore(this, updated.txnId(), ranges);
+            commandStore().updateMaxConflicts(ranges, updated.txnId(), updated.txnId());
         }
 
         if (newSaveStatus.compareTo(Committed) >= 0 && newSaveStatus.compareTo(TruncatedApply) <= 0 && (force || prevSaveStatus.compareTo(Committed) < 0))

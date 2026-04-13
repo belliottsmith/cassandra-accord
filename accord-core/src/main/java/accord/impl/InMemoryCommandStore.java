@@ -72,7 +72,6 @@ import accord.local.NodeCommandStoreService;
 import accord.local.PreLoadContext;
 import accord.local.PreLoadContext.Empty;
 import accord.local.RedundantBefore;
-import accord.local.RejectBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
@@ -1232,7 +1231,6 @@ public abstract class InMemoryCommandStore extends CommandStore
         commandsForKey.clear();
         commandsForRanges.clear();
         progressLog.clear();
-        unsafeSetRejectBefore(RejectBefore.EMPTY);
         hasResumedBootstraps = false;
     }
 

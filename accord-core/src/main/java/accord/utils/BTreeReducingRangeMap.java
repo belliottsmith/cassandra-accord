@@ -92,6 +92,15 @@ public class BTreeReducingRangeMap<E extends Entry<E>> implements Iterable<E>
         return accumulator;
     }
 
+    public <V2, P1> V2 foldl(TriFunction<E, V2, P1, V2> reduce, V2 accumulator, P1 p1)
+    {
+        // TODO (expected): use BTree fold methods
+        require(!isEmpty());
+        for (E e : this)
+            accumulator = reduce.apply(e, accumulator, p1);
+        return accumulator;
+    }
+
     @Override
     public String toString()
     {

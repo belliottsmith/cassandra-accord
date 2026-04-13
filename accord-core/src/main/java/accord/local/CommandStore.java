@@ -77,6 +77,7 @@ import static accord.api.DataStore.FetchKind.Sync;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.durability.DurabilityService.SyncLocal.KnownToSelf;
+import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Image;
@@ -188,7 +189,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      */
     private NavigableMap<Timestamp, Ranges> safeToRead = emptySafeToRead();
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
-    private RejectBefore rejectBefore = RejectBefore.EMPTY;
 
     static class WaitingOnVisibility
     {
@@ -360,11 +360,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         this.maxDecidedRX = newMaxDecidedRX;
     }
 
-    protected void unsafeSetRejectBefore(RejectBefore newRejectBefore)
-    {
-        this.rejectBefore = newRejectBefore;
-    }
-
     final void unsafeSetRedundantBefore(RedundantBefore newRedundantBefore)
     {
         redundantBefore = newRedundantBefore;
@@ -466,13 +461,18 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         executeAt = executeAt.flattenUniqueHlc(); // this is what guarantees a bootstrap recipient can compute uniqueHlc safely
         MaxConflicts updatedMaxConflicts = maxConflicts.update(updated.txnId(), updated.participants().hasTouched(), executeAt);
         if (Invariants.isParanoid())
-            Invariants.require(updatedMaxConflicts.getMax(updated.participants().hasTouched()).compareTo(executeAt) >= 0);
+            Invariants.require(updatedMaxConflicts.getAny(updated.txnId(), updated.participants().hasTouched()).compareTo(executeAt) >= 0);
         updateMaxConflicts(executeAt, updatedMaxConflicts);
     }
 
     protected void updateMaxConflicts(Ranges ranges, Timestamp executeAt)
     {
-        updateMaxConflicts(executeAt, maxConflicts.update(ranges, executeAt, executeAt));
+        updateMaxConflicts(ranges, executeAt, Timestamp.NONE);
+    }
+
+    protected void updateMaxConflicts(Ranges ranges, Timestamp executeAt, Timestamp rejectBefore)
+    {
+        updateMaxConflicts(executeAt, maxConflicts.update(ranges, executeAt, executeAt, rejectBefore));
     }
 
     protected void updateMaxConflicts(NavigableMap<? extends Timestamp, Ranges> map)
@@ -516,7 +516,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
                 dumpCounter++;
                 dumpCounter %= 100;
             }
-            else if (prunedSize != initialSize)
+            else if (prunedSize != initialSize && logger.isTraceEnabled())
             {
                 logger.trace("Successfully pruned {} to {}", initialSize, prunedSize);
             }
@@ -525,14 +525,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
             maxConflictsUpdates = 0;
         }
         unsafeSetMaxConflicts(updatedMaxConflicts);
-    }
-
-    final void upsertRejectBefore(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
-    {
-        // TODO (desired): narrow ranges to those that are owned
-        Invariants.requireArgument(txnId.isSyncPoint());
-        RejectBefore newRejectBefore = RejectBefore.add(rejectBefore, ranges, txnId);
-        unsafeSetRejectBefore(newRejectBefore);
     }
 
     final void markExclusiveSyncPointDecided(SafeCommandStore safeStore, TxnId txnId, Ranges ranges)
@@ -569,17 +561,13 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     {
         NodeCommandStoreService node = safeStore.node();
 
-        boolean isExpired = safeStore.agent().rejectPreAccept(safeStore.node(), txnId) && !txnId.isSyncPoint();
-        if (rejectBefore != null && !isExpired)
-        {
-            boolean rejects = rejectBefore.rejects(txnId, keys);
-            isExpired = rejects;
-        }
+        Timestamp maxConflict = maxConflicts.get(txnId, keys);
+        boolean isExpired = maxConflict.is(REJECTED) || (safeStore.agent().rejectPreAccept(safeStore.node(), txnId) && !txnId.isSyncPoint());
 
         if (isExpired)
             return node.uniqueTimestamp(txnId).asRejected();
 
-        Timestamp min = TxnId.mergeMax(txnId, maxConflicts.get(txnId, keys));
+        Timestamp min = TxnId.mergeMax(txnId, maxConflict);
         if (permitFastPath && txnId == min && txnId.epoch() >= node.epoch())
             return txnId;
 
@@ -1207,7 +1195,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     public final boolean isRejectedIfNotPreAccepted(TxnId txnId, Unseekables<?> participants)
     {
-        return rejectBefore.rejects(txnId, participants);
+        return maxConflicts.get(txnId, participants).is(REJECTED);
     }
 
     public final MaxConflicts unsafeGetMaxConflicts()
@@ -1223,12 +1211,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     public final LocalListeners unsafeGetListeners()
     {
         return listeners;
-    }
-
-    @Nullable
-    public final RejectBefore unsafeGetRejectBefore()
-    {
-        return rejectBefore;
     }
 
     public final DurableBefore durableBefore()
