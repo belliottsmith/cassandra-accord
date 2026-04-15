@@ -271,8 +271,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
     {
         // finished processing, null out large objects
         partialDeps = null;
-        if (reply != null || failure != null) super.acceptInternal(reply, failure);
-        else Invariants.require(isCancelled());
+        super.acceptInternal(reply, failure);
     }
 
     @Override

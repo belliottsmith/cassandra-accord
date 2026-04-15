@@ -32,6 +32,7 @@ import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.primitives.Keys;
 import accord.primitives.Txn;
+import accord.utils.async.Cancellable;
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;
 import com.google.gson.stream.JsonWriter;
@@ -49,12 +50,13 @@ public class MaelstromRequest extends Body implements Request
     }
 
     @Override
-    public void process(Node node, Id client, ReplyContext replyContext)
+    public Cancellable process(Node node, Id client, ReplyContext replyContext)
     {
         node.coordinate(txn).invoke((success, fail) -> {
             Reply reply = success != null ? new MaelstromReply(MaelstromReplyContext.messageIdFor(replyContext), (MaelstromResult) success) : null;
             node.reply(client, replyContext, reply, fail);
         });
+        return null;
     }
 
     @Override

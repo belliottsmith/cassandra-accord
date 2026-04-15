@@ -36,7 +36,9 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.TopologyService;
+import accord.impl.LocalDelivery;
 import accord.local.cfk.ExecuteTxnBacklog;
+import accord.messages.ReplyContext.NoReplyContext;
 import accord.topology.Topologies;
 import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
@@ -206,7 +208,6 @@ public class Node implements NodeCommandStoreService
     {
         this.id = id;
         this.scheduler = scheduler; // we set scheduler first so that e.g. requestTimeoutsFactory and progressLogFactory can take references to it
-        this.messageSink = messageSink;
         this.coordinationAdapters = coordinationAdapters;
         this.time = time;
         this.uniqueTime = uniqueTime;
@@ -223,6 +224,7 @@ public class Node implements NodeCommandStoreService
         this.topology = new TopologyManager(topologySorter, this, topologyService, time, timeouts);
         this.durabilityService = new DurabilityService(this);
         this.executeBacklogSink = new ExecuteTxnBacklog(this);
+        this.messageSink = messageSink;
 
         // TODO (desired): make frequency configurable
         scheduler.recurring(() -> commandStores.forAllUnsafe(store -> store.progressLog.maybeNotify()), 1, SECONDS);
@@ -518,58 +520,35 @@ public class Node implements NodeCommandStoreService
         }
     }
 
-    public <T> void send(Topologies topologies, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
-    {
-        SortedArrayList<Node.Id> nodes = topologies.nodes();
-        for (int i = 0 ; i < nodes.size() ; ++i)
-        {
-            Node.Id to = nodes.get(i);
-            if (!topologies.isFaulty(nodes.get(i)))
-                messageSink.send(to, send, executor, callback);
-        }
-    }
-
-    // TODO (required): callback must be invoked if for any reason send fails
-    public <T> void send(Topologies topologies, Function<Id, Request> requestFactory, @Nonnull AsyncExecutor executor, Callback<T> callback)
-    {
-        SortedArrayList<Node.Id> nodes = topologies.nodes();
-        for (int i = 0 ; i < nodes.size() ; ++i)
-        {
-            Node.Id to = nodes.get(i);
-            if (!topologies.isFaulty(nodes.get(i)))
-                messageSink.send(to, requestFactory.apply(to), executor, callback);
-        }
-    }
-
     // send to a specific node
-    public <T> Cancellable send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
+    public <T extends Reply> Cancellable send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
     {
-        return messageSink.send(to, send, executor, callback);
+        if (to.equals(id)) return new LocalDelivery<>(executor, callback).deliver(this, send);
+        else return messageSink.send(to, send, executor, callback);
     }
 
     // send to a specific node
     public void send(Id to, Request send)
     {
-        messageSink.send(to, send);
+        if (to.equals(id)) send.process(this, to, new NoReplyContext(this, send));
+        else messageSink.send(to, send);
     }
 
-    public void reply(Id replyingToNode, ReplyContext replyContext, Reply send, Throwable failure)
+    public void reply(Id replyingToNode, ReplyContext replyContext, Reply success, Throwable failure)
     {
         if (failure != null)
         {
             agent.onException(failure);
-            if (send != null)
-                agent().onException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, send)));
-            messageSink.replyWithUnknownFailure(replyingToNode, replyContext, failure);
-            return;
+            if (success != null)
+                agent().onException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, success)));
         }
-        else if (send == null)
+        else if (success == null)
         {
             NullPointerException e = new NullPointerException();
             agent.onException(e);
             throw e;
         }
-        messageSink.reply(replyingToNode, replyContext, send);
+        replyContext.reply(replyingToNode, messageSink, success, failure);
     }
 
     public TxnId nextTxnIdWithDefaultFlags(Seekables<?, ?> keys, Txn.Kind kind, Domain domain)

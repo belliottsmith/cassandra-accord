@@ -41,6 +41,7 @@ import accord.topology.Topology;
 import accord.utils.AccordGens;
 import accord.utils.Gen;
 import accord.utils.Gens;
+import accord.utils.async.Cancellable;
 
 import org.junit.jupiter.api.Test;
 
@@ -87,7 +88,7 @@ class CommandsTest
                 }
 
                 @Override
-                public void process(Node node, Node.Id from, ReplyContext replyContext)
+                public Cancellable process(Node node, Node.Id from, ReplyContext replyContext)
                 {
                     Ranges localRange = Ranges.ofSortedAndDeoverlapped(prefix1); // make sure to use the range removed
 
@@ -117,6 +118,7 @@ class CommandsTest
                             }
                         }
                     });
+                    return null;
                 }
 
                 @Override

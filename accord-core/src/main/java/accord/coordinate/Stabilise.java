@@ -107,8 +107,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
                     recordFailure(from, Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                     break;
                 case InsufficientAndWaiting:
-                    node.send(from, new Commit(CommitWithTxn, from, allTopologies,
-                                               txnId, txn, scope, ballot, executeAt, stabiliseDeps));
+                    resend(from, new Commit(CommitWithTxn, from, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
                     break;
                 case InsufficientEpochs:
                 {

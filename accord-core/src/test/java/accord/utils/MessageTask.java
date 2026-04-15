@@ -36,6 +36,7 @@ import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.Cancellable;
 
 /**
  * Message task that will continue sending messages to a set of nodes until all
@@ -95,9 +96,10 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
         }
 
         @Override
-        public void process(Node on, Node.Id from, ReplyContext replyContext)
+        public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
         {
             process.process(on, from, success -> on.reply(from, replyContext, success ? SUCCESS : FAILURE, null));
+            return null;
         }
 
         @Override

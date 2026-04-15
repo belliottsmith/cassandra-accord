@@ -83,6 +83,7 @@ import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
 import static accord.api.ProtocolModifiers.sendMinimalCommits;
 import static accord.api.ProtocolModifiers.sendNoStableIfFastExec;
 import static accord.api.ProtocolModifiers.sendOnlyReadStableMessages;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
@@ -95,11 +96,11 @@ import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.messages.Commit.Kind.StableSlowPath;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
+import static accord.messages.MessageType.StandardMessage.READ_REQ;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Status.Durability.DurablyStable;
-import static accord.primitives.Status.Phase.Execute;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -224,7 +225,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
             if (mayFastExecute)
                 markUnstableFastRead(node.id());
-            new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
+            new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, READ_REQ, MICROSECONDS));
             start(Collections.emptyList(), Collections.singletonList(node.id()));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
@@ -606,7 +607,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (reply != null && reply.kind == CommitOrReadNack.Kind.Waiting)
             {
                 committed = true;
-                long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
+                long slowAt = node.agent().selfSlowAt(txnId, READ_REQ, MICROSECONDS);
                 slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
                 {
                     @Override public void timeout() { executor.executeMaybeImmediately(() -> {
@@ -671,7 +672,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     public CoordinationKind kind()
     {
-        return CoordinationKind.Execute;
+        return Execute;
     }
 
     @Override

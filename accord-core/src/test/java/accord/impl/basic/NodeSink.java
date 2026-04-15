@@ -27,6 +27,8 @@ import javax.annotation.Nonnull;
 
 import accord.api.AsyncExecutor;
 import accord.api.MessageSink;
+import accord.api.MessageSink.ReplySink;
+import accord.impl.LocalDelivery;
 import accord.impl.basic.Cluster.Link;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -35,18 +37,22 @@ import accord.messages.Message;
 import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
+import accord.messages.ReplyContext.NoReplyContext;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
+import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
-public class NodeSink implements MessageSink
+public class NodeSink implements ReplySink
 {
     public enum Action { DELIVER, DROP, DELIVER_WITH_FAILURE, FAILURE }
 
     public interface TimeoutSupplier
     {
+        long localDelay();
         long slowDelay();
         long expiresDelay();
         long slowAt();
@@ -75,19 +81,36 @@ public class NodeSink implements MessageSink
     @Override
     public void send(Id to, Request send)
     {
+        Invariants.require(!to.equals(self));
         maybeEnqueue(to, nextMessageId++, timeouts.expiresAt(), send, null);
+    }
+
+    private Cancellable sendToSelf(Request send, @Nonnull AsyncExecutor executor, Callback callback)
+    {
+        long expiresAt = timeouts.expiresAt();
+        long slowAt = timeouts.slowAt();
+        Node node = lookup.apply(self);
+        PendingRunnable pending = PendingRunnable.create(() -> {
+            new LocalDelivery<>(executor, callback).deliver(node, send);
+        });
+
+        parent.pending.add(pending, timeouts.localDelay(), timeouts.units());
+        return null;
     }
 
     @Override
     public Cancellable send(Id to, Request send, int attempt, @Nonnull AsyncExecutor executor, Callback callback)
     {
-        long messageId = nextMessageId++;
-        SafeCallback sc = new SafeCallback(executor, callback);
-        callbacks.put(messageId, sc);
+        if (to.equals(self))
+            return sendToSelf(send, executor, callback);
+
         TimeUnit units = timeouts.units();
         long now = timeouts.now();
         long expiresAt = timeouts.expiresAt();
         long slowAt = timeouts.slowAt();
+        long messageId = nextMessageId++;
+        SafeCallback sc = new SafeCallback(executor, callback);
+        callbacks.put(messageId, sc);
         if (maybeEnqueue(to, messageId, expiresAt, send, sc))
         {
             parent.pending.add(PendingRunnable.create(() -> {
@@ -102,21 +125,29 @@ public class NodeSink implements MessageSink
         return () -> callbacks.remove(messageId);
     }
 
-    @Override
-    public void reply(Id replyToNode, ReplyContext replyContext, Reply reply)
+    public void reply(Id replyToNode, ReplyContext replyContext, Reply reply, Throwable failure)
     {
-        long expiresAt = Packet.getExpiresAt(replyContext);
-        if (expiresAt < 0) expiresAt = timeouts.expiresAt();
+        if (reply == null)
+        {
+            if (failure == null)
+                throw new IllegalArgumentException("Both reply and failure are null");
+            reply = new FailureReply(failure);
+        }
+
+        long expiresAt = replyContext.expiresAt(MILLISECONDS);
+        if (expiresAt > 0) expiresAt = translateLocalToQueueMillis(lookup.apply(self), expiresAt);
+        else expiresAt = timeouts.expiresAt();
         maybeEnqueue(replyToNode, Packet.getMessageId(replyContext), expiresAt, reply, null);
     }
 
-    private boolean maybeEnqueue(Node.Id to, long id, long expiresAt, Message message, SafeCallback callback)
+    private boolean maybeEnqueue(Node.Id to, long id, long expiresAtQueueMillis, Message message, SafeCallback callback)
     {
         Link link = parent.links.apply(self, to);
-        if (to.equals(self) || lookup.apply(to) == null /* client */)
+        Invariants.require(!to.equals(self));
+        if (lookup.apply(to) == null /* client */)
         {
             parent.messageListener.onMessage(Action.DELIVER, self, to, id, message);
-            deliver(to, id, expiresAt, message, link);
+            deliver(to, id, expiresAtQueueMillis, message, link);
             return true;
         }
 
@@ -125,14 +156,14 @@ public class NodeSink implements MessageSink
         switch (action)
         {
             case DELIVER:
-                deliver(to, id, expiresAt, message, link);
+                deliver(to, id, expiresAtQueueMillis, message, link);
                 return true;
             case DELIVER_WITH_FAILURE:
-                deliver(to, id, expiresAt, message, link);
+                deliver(to, id, expiresAtQueueMillis, message, link);
             case FAILURE:
                 if (callback != null)
                 {
-                    long failesAt = timeouts.failsAt();
+                    long failsAt = timeouts.failsAt();
                     parent.pending.add(PendingRunnable.create(() -> {
                         if (callback == callbacks.remove(id))
                         {
@@ -146,7 +177,7 @@ public class NodeSink implements MessageSink
                                 lookup.apply(self).agent().onException(t);
                             }
                         }
-                    }), failesAt - timeouts.now(), timeouts.units());
+                    }), failsAt - timeouts.now(), timeouts.units());
                 }
                 return false;
             case DROP:
@@ -158,17 +189,29 @@ public class NodeSink implements MessageSink
         }
     }
 
-    private void deliver(Node.Id to, long id, long expiresAt, Message message, Link link)
+    private void deliver(Node.Id to, long id, long expiresAtQueueMillis, Message message, Link link)
     {
+        long expiresAtLocalMillis = translateQueueToLocalMillisWithJitter(lookup.apply(to), expiresAtQueueMillis);
         Packet packet;
-        if (message instanceof Reply) packet = new Packet(self, to, expiresAt, id, (Reply) message);
-        else packet = new Packet(self, to, expiresAt, id, (Request) message);
+        if (message instanceof Reply) packet = new Packet(self, to, expiresAtLocalMillis, id, (Reply) message);
+        else packet = new Packet(self, to, expiresAtLocalMillis, id, (Request) message);
         parent.add(packet, link.latencyMicros.getAsLong(), MICROSECONDS);
     }
 
-    @Override
-    public void replyWithUnknownFailure(Id replyToNode, ReplyContext replyContext, Throwable failure)
+    private long translateQueueToLocalMillisWithJitter(Node node, long expiresAtQueueMillis)
     {
-        reply(replyToNode, replyContext, new FailureReply(failure));
+        if (node == null)
+            return 0;
+        long expiresAt = expiresAtQueueMillis - parent.pending.nowInMillis();
+        expiresAt *= 1.8f - parent.random.nextFloat();
+        expiresAt += node.time().elapsed(MILLISECONDS);
+        return expiresAt;
+    }
+
+    private long translateLocalToQueueMillis(Node node, long expiresAtLocalMillis)
+    {
+        long expiresAt = expiresAtLocalMillis - node.time().elapsed(MILLISECONDS);
+        expiresAt += parent.pending.nowInMillis();
+        return expiresAt;
     }
 }

@@ -27,8 +27,10 @@ import java.util.function.Predicate;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.api.Timeouts;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.RequestStatus;
+import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
 import accord.messages.Callback;
@@ -47,6 +49,11 @@ import accord.utils.SortedListSet;
 import accord.utils.Rethrowable;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.Cancellable;
+
+import static accord.coordinate.AbstractCoordination.LocalExecuteState.PENDING;
+import static accord.coordinate.AbstractCoordination.LocalExecuteState.SUCCESS;
+import static accord.coordinate.AbstractCoordination.LocalExecuteState.TIMEOUT;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public abstract class AbstractCoordination<P extends Participants<?>, Result, Reply extends accord.messages.Reply, Ok> extends AbstractSimpleCoordination<P> implements Callback<Reply>
 {
@@ -72,7 +79,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     abstract void onFailureInternal(Node.Id from, int fromIndex, Throwable fail);
     void onSlowResponseInternal(Node.Id from) {}
     public abstract @Nonnull AbstractTracker<?> tracker();
-    public SortedList<Node.Id> nodes() { return nodes; }
+    @Override public SortedList<Node.Id> nodes() { return nodes; }
 
     void recordOk(int fromIndex, Ok ok)
     {
@@ -208,6 +215,12 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         });
     }
 
+    void resend(Node.Id to, Request send)
+    {
+        if (to.equals(node.id())) node.send(to, send, executor, this);
+        else node.send(to, send);
+    }
+
     @Override
     public void onSuccess(Node.Id from, Reply reply)
     {
@@ -269,10 +282,10 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
             Invariants.require(expecting, "%s", this);
             replyState[fromIndex] = null;
         }
-        else
+        else if (!expectingReply.get(fromIndex))
         {
-            boolean expecting = expectingReply.get(fromIndex);
-            Invariants.require(expecting, "%s", this);
+            // messages can (rarely) be reordered, so we could receive a non-final reply after a final one; simply ignore this case
+            return -1;
         }
         return fromIndex;
     }
@@ -387,5 +400,111 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
             sb.append(v);
         }
         return sb.toString();
+    }
+
+    enum LocalExecuteState { PENDING, SUCCESS, TIMEOUT }
+    abstract class AbstractLocalExecute extends MapReduceConsumeCommandStores<P, Reply> implements Timeouts.Timeout
+    {
+        LocalExecuteState state = PENDING;
+        Cancellable cancel;
+        Timeouts.RegisteredTimeout timeout;
+
+        abstract long expiresAt();
+        abstract Cancellable submit();
+        abstract void acceptInternal(Reply result, Throwable failure);
+
+        protected AbstractLocalExecute()
+        {
+            super(AbstractCoordination.this.scope);
+        }
+
+        protected void start()
+        {
+            markSelfContacted();
+            Cancellable cancel = submit();
+            long expiresAt = expiresAt();
+            Timeouts.RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
+            synchronized (this)
+            {
+                switch (state)
+                {
+                    case PENDING:
+                        this.cancel = cancel;
+                        this.timeout = timeout;
+                        break;
+                    case TIMEOUT:
+                        if (cancel != null)
+                            cancel.cancel();
+                        break;
+                    case SUCCESS:
+                        if (timeout != null)
+                            timeout.cancel();
+                        break;
+                }
+            }
+        }
+
+        @Override
+        public void accept(Reply result, Throwable failure)
+        {
+            done();
+            executor.executeMaybeImmediately(() -> acceptInternal(result, failure));
+        }
+
+        @Override
+        public void timeout()
+        {
+            Cancellable cancel;
+            synchronized (this)
+            {
+                if (state != PENDING)
+                    return;
+
+                state = TIMEOUT;
+                timeout = null;
+                if (this.cancel == null)
+                    return;
+                cancel = this.cancel;
+                this.cancel = null;
+            }
+            cancel.cancel();
+        }
+
+        void done()
+        {
+            Timeouts.RegisteredTimeout cancel;
+            synchronized (this)
+            {
+                if (state != PENDING)
+                    return;
+
+                state = SUCCESS;
+                this.cancel = null;
+                if (timeout == null)
+                    return;
+                cancel = timeout;
+                timeout = null;
+            }
+            cancel.cancel();
+        }
+
+        @Override
+        public int stripe()
+        {
+            return txnId.hashCode();
+        }
+
+        @Nullable
+        @Override
+        public TxnId primaryTxnId()
+        {
+            return txnId;
+        }
+
+        @Override
+        public String reason()
+        {
+            return "Local " + kind();
+        }
     }
 }

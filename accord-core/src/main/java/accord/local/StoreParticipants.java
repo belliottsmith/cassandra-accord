@@ -31,6 +31,8 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.topology.ActiveEpoch;
+import accord.topology.ActiveEpochs;
 import accord.utils.Invariants;
 
 import static accord.local.StoreParticipants.Filter.QUERY;
@@ -705,11 +707,29 @@ public class StoreParticipants
 
     private static long computeUnsyncedEpoch(SafeCommandStore safeStore, long txnIdEpoch, Participants<?> participants)
     {
-        Participants<?> unsynced = safeStore.node().topology().active().unsyncedOnly(participants, txnIdEpoch);
-        if (unsynced == null || unsynced.isEmpty())
+        RangesForEpoch rangesForEpoch = safeStore.ranges();
+
+        int ri = rangesForEpoch.size() - 1;
+        if (ri == 0)
             return txnIdEpoch;
 
-        return computeCoveringEpoch(safeStore, txnIdEpoch, unsynced);
+        Participants<?> unsynced = participants;
+        ActiveEpochs activeEpochs = safeStore.node().topology().active();
+        int ai = Math.max(0, (int) (activeEpochs.current().epoch() - txnIdEpoch));
+        while (ai < activeEpochs.size())
+        {
+            ActiveEpoch epoch = activeEpochs.atIndex(ai++);
+            while (epoch.epoch() < rangesForEpoch.epochAtIndex(ri))
+            {
+                if (--ri == 0)
+                    return epoch.epoch();
+            }
+            unsynced = unsynced.without(epoch.quorumReady());
+            if (!unsynced.intersects(rangesForEpoch.rangesAtIndex(ri)))
+                return epoch.epoch();
+        }
+
+        return activeEpochs.minEpoch();
     }
 
     private static long computeCoveringEpoch(SafeCommandStore safeStore, long txnIdEpoch, Participants<?> participants)

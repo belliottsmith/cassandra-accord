@@ -28,12 +28,11 @@ import accord.api.Result;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
-import accord.messages.ReplyContext;
+import accord.messages.MessageType;
 import accord.primitives.Ballot;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable.Domain;
-import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -134,12 +133,6 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     }
 
     @Override
-    public long expiresAt(ReplyContext replyContext, TimeUnit units)
-    {
-        return -1;
-    }
-
-    @Override
     public AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean isRequested)
     {
         return AsyncChains.success(staleId);
@@ -200,13 +193,13 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
     }
 
     @Override
-    public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return unit.convert(100L, MICROSECONDS);
     }
 
     @Override
-    public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+    public long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit)
     {
         return unit.convert(1L, SECONDS);
     }

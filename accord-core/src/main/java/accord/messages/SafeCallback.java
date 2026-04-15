@@ -59,12 +59,12 @@ public class SafeCallback<T extends Reply>
         safeCall(from, t, Callback::onCallbackFailure);
     }
 
-    private interface SafeCall<T, P>
+    protected interface SafeCall<T, P>
     {
         void accept(Callback<T> callback, Node.Id id, P param);
     }
 
-    private <P> void safeCall(Node.Id from, P param, SafeCall<T, P> call)
+    protected final <P> void safeCall(Node.Id from, P param, SafeCall<T, P> call)
     {
         // TODO (low priority, correctness): if the executor is shutdown this propgates the exception to the network stack
         executor.executeMaybeImmediately(() -> {

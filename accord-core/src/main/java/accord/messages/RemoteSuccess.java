@@ -23,6 +23,7 @@ import accord.coordinate.Coordinations;
 import accord.coordinate.ExecuteTxn;
 import accord.local.Node;
 import accord.primitives.TxnId;
+import accord.utils.async.Cancellable;
 
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.messages.MessageType.StandardMessage.REMOTE_SUCCESS_REQ;
@@ -39,9 +40,10 @@ public class RemoteSuccess implements Request
     }
 
     @Override
-    public void process(Node on, Node.Id from, ReplyContext replyContext)
+    public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
     {
         report(on.coordinations(), txnId, result);
+        return null;
     }
 
     public static void report(Coordinations coordinations, TxnId txnId, Result result)

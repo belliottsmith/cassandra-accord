@@ -24,6 +24,7 @@ import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.primitives.TxnId;
+import accord.utils.async.Cancellable;
 
 import static accord.messages.MessageType.StandardMessage.SET_GLOBALLY_DURABLE_REQ;
 import static accord.messages.SimpleReply.Ok;
@@ -38,11 +39,12 @@ public class SetGloballyDurable implements Request, PreLoadContext
     }
 
     @Override
-    public void process(Node node, Node.Id from, ReplyContext replyContext)
+    public Cancellable process(Node node, Node.Id from, ReplyContext replyContext)
     {
         node.markDurable(durableBefore).invoke((success, fail) -> {
             node.reply(from, replyContext, fail == null ? Ok : null, fail);
         });
+        return null;
     }
 
     @Override

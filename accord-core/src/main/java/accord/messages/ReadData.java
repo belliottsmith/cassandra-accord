@@ -225,16 +225,16 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
     }
 
     @Override
-    public final void process(Node on, Node.Id replyTo, ReplyContext replyContext)
+    public final Cancellable process(Node on, Node.Id replyTo, ReplyContext replyContext)
     {
         this.replyTo = replyTo;
         this.replyContext = replyContext;
-        long expiresAt = on.agent().expiresAt(replyContext, MICROSECONDS);
-        process(on, expiresAt);
+        long expiresAt = replyContext.expiresAt(MICROSECONDS);
+        return process(on, expiresAt);
     }
 
     // TODO (expected): register slowAt
-    public void process(Node on, long expiresAt)
+    public Cancellable process(Node on, long expiresAt)
     {
         this.node = on;
         waitingOn = new IntHashSet();
@@ -248,7 +248,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
                 case PENDING:
                     this.cancel = cancel;
                     this.timeout = timeout;
-                    return;
+                    return cancel;
                 case PENDING_OBSOLETE:
                 case OBSOLETE:
                     timeout = null;
@@ -258,6 +258,7 @@ public abstract class ReadData extends MapReduceConsumeCommandStores<Participant
         }
         if (cancel != null) cancel.cancel();
         if (timeout != null) timeout.cancel();
+        return null;
     }
 
     protected boolean mayFastExecute() { return false; }

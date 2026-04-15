@@ -43,6 +43,7 @@ import java.util.function.Supplier;
 import accord.api.AsyncExecutor;
 import accord.api.Journal;
 import accord.api.MessageSink;
+import accord.api.MessageSink.ReplySink;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultTimeouts;
@@ -96,7 +97,7 @@ public class Cluster implements Scheduler
         <T> Queue<T> get();
     }
 
-    public static class InstanceSink implements MessageSink
+    public static class InstanceSink implements ReplySink
     {
         final Id self;
         final Function<Id, Node> lookup;
@@ -135,16 +136,17 @@ public class Cluster implements Scheduler
         }
 
         @Override
-        public void reply(Id replyToNode, ReplyContext replyContext, Reply reply)
+        public void reply(Id replyToNode, ReplyContext replyContext, Reply reply, Throwable failure)
         {
-            long replyToMessage = ((Packet) replyContext).body.msg_id;
-            parent.add(self, replyToNode, replyToMessage, reply);
-        }
+            if (reply == null)
+            {
+                if (failure == null)
+                    throw new IllegalArgumentException("Both reply and failure are null");
+                reply = new FailureReply(failure);
+            }
 
-        @Override
-        public void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure)
-        {
-            reply(replyingToNode, replyContext, new FailureReply(failure));
+            long replyToMessage = ((Packet)replyContext).body.msg_id;
+            parent.add(self, replyToNode, replyToMessage, reply);
         }
     }
 

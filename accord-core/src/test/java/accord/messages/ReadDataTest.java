@@ -33,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import accord.Utils;
 import accord.api.Data;
 import accord.api.MessageSink;
+import accord.api.MessageSink.ReplySink;
 import accord.api.Query;
 import accord.api.Read;
 import accord.api.Result;
@@ -94,7 +95,7 @@ class ReadDataTest
 
     private void test(Consumer<State> fn)
     {
-        MessageSink sink = Mockito.mock(MessageSink.class);
+        ReplySink sink = Mockito.mock(ReplySink.class);
         Node node = createNode(ID1, TOPOLOGY, sink, new MockCluster.Clock(100));
 
         Keys keys = Keys.of(IntKey.key(1), IntKey.key(43));
@@ -144,7 +145,7 @@ class ReadDataTest
 
             state.apply();
             state.readResult.setSuccess(Mockito.mock(Data.class));
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant), Mockito.eq(null));
         });
     }
 
@@ -168,7 +169,7 @@ class ReadDataTest
             state.apply();
             state.readResult.setSuccess(Mockito.mock(Data.class));
 
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant), Mockito.eq(null));
         });
     }
 
@@ -199,7 +200,7 @@ class ReadDataTest
 
             ReplyContext replyContext = state.process();
 
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant), Mockito.eq(null));
         });
     }
 
@@ -215,7 +216,7 @@ class ReadDataTest
             })));
             ReplyContext replyContext = state.process();
 
-            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant));
+            Mockito.verify(state.sink).reply(Mockito.eq(state.node.id()), Mockito.eq(replyContext), Mockito.eq(ReadData.CommitOrReadNack.Redundant), Mockito.eq(null));
         });
     }
 
@@ -249,7 +250,7 @@ class ReadDataTest
     private static class State
     {
         private final Node node;
-        private final MessageSink sink;
+        private final ReplySink sink;
         private final TxnId txnId;
         private final PartialTxn partialTxn;
         private final Keys keys;
@@ -260,7 +261,7 @@ class ReadDataTest
         private final PartialDeps deps;
         private final AsyncResults.SettableResult<Data> readResult;
 
-        State(Node node, MessageSink sink, TxnId txnId, PartialTxn partialTxn, AsyncResults.SettableResult<Data> readResult)
+        State(Node node, ReplySink sink, TxnId txnId, PartialTxn partialTxn, AsyncResults.SettableResult<Data> readResult)
         {
             this.node = node;
             this.sink = sink;

@@ -34,6 +34,7 @@ import java.util.function.Supplier;
 import accord.api.AsyncExecutor;
 import accord.api.Journal;
 import accord.api.MessageSink;
+import accord.api.MessageSink.ReplySink;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinationAdapter;
 import accord.impl.DefaultTimeouts;
@@ -75,7 +76,7 @@ public class Main
         }
     }
 
-    public static class StdoutSink implements MessageSink
+    public static class StdoutSink implements ReplySink
     {
         private final AtomicLong nextMessageId = new AtomicLong(1);
         private final Map<Long, CallbackInfo> callbacks = new ConcurrentHashMap<>();
@@ -132,16 +133,15 @@ public class Main
             return () -> callbacks.remove(messageId);
         }
 
-        @Override
-        public void reply(Id replyToNode, ReplyContext replyContext, Reply reply)
+        public void reply(Id replyToNode, ReplyContext replyContext, Reply reply, Throwable failure)
         {
+            if (reply == null)
+            {
+                if (failure == null)
+                    throw new IllegalArgumentException("Both reply and failure are null");
+                reply = new FailureReply(failure);
+            }
             send(new Packet(self, replyToNode, MaelstromReplyContext.messageIdFor(replyContext), reply));
-        }
-
-        @Override
-        public void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure)
-        {
-            reply(replyingToNode, replyContext, new FailureReply(failure));
         }
     }
 

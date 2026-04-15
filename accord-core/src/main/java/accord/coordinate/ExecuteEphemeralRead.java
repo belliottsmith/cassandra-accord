@@ -53,10 +53,11 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
-import static accord.primitives.Status.Phase.Execute;
+import static accord.messages.MessageType.StandardMessage.READ_EPHEMERAL_REQ;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.topology.SelectShards.LIVE;
 import static accord.utils.Invariants.illegalState;
@@ -94,7 +95,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
         node.agent().coordinatorEvents().onExecuting(txnId, Ballot.ZERO, deps, EPHEMERAL);
         if (permitCoordinatorLocalExecution() && tryIfUniversal(node.id()))
         {
-            new LocalExecute(txnId, node.id()).process(node, node.agent().selfExpiresAt(txnId, Execute, MICROSECONDS));
+            new LocalExecute(txnId, node.id()).process(node, node.agent().selfExpiresAt(txnId, READ_EPHEMERAL_REQ, MICROSECONDS));
         }
         else
         {
@@ -207,7 +208,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
             if (reply != null && reply.kind == CommitOrReadNack.Kind.Waiting)
             {
                 // TODO (expected): share implementation with ExecuteTxn
-                long slowAt = node.agent().selfSlowAt(txnId, Execute, MICROSECONDS);
+                long slowAt = node.agent().selfSlowAt(txnId, READ_EPHEMERAL_REQ, MICROSECONDS);
                 slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
                 {
                     @Override public void timeout() { executor.executeMaybeImmediately(() -> {
@@ -260,7 +261,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     @Override
     public CoordinationKind kind()
     {
-        return CoordinationKind.Execute;
+        return Execute;
     }
 
     @Override

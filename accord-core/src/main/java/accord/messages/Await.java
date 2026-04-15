@@ -246,13 +246,13 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
     }
 
     @Override
-    public void process(Node node, Id replyToNode, ReplyContext replyContext)
+    public Cancellable process(Node node, Id replyToNode, ReplyContext replyContext)
     {
         this.node = node;
         this.replyTo = replyToNode;
         this.replyContext = replyContext;
         // TODO (expected): integrate with cancellation
-        node.commandStores().mapReduceConsume(minAwaitEpoch, maxAwaitEpoch, this);
+        return node.commandStores().mapReduceConsume(minAwaitEpoch, maxAwaitEpoch, this);
     }
 
     @Override
@@ -327,7 +327,7 @@ public class Await extends MapReduceConsumeCommandStores<Participants<?>, Void> 
             int waitingOn = synchronouslyWaitingOnUpdater.decrementAndGet(this);
             if (waitingOn >= 0)
             {
-                long expiresAtMicros = node.agent().expiresAt(replyContext, MICROSECONDS);
+                long expiresAtMicros = replyContext.expiresAt(MICROSECONDS);
                 if (expiresAtMicros > 0)
                 {
                     timeout = node.timeouts().registerAt(this, expiresAtMicros, MICROSECONDS);

@@ -19,9 +19,8 @@
 package accord.impl.mock;
 
 import accord.api.AsyncExecutor;
-import accord.api.MessageSink;
+import accord.api.MessageSink.ReplySink;
 import accord.local.Node;
-import accord.local.Node.Id;
 import accord.messages.Callback;
 import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
@@ -29,7 +28,7 @@ import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.utils.async.Cancellable;
 
-public class SimpleMessageSink implements MessageSink
+public class SimpleMessageSink implements ReplySink
 {
     public final Node.Id node;
     public final Network network;
@@ -52,15 +51,14 @@ public class SimpleMessageSink implements MessageSink
         return network.send(node, to, request, executor, callback);
     }
 
-    @Override
-    public void reply(Node.Id replyingToNode, ReplyContext replyContext, Reply reply)
+    public void reply(Node.Id replyingToNode, ReplyContext replyContext, Reply reply, Throwable failure)
     {
+        if (reply == null)
+        {
+            if (failure == null)
+                throw new IllegalArgumentException("Both reply and failure are null");
+            reply = new FailureReply(failure);
+        }
         network.reply(node, replyingToNode, Network.getMessageId(replyContext), reply);
-    }
-
-    @Override
-    public void replyWithUnknownFailure(Id replyingToNode, ReplyContext replyContext, Throwable failure)
-    {
-        network.reply(node, replyingToNode, Network.getMessageId(replyContext), new FailureReply(failure));
     }
 }

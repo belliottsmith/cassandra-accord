@@ -268,12 +268,11 @@ public class ProtocolModifiers
     }
 
     private static final InformOfDurability informOfDurability = Configure.informOfDurability;
-    // to support dependency elision/pruning
-    // TODO (expected): improve dependency elision, so this is no longer needed
+    // TODO (expected): improve dependency elision, so this (and replicaExecuteDistributedPersistChance) are no longer needed
     private static final int informOfSingleKeyDurabilityIfDepsSizeAtLeast = Configure.informOfSingleKeyDurabilityIfDepsSizeAtLeast;
     public static InformOfDurability informOfDurability(TxnId txnId, @Nullable Deps deps)
     {
-        if (txnId.is(Any) || deps == null || informOfSingleKeyDurabilityIfDepsSizeAtLeast >= deps.txnIdCount())
+        if (txnId.is(Any) || deps == null || informOfSingleKeyDurabilityIfDepsSizeAtLeast <= deps.txnIdCount())
             return informOfDurability;
 
         return InformOfDurability.NONE;

@@ -65,11 +65,11 @@ import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
+import accord.messages.MessageType;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.local.cfk.CommandsForKey.TxnInfo;
-import accord.messages.ReplyContext;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -1166,19 +1166,13 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public long selfSlowAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
+        public long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit)
         {
             return 0;
         }
 
         @Override
-        public long selfExpiresAt(TxnId txnId, Status.Phase phase, TimeUnit unit)
-        {
-            return 0;
-        }
-
-        @Override
-        public long expiresAt(ReplyContext replyContext, TimeUnit unit)
+        public long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit)
         {
             return 0;
         }

@@ -18,12 +18,14 @@
 
 package accord.messages;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import javax.annotation.Nullable;
 
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
+import accord.impl.LocalDelivery;
 import accord.local.Node;
 import accord.local.MapReduceConsumeCommandStores;
 import accord.primitives.Participants;
@@ -31,10 +33,13 @@ import accord.primitives.TxnId;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
+import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> extends MapReduceConsumeCommandStores<P, R> implements Request, Timeouts.Timeout
 {
+    public static final CancellationException CANCELLATION_EXCEPTION = new CancellationException();
+
     private static class Cancellation implements Cancellable
     {
         final RegisteredTimeout timeout;
@@ -76,7 +81,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
     }
 
     @Override
-    public final void process(Node on, Node.Id replyTo, ReplyContext replyContext)
+    public final Cancellable process(Node on, Node.Id replyTo, ReplyContext replyContext)
     {
         this.node = on;
         this.replyTo = replyTo;
@@ -84,7 +89,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
         Cancellable cancel = submit();
         if (cancel != null)
         {
-            long expiresAt = node.agent().expiresAt(replyContext, MICROSECONDS);
+            long expiresAt = replyContext.expiresAt(MICROSECONDS);
             if (expiresAt > 0)
             {
                 RegisteredTimeout timeout = node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
@@ -93,6 +98,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
                     (this.cancellation == CANCEL ? cancellation : cancellation.timeout).cancel();
             }
         }
+        return cancel;
     }
 
     protected boolean isDone()
@@ -124,7 +130,14 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
 
     protected void acceptInternal(R reply, Throwable failure)
     {
-        Invariants.require(reply != null || failure != null, "No reply produced for %s", this);
+        if (reply == null && failure == null)
+        {
+            Invariants.require(isCancelled());
+            if (!(replyContext instanceof LocalDelivery<?>))
+                return; // for now we don't report cancellation/timeout remotely, and rely on the coordinator's timeouts
+            // we must report something for local delivery, as we rely on this callback instead of registering a separate timeout
+            failure = CANCELLATION_EXCEPTION;
+        }
         if (failure != null || reply.isFinal())
         {
             Invariants.require(!hasSentFinalReply);
@@ -184,7 +197,10 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
         {
             // can loop at most once
             Cancellation cur = cancellation;
-            if (cur == DONE || cur == CANCEL || cancellationUpdater.compareAndSet(this, cur, done))
+            if (cur == DONE || cur == CANCEL)
+                return cur;
+
+            if (cancellationUpdater.compareAndSet(this, cur, done))
                 return cur != null ? cur : EMPTY;
         }
     }
@@ -197,7 +213,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
     @Override
     public R reduce(R o1, R o2)
     {
-        throw new IllegalStateException();
+        throw illegalState();
     }
 
     @Override

@@ -52,6 +52,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.TopologyException;
 import accord.topology.TopologyRetiredException;
+import accord.utils.async.Cancellable;
 
 import javax.annotation.Nullable;
 
@@ -314,7 +315,7 @@ public class ListRequest implements Request
     }
 
     @Override
-    public void process(Node node, Id client, ReplyContext replyContext)
+    public Cancellable process(Node node, Id client, ReplyContext replyContext)
     {
         if (id != null)
             throw illegalState("Called process multiple times");
@@ -322,6 +323,7 @@ public class ListRequest implements Request
         id = txnIdGen.apply(node, txn);
         listener.onClientAction(MessageListener.ClientAction.SUBMIT, node.id(), id, txn);
         node.coordinate(id, txn).begin(new ResultCallback(node, client, replyContext, listener, id, txn));
+        return null;
     }
 
     @Override

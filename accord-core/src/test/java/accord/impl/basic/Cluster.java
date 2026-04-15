@@ -34,6 +34,7 @@ import java.util.NavigableMap;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
@@ -92,9 +93,11 @@ import accord.local.UniqueTimeService.AtomicUniqueTimeWithStaleReservation;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.Serialize;
 import accord.local.durability.DurabilityService;
+import accord.messages.Callback;
 import accord.messages.Message;
 import accord.messages.MessageType;
 import accord.messages.Reply;
+import accord.messages.ReplyContext;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
 import accord.primitives.Range;
@@ -611,8 +614,9 @@ public class Cluster
             {
                 final RandomSource random = randomSupplier.get();
                 // TODO (testing): slow/expires should be broadly in sync with our link latency config
-                final LongSupplier slowDelay, expiresDelay, failsDelay;
+                final LongSupplier localDelay, slowDelay, expiresDelay, failsDelay;
                 {
+                    int medianLocalDelay = random.nextInt(10, 20);
                     int medianSlowDelay = random.nextInt(100, 200);
                     int medianExpiresDelay = random.nextInt(1000, 2000);
                     int medianFailsDelay = random.nextInt(1000, 2000);
@@ -621,14 +625,19 @@ public class Cluster
                     int minExpiresDelay = random.nextBiasedInt(500, 800, 1000);
                     int minFailsDelay = random.nextBiasedInt(500, 800, 1000);
 
+                    int maxLocalDelay = random.nextBiasedInt(100, 200, 1000);
                     int maxSlowDelay = random.nextBiasedInt(medianSlowDelay + 100, medianSlowDelay + 200, 1000);
                     int maxExpiresDelay = random.nextBiasedInt(medianExpiresDelay + 500, 3000, 10000);
                     int maxFailsDelay = random.nextBiasedInt(medianFailsDelay + 500, 3000, 10000);
 
+                    float localDelayChance = random.nextFloat();
+                    LongSupplier innerLocalDelay = random.biasedUniformLongs(0, medianLocalDelay, maxLocalDelay);
+                    localDelay = () -> random.decide(localDelayChance) ? innerLocalDelay.getAsLong() : 0;
                     slowDelay = random.biasedUniformLongs(minSlowDelay, medianSlowDelay, maxSlowDelay);
                     expiresDelay = random.biasedUniformLongs(minExpiresDelay, medianExpiresDelay, maxExpiresDelay);
                     failsDelay = random.biasedUniformLongs(minFailsDelay, medianFailsDelay, maxFailsDelay);
                 }
+                @Override public long localDelay() { return localDelay.getAsLong();}
                 @Override public long slowDelay() { return slowDelay.getAsLong();}
                 @Override public long expiresDelay() { return expiresDelay.getAsLong(); }
                 @Override public long slowAt() { return now() + slowDelay.getAsLong();}

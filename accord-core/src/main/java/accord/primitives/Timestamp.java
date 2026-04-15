@@ -359,8 +359,8 @@ public class Timestamp implements Comparable<Timestamp>, EpochSupplier
         return c;
     }
 
-    // a non-zero result means that EPOCH and HLC are BOTH greater-equal,
-    // and at least one of (epoch, hlc, node, flag) is strictly greater.
+    // a non-zero result means that EPOCH and HLC are BOTH greater/less-equal,
+    // and at least one of (epoch, hlc, node, flag) is strictly greater/less.
     public final int compareSimultaneousEpochAndHlc(@Nonnull Timestamp that)
     {
         if (this == that) return 0;

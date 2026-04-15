@@ -76,7 +76,6 @@ import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
-import static accord.primitives.Status.Stable;
 import static accord.utils.ArrayBuffers.cachedAny;
 import static accord.utils.btree.UpdateFunction.noOpReplace;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;

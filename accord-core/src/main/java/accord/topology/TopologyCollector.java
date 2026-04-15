@@ -235,60 +235,6 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
     }
 
-    static class UnsyncedSelector<K extends Participants<?>> extends TopologyCollector<K, K, K, TopologyException>
-    {
-        static final UnsyncedSelector INSTANCE = new UnsyncedSelector();
-
-        @Override
-        public K allocate(int size)
-        {
-            return null;
-        }
-
-        @Override
-        public K none()
-        {
-            return null;
-        }
-
-        @Override
-        public K multi(K collector)
-        {
-            return collector;
-        }
-
-        @Override
-        K retired(long requestedEpoch, long minEpoch) throws TopologyRetiredException
-        {
-            throw new TopologyRetiredException(requestedEpoch, minEpoch);
-        }
-
-        @Override
-        K notReady(long requestedEpoch, long maxEpoch) throws TopologyException
-        {
-            throw new TopologyNotReadyException(requestedEpoch, maxEpoch);
-        }
-
-        @Override
-        public K one(ActiveEpoch e, K select)
-        {
-            return (K) select.without(e.quorumReady());
-        }
-
-        @Override
-        public K update(K collector, ActiveEpoch e, K select)
-        {
-            select = (K)select.without(e.quorumReady());
-            return collector == null ? select : (K)collector.with((Participants) select);
-        }
-
-        @Override
-        public K updateIfExists(K collector, ActiveEpoch e, K select)
-        {
-            return update(collector, e, select);
-        }
-    }
-
     static class HasChangedReplication extends TopologyCollector<HasChangedReplication.ReplicationChangeTracker, Unseekables<?>, Boolean, RuntimeException>
     {
         static class ReplicationChangeTracker

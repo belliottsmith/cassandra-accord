@@ -176,22 +176,6 @@ public class FetchData extends CheckShards<FetchData.FetchResult, Route<?>>
         return fetch;
     }
 
-    private static Object fetchData(Node node, Known fetch, TxnId txnId, InvalidIf invalidIf, Route<?> route, Route<?> maxRoute, long sourceEpoch, StoreSelector reportTo, BiConsumer<? super FetchResult, Throwable> callback)
-    {
-        FetchData fetchData;
-        try
-        {
-            fetchData = new FetchData(node, fetch, txnId, invalidIf, route, maxRoute, sourceEpoch, reportTo, callback);
-        }
-        catch (TopologyException e)
-        {
-            callback.accept(null, e);
-            return null;
-        }
-        fetchData.start();
-        return fetchData;
-    }
-
     protected Route<?> query()
     {
         return query;

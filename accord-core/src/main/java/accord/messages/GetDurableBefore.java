@@ -24,6 +24,7 @@ import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.DurableBefore;
 import accord.primitives.TxnId;
+import accord.utils.async.Cancellable;
 
 import static accord.messages.MessageType.StandardMessage.GET_DURABLE_BEFORE_REQ;
 import static accord.messages.MessageType.StandardMessage.GET_DURABLE_BEFORE_RSP;
@@ -35,9 +36,10 @@ public class GetDurableBefore implements Request, PreLoadContext
     }
 
     @Override
-    public void process(Node node, Node.Id replyTo, ReplyContext replyContext)
+    public Cancellable process(Node node, Node.Id replyTo, ReplyContext replyContext)
     {
         node.reply(replyTo, replyContext, new DurableBeforeReply(node.durableBefore()), null);
+        return null;
     }
 
     @Override

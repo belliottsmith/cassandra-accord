@@ -19,7 +19,9 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import accord.impl.LocalDelivery;
 import accord.local.Commands;
+import accord.local.Commands.CommitOutcome;
 import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.Node.Id;
@@ -224,9 +226,10 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, minEpoch, txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
 
-        switch (Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps, kind))
+        CommitOutcome outcome = Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, ballot, txnId, route, partialTxn, executeAt, partialDeps, kind);
+        switch (outcome)
         {
-            default:
+            default: throw new UnhandledEnum(outcome);
             case Success:
             case Redundant:
                 return null;
@@ -263,10 +266,22 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
     {
         partialDeps = null;
         partialTxn = null;
-        if (reply != null || failure != null)
-            node.reply(replyTo, replyContext, reply, failure);
-        else if (kind.saveStatus == Committed)
-            node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null);
+        if (reply == null && failure == null)
+        {
+            if (isCancelled())
+            {
+                if (!(replyContext instanceof LocalDelivery<?>))
+                    return;
+                failure = CANCELLATION_EXCEPTION;
+            }
+            else
+            {
+                if (kind.saveStatus == Committed)
+                    node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null);
+                return;
+            }
+        }
+        node.reply(replyTo, replyContext, reply, failure);
     }
 
     @Override

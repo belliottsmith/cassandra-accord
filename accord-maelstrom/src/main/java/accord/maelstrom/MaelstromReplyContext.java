@@ -18,6 +18,11 @@
 
 package accord.maelstrom;
 
+import java.util.concurrent.TimeUnit;
+
+import accord.api.MessageSink;
+import accord.local.Node;
+import accord.messages.Reply;
 import accord.messages.ReplyContext;
 
 public class MaelstromReplyContext implements ReplyContext
@@ -39,5 +44,17 @@ public class MaelstromReplyContext implements ReplyContext
         if (replyContext instanceof Packet)
             return ((Packet) replyContext).body.msg_id;
         return ((MaelstromReplyContext) replyContext).messageId;
+    }
+
+    @Override
+    public long expiresAt(TimeUnit units)
+    {
+        return 0;
+    }
+
+    @Override
+    public void reply(Node.Id to, MessageSink sink, Reply success, Throwable failure)
+    {
+
     }
 }
