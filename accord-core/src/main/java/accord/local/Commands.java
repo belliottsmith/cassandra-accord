@@ -132,7 +132,6 @@ import static accord.primitives.Status.Truncated;
 import static accord.primitives.Route.isFullRoute;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
-import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;

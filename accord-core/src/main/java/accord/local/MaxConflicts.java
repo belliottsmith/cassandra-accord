@@ -22,6 +22,7 @@ import accord.primitives.Routables;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.utils.BTreeReducingRangeMap;
+import accord.utils.Invariants;
 import accord.utils.btree.ReducingBTree;
 
 import static accord.primitives.Timestamp.Flag.REJECTED;
@@ -32,20 +33,66 @@ public class MaxConflicts extends BTreeReducingRangeMap<MaxConflicts.Entry>
     public static class Entry extends ReducingBTree.Entry<Entry>
     {
         public final Timestamp any, write, reject;
-        public Entry(RoutingKey start, RoutingKey end, Timestamp any, Timestamp write, Timestamp reject)
+
+        private Entry(RoutingKey start, RoutingKey end, Timestamp any, Timestamp write, Timestamp reject)
         {
             super(start, end);
+            if (Invariants.isParanoid())
+            {
+                Invariants.require(!any.hasNonIdentityFlags());
+                Invariants.require(!write.hasNonIdentityFlags());
+            }
             this.any = any;
             this.write = write;
             this.reject = reject;
         }
 
-        public Entry(Timestamp any, Timestamp write, Timestamp reject)
+        private Entry(Timestamp any, Timestamp write, Timestamp reject)
         {
             super(null, null, UnsafeMarker.NULLS);
+            if (Invariants.isParanoid())
+            {
+                Invariants.require(!any.hasNonIdentityFlags());
+                Invariants.require(!write.hasNonIdentityFlags());
+            }
             this.any = any;
             this.write = write;
             this.reject = reject;
+        }
+
+        public static Entry create(Timestamp any, Timestamp write, Timestamp reject)
+        {
+            if (any == write)
+            {
+                any = write = ensureNoFlags(any);
+            }
+            else
+            {
+                any = ensureNoFlags(any);
+                write = ensureNoFlags(write);
+            }
+            return new Entry(any, write, reject);
+        }
+
+        public static Entry create(RoutingKey start, RoutingKey end, Timestamp any, Timestamp write, Timestamp reject)
+        {
+            if (any == write)
+            {
+                any = write = ensureNoFlags(any);
+            }
+            else
+            {
+                any = ensureNoFlags(any);
+                write = ensureNoFlags(write);
+            }
+            return new Entry(start, end, any, write, reject);
+        }
+
+        private static Timestamp ensureNoFlags(Timestamp ts)
+        {
+            if (ts.hasNonIdentityFlags())
+                return ts.withoutNonIdentityFlags().next();
+            return ts;
         }
 
         @Override
@@ -133,17 +180,17 @@ public class MaxConflicts extends BTreeReducingRangeMap<MaxConflicts.Entry>
         return update(keysOrRanges, executeAt, txnId.isSomeRead() ? Timestamp.NONE : executeAt, Timestamp.NONE);
     }
 
-    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp all, Timestamp write)
+    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp any, Timestamp write)
     {
-        return update(keysOrRanges, all, write, Timestamp.NONE);
+        return update(keysOrRanges, any, write, Timestamp.NONE);
     }
 
-    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp all, Timestamp write, Timestamp reject)
+    public MaxConflicts update(Routables<?> keysOrRanges, Timestamp any, Timestamp write, Timestamp reject)
     {
         // note: we use mergeMax to ensure we take the maximum epoch and hlc independently from any conflict
         //  this is particularly essential for propagating unique HLCs, so that bootstrap recipients don't
         //  begin serving reads too early
-        return add(this, keysOrRanges, new Entry(all, write, reject), Entry::reduce, MaxConflicts::new);
+        return add(this, keysOrRanges, Entry.create(any, write, reject), Entry::reduce, MaxConflicts::new);
     }
 
     public MaxConflicts with(MaxConflicts that)

@@ -121,25 +121,6 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     }
 
     @Override
-    protected void finishWithFailure(Throwable failure)
-    {
-        if (failure instanceof Preempted)
-        {
-            // cannot expect to successfully propose invalidation, and no point as already being recovered
-            super.finishWithFailure(failure);
-        }
-        else
-        {
-            BiConsumer<? super Result, Throwable> callback = finishAndTakeCallback();
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, (success, invalidated) -> {
-                failure.addSuppressed(invalidated);
-                callback.accept(null, failure);
-                node.agent().coordinatorEvents().onFailed(failure, txnId, scope, this);
-            });
-        }
-    }
-
-    @Override
     void onPreAccepted(Topologies topologies, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);

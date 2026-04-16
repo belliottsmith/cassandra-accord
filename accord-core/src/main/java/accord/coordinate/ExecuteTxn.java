@@ -97,6 +97,7 @@ import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.messages.Commit.Kind.StableSlowPath;
 import static accord.messages.Commit.Kind.StableWithTxnAndDeps;
 import static accord.messages.MessageType.StandardMessage.READ_REQ;
+import static accord.messages.MessageType.StandardMessage.STABLE_THEN_READ_REQ;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.Stable;
@@ -660,7 +661,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         public ReadType kind() { throw new UnsupportedOperationException(); }
 
         @Override
-        public MessageType type() { throw new UnsupportedOperationException(); }
+        public MessageType type() { return STABLE_THEN_READ_REQ; }
 
         @Override
         public String reason()

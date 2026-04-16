@@ -30,6 +30,7 @@ import javax.annotation.Nullable;
 import accord.api.Timeouts;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.RequestStatus;
+import accord.impl.LocalDelivery;
 import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
@@ -217,7 +218,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
 
     void resend(Node.Id to, Request send)
     {
-        if (to.equals(node.id())) node.send(to, send, executor, this);
+        if (to.equals(node.id())) new LocalDelivery<>(executor, this).deliver(node, send);
         else node.send(to, send);
     }
 

@@ -164,7 +164,7 @@ public abstract class Command implements ICommand
         this.promised = Invariants.nonNull(promised);
         this.partialTxn = partialTxn;
         this.partialDeps = partialDeps;
-        this.executeAt = executeAt;
+        this.executeAt = executeAt != null && txnId.equalsStrict(executeAt) ? txnId : executeAt;
         this.acceptedOrCommitted = Invariants.nonNull(acceptedOrCommitted);
         Invariants.require(partialTxn == null || txnId.isSystemTxn() || participants.owns().containsAll(partialTxn.keys()));
         Invariants.require(partialTxn == null || txnId.isSystemTxn() || participants.owns().containsAll(partialTxn.read().keys()));

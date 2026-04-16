@@ -306,9 +306,10 @@ public class TxnId extends Timestamp
         return cardinality.is(flagsUnmasked());
     }
 
+    @Override
     public final TxnId withoutNonIdentityFlags()
     {
-        return (flags() & ~IDENTITY_FLAGS) == 0 ? this : new TxnId(msb, lsb & IDENTITY_LSB, node);
+        return removeFlags(this, NON_IDENTITY_FLAGS, TxnId::fromBits);
     }
 
     public final int nonIdentityFlags()

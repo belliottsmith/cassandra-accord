@@ -33,7 +33,6 @@ import accord.local.SequentialAsyncExecutor;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
-import accord.messages.MessageType;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadOkWithFutureEpoch;
@@ -253,9 +252,6 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
 
         @Override
         public ReadType kind() { throw new UnsupportedOperationException(); }
-
-        @Override
-        public MessageType type() { throw new UnsupportedOperationException(); }
     }
 
     @Override

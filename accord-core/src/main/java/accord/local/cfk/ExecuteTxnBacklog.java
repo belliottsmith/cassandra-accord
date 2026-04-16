@@ -81,12 +81,14 @@ public class ExecuteTxnBacklog implements NotifySink
             if (notify.equals(node.id()))
                 return;
 
+            node.agent().coordinatorEvents().onRecoveryStarted(txnId, ballot);
             Adapters.standard().execute(node, node.someSequentialExecutor(), null, route, command.acceptedOrCommitted(), path, CoordinationFlags.none(), txnId, txn, executeAt, deps, deps, (success, fail) -> {
                 if (fail == null)
                 {
                     if (node.agent().reportRemoteSuccess(success))
                         node.send(notify, new RemoteSuccess(txnId, success));
                 }
+                node.agent().coordinatorEvents().onRecoveryStopped(node, txnId, ballot, success, fail);
             });
         }, node.agent());
     }
