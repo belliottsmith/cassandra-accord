@@ -306,14 +306,14 @@ class Updating
         deps.find(cfk.redundantBefore());
 
         boolean durablyCommitted = command.durability().isDurablyCommitted();
-        return computeInfoAndAdditions(cfk.byId, insertPos, updatePos, plainTxnId, newStatus, mayExecute, durablyCommitted, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
+        return computeInfoAndAdditions(cfk.byId, cfk.minUndecidedById, insertPos, updatePos, plainTxnId, newStatus, mayExecute, durablyCommitted, ballot, executeAt, cfk.prunedBefore(), depsKnownBefore, deps);
     }
 
     /**
      * We return an Object here to avoid wasting allocations; most of the time we expect a new TxnInfo to be returned,
      * but if we have transitive dependencies to insert we return an InfoWithAdditions
      */
-    static Object computeInfoAndAdditions(TxnInfo[] byId, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, boolean durablyCommitted, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
+    static Object computeInfoAndAdditions(TxnInfo[] byId, int minUndecidedById, int insertPos, int updatePos, TxnId plainTxnId, InternalStatus newStatus, boolean mayExecute, boolean durablyCommitted, Ballot ballot, Timestamp executeAt, TxnInfo prunedBefore, Timestamp depsKnownBefore, MergeCursor<TxnId, DepList> deps)
     {
         TxnId[] additions = NO_TXNIDS, missing = NO_TXNIDS;
         int additionCount = 0, missingCount = 0;
@@ -331,6 +331,13 @@ class Updating
         }
 
         int txnIdsIndex = 0;
+        if (deps.hasCur())
+        {
+            txnIdsIndex = Arrays.binarySearch(byId, 0, minUndecidedById < 0 ? byId.length : minUndecidedById, deps.cur());
+            if (txnIdsIndex < 0)
+                txnIdsIndex = -1 - txnIdsIndex;
+        }
+
         while (txnIdsIndex < byId.length && deps.hasCur())
         {
             TxnInfo t = byId[txnIdsIndex];

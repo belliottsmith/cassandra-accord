@@ -92,15 +92,6 @@ public interface Agent extends UncaughtExceptionListener
      */
     long maxConflictsHlcPruneDelta();
 
-    /**
-     * Controls pruning of MaxConflicts
-     *
-     * Every n updates, max conflicts is pruned to the delta, where n is the value returned by this method
-     *
-     * TODO (expected): this isn't a very clean way to prune max conflicts - should be done by size of collection / update rate
-     */
-    long maxConflictsPruneInterval();
-
     default boolean softReject(long unappliedCount, long maxUnappliedAge, long cumulativeUnappliedAge) { return false; }
     default boolean hardReject(int softRejectCount, int totalCount) { return false; }
 

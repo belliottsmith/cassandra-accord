@@ -29,6 +29,7 @@ import accord.impl.CommandChange;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
+import accord.local.MinimalCommand;
 import accord.local.Node;
 import accord.local.RedundantBefore;
 import accord.primitives.EpochSupplier;
@@ -58,8 +59,8 @@ public interface Journal
 
     Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     default List<? extends Supplier<CommandChange.Builder>> debugCommand(int commandStoreId, TxnId txnId) { throw new UnsupportedOperationException(); }
-    Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
-    Command.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    MinimalCommand loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
+    MinimalCommand.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     void saveCommand(int store, CommandUpdate value, Runnable onFlush);
 
     List<? extends TopologyUpdate> loadTopologies();

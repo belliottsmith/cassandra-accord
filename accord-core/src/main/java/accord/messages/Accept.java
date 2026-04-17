@@ -84,7 +84,7 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
         NO_CALCULATE_DEPS,
 
         /**
-         * See {@link accord.api.ProtocolModifiers.Toggles#filterDuplicateDependenciesFromAcceptReply()}.
+         * See {@link accord.api.ProtocolModifiers#filterDuplicateDependenciesFromAcceptReply()}.
          */
         NO_FILTER_DEPS;
 

@@ -197,12 +197,6 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     }
 
     @Override
-    public long maxConflictsPruneInterval()
-    {
-        return 0;
-    }
-
-    @Override
     public int cfkPruneInterval()
     {
         return 1;

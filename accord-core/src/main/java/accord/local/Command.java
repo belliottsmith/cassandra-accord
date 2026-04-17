@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 
 import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.local.MinimalCommand.MinimalWithConcreteDeps;
 import accord.primitives.AbstractRanges;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
@@ -85,86 +86,18 @@ import static accord.utils.Utils.ensureImmutable;
 import static accord.utils.Utils.ensureMutable;
 import static java.lang.String.format;
 
-public abstract class Command implements ICommand
+public abstract class Command extends MinimalWithConcreteDeps
 {
-    public static class Minimal
-    {
-        public final TxnId txnId;
-        public final SaveStatus saveStatus;
-        public final StoreParticipants participants;
-        public final Status.Durability durability;
-        public final Timestamp executeAt;
-
-        public Minimal(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Status.Durability durability, Timestamp executeAt)
-        {
-            this.txnId = txnId;
-            this.saveStatus = saveStatus;
-            this.participants = participants;
-            this.durability = durability;
-            this.executeAt = executeAt;
-        }
-
-        @Override
-        public boolean equals(Object object)
-        {
-            if (this == object) return true;
-            if (object == null || getClass() != object.getClass()) return false;
-            Minimal minimal = (Minimal) object;
-            return Objects.equals(txnId, minimal.txnId) && saveStatus == minimal.saveStatus && Objects.equals(participants, minimal.participants) && durability == minimal.durability && Objects.equals(executeAt, minimal.executeAt);
-        }
-
-        @Override
-        public final int hashCode()
-        {
-            throw new UnsupportedOperationException();
-        }
-    }
-
-    public static abstract class MinimalWithDeps extends Minimal
-    {
-        public MinimalWithDeps(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Durability durability, Timestamp executeAt)
-        {
-            super(txnId, saveStatus, participants, durability, executeAt);
-        }
-
-        abstract public PartialDeps partialDeps();
-    }
-
-    public static class MinimalWithConcreteDeps extends MinimalWithDeps
-    {
-        final PartialDeps partialDeps;
-        public MinimalWithConcreteDeps(TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, Durability durability, Timestamp executeAt, PartialDeps partialDeps)
-        {
-            super(txnId, saveStatus, participants, durability, executeAt);
-            this.partialDeps = partialDeps;
-        }
-
-        public PartialDeps partialDeps()
-        {
-            return partialDeps;
-        }
-    }
-
-    private final TxnId txnId;
-    private final SaveStatus saveStatus;
-    private final Durability durability;
-    private final @Nonnull StoreParticipants participants;
     private final Ballot promised;
-    private final Timestamp executeAt;
     private final @Nullable PartialTxn partialTxn;
-    private final @Nullable PartialDeps partialDeps;
     private final @Nonnull Ballot acceptedOrCommitted;
 
     protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDeps partialDeps, Ballot acceptedOrCommitted)
     {
-        this.txnId = txnId;
-        this.saveStatus = validateCommandClass(txnId, saveStatus, getClass());
-        this.durability = Invariants.nonNull(durability);
-        this.participants = Invariants.nonNull(participants);
+        super(txnId, saveStatus, durability, participants, executeAt, partialDeps);
+        validateCommandClass(txnId, saveStatus, getClass());
         this.promised = Invariants.nonNull(promised);
         this.partialTxn = partialTxn;
-        this.partialDeps = partialDeps;
-        this.executeAt = executeAt != null && txnId.equalsStrict(executeAt) ? txnId : executeAt;
         this.acceptedOrCommitted = Invariants.nonNull(acceptedOrCommitted);
         Invariants.require(partialTxn == null || txnId.isSystemTxn() || participants.owns().containsAll(partialTxn.keys()));
         Invariants.require(partialTxn == null || txnId.isSystemTxn() || participants.owns().containsAll(partialTxn.read().keys()));
@@ -172,28 +105,19 @@ public abstract class Command implements ICommand
 
     protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDeps partialDeps, Ballot acceptedOrCommitted, boolean unsafeInitialisation)
     {
+        super(txnId, saveStatus, durability, participants, executeAt, partialDeps);
         Invariants.require(unsafeInitialisation);
-        this.txnId = txnId;
-        this.saveStatus = saveStatus;
-        this.durability = durability;
-        this.participants = participants;
         this.promised = promised;
         this.partialTxn = partialTxn;
-        this.partialDeps = partialDeps;
-        this.executeAt = executeAt;
         this.acceptedOrCommitted = acceptedOrCommitted;
     }
 
-    protected Command(ICommand copy, SaveStatus saveStatus)
+    protected Command(Command copy, SaveStatus saveStatus)
     {
-        this.txnId = copy.txnId();
-        this.saveStatus = validateCommandClass(txnId, saveStatus, getClass());
-        this.durability = Invariants.nonNull(copy.durability());
-        this.participants = Invariants.nonNull(copy.participants());
+        super(copy.txnId, saveStatus, copy.durability, copy.participants, copy.executeAt, copy.partialDeps);
+        validateCommandClass(txnId, saveStatus, getClass());
         this.promised = copy.promised();
         this.partialTxn = copy.partialTxn();
-        this.partialDeps = copy.partialDeps();
-        this.executeAt = copy.executeAt();
         this.acceptedOrCommitted = copy.acceptedOrCommitted();
     }
 
@@ -217,85 +141,14 @@ public abstract class Command implements ICommand
         return "Command@" + System.identityHashCode(this) + '{' + txnId + ':' + saveStatus + '}';
     }
 
-    @Override
-    public final TxnId txnId()
-    {
-        return txnId;
-    }
-
-    @Override
-    public final StoreParticipants participants()
-    {
-        return participants;
-    }
-
-    @Override
     public final Ballot promised()
     {
         return promised;
     }
 
-    @Override
-    public final Durability durability()
-    {
-        return durability;
-    }
-
-    public final SaveStatus saveStatus()
-    {
-        return saveStatus;
-    }
-
-    @Override
-    public final int hashCode()
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    /**
-     * We require that this is a FullRoute for all states where isDefinitionKnown().
-     * In some cases, the home shard will contain an arbitrary slice of the Route where !isDefinitionKnown(),
-     * i.e. when a non-home shard informs the home shards of a transaction to ensure forward progress.
-     *
-     * If hasBeen(Committed) this must contain the keys for both txnId.epoch and executeAt.epoch
-     *
-     * TODO (desired): caller should declare KnownRoute expectation (MaybeRoute, CoveringRoute, FullRoute) so it can be validated
-     */
-    @Nullable
-    public final Route<?> route() { return participants().route(); }
-
-    public Participants<?> maxParticipants()
-    {
-        return participants.max();
-    }
-
-    /**
-     * homeKey is a global value that defines the home shard - the one tasked with ensuring the transaction is finished.
-     * progressKey is a local value that defines the local shard responsible for ensuring progress on the transaction.
-     * This will be homeKey if it is owned by the node, and some other key otherwise. If not the home shard, the progress
-     * shard has much weaker responsibilities, only ensuring that the home shard has durably witnessed the txnId.
-     */
-    @Nullable
-    public RoutingKey homeKey()
-    {
-        Route<?> route = route();
-        return route == null ? null : route.homeKey();
-    }
-
-    // TODO (expected): rename to e.g. timestamp(),
-    //  and introduce executeAt() that first ensures it is >= precommitted,
-    //  and applyAt() that confirms >= PreApplied
-    @Override
-    public final Timestamp executeAt() { return executeAt; }
-
-    @Override
     public final Ballot acceptedOrCommitted() { return acceptedOrCommitted; }
 
-    @Override
     public final @Nullable PartialTxn partialTxn() { return partialTxn; }
-
-    @Override
-    public final @Nullable PartialDeps partialDeps() { return partialDeps; }
 
     public @Nullable Writes writes() { return null; }
     public @Nullable Result result() { return null; }
@@ -392,12 +245,12 @@ public abstract class Command implements ICommand
 
     public static class NotDefined extends Command
     {
-        public static NotDefined notDefined(ICommand copy)
+        public static NotDefined notDefined(Command copy)
         {
             return validate(notDefined(copy, copy.promised()));
         }
 
-        public static NotDefined notDefined(ICommand copy, Ballot promised)
+        public static NotDefined notDefined(Command copy, Ballot promised)
         {
             return validate(new NotDefined(copy.txnId(), SaveStatus.NotDefined, copy.durability(), copy.participants(), promised));
         }
@@ -484,7 +337,7 @@ public abstract class Command implements ICommand
             return truncated(command.txnId(), newSaveStatus, command.durability(), participants, command.executeAt, partialDeps, writes, result, executesAtLeast);
         }
 
-        public static Truncated truncated(ICommand common, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result, @Nullable Timestamp executesAtLeast)
+        public static Truncated truncated(Command common, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result, @Nullable Timestamp executesAtLeast)
         {
             return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, partialDeps, writes, result, executesAtLeast);
         }
@@ -520,7 +373,7 @@ public abstract class Command implements ICommand
         @Nullable final Writes writes;
         @Nullable final Result result;
 
-        public Truncated(ICommand copy, SaveStatus saveStatus)
+        public Truncated(Command copy, SaveStatus saveStatus)
         {
             super(copy, saveStatus);
             this.writes = copy.writes();
@@ -572,7 +425,7 @@ public abstract class Command implements ICommand
          */
         @Nullable final Timestamp executesAtLeast;
 
-        public TruncatedAwaitsOnlyDeps(ICommand cmd, SaveStatus saveStatus, Timestamp executesAtLeast)
+        public TruncatedAwaitsOnlyDeps(Command cmd, SaveStatus saveStatus, Timestamp executesAtLeast)
         {
             super(cmd, saveStatus);
             this.executesAtLeast = executesAtLeast;
@@ -610,12 +463,12 @@ public abstract class Command implements ICommand
             return validate(new PreAccepted(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps));
         }
 
-        public static PreAccepted preaccepted(ICommand common, SaveStatus newSaveStatus)
+        public static PreAccepted preaccepted(Command common, SaveStatus newSaveStatus)
         {
             return validate(new PreAccepted(common, newSaveStatus));
         }
 
-        private PreAccepted(ICommand copy, SaveStatus status)
+        private PreAccepted(Command copy, SaveStatus status)
         {
             super(copy, status);
         }
@@ -639,7 +492,7 @@ public abstract class Command implements ICommand
 
     public static class NotAcceptedWithoutDefinition extends Command
     {
-        public static NotAcceptedWithoutDefinition notAccepted(ICommand copy, SaveStatus saveStatus)
+        public static NotAcceptedWithoutDefinition notAccepted(Command copy, SaveStatus saveStatus)
         {
             return new NotAcceptedWithoutDefinition(copy, saveStatus);
         }
@@ -649,12 +502,12 @@ public abstract class Command implements ICommand
             return new NotAcceptedWithoutDefinition(txnId, status, durability, participants, promised, accepted, partialDeps);
         }
 
-        public static NotAcceptedWithoutDefinition acceptedInvalidate(ICommand copy)
+        public static NotAcceptedWithoutDefinition acceptedInvalidate(Command copy)
         {
             return new NotAcceptedWithoutDefinition(copy, SaveStatus.AcceptedInvalidate);
         }
 
-        private NotAcceptedWithoutDefinition(ICommand copy, SaveStatus saveStatus)
+        private NotAcceptedWithoutDefinition(Command copy, SaveStatus saveStatus)
         {
             super(copy, saveStatus);
         }
@@ -678,12 +531,12 @@ public abstract class Command implements ICommand
             return validate(new Accepted(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted));
         }
 
-        public static Accepted accepted(ICommand common, SaveStatus status)
+        public static Accepted accepted(Command common, SaveStatus status)
         {
             return validate(new Accepted(common, status));
         }
 
-        Accepted(ICommand copy, SaveStatus status)
+        Accepted(Command copy, SaveStatus status)
         {
             super(copy, status);
             validateDeps(participants(), partialDeps());
@@ -720,24 +573,24 @@ public abstract class Command implements ICommand
             return validate(new Committed(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn));
         }
 
-        public static Committed committed(ICommand copy, SaveStatus status)
+        public static Committed committed(Command copy, SaveStatus status)
         {
             return validate(new Committed(copy, status));
         }
 
-        public static Committed committed(ICommand copy, SaveStatus status, WaitingOn overrideWaitingOn)
+        public static Committed committed(Command copy, SaveStatus status, WaitingOn overrideWaitingOn)
         {
             return validate(new Committed(copy, status, overrideWaitingOn));
         }
 
         public final WaitingOn waitingOn;
 
-        Committed(ICommand copy, SaveStatus status)
+        Committed(Command copy, SaveStatus status)
         {
             this(copy, status, copy.waitingOn());
         }
 
-        Committed(ICommand copy, SaveStatus status, WaitingOn overrideWaitingOn)
+        Committed(Command copy, SaveStatus status, WaitingOn overrideWaitingOn)
         {
             super(copy, status);
             this.waitingOn = overrideWaitingOn;
@@ -786,12 +639,12 @@ public abstract class Command implements ICommand
             return validate(new Executed(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result));
         }
 
-        public static Executed executed(ICommand common, SaveStatus status)
+        public static Executed executed(Command common, SaveStatus status)
         {
             return validate(new Executed(common, status));
         }
 
-        public static Executed executed(ICommand common, SaveStatus status, WaitingOn waitingOn)
+        public static Executed executed(Command common, SaveStatus status, WaitingOn waitingOn)
         {
             return validate(new Executed(common, status, waitingOn));
         }
@@ -799,12 +652,12 @@ public abstract class Command implements ICommand
         private final Writes writes;
         private final Result result;
 
-        private Executed(ICommand copy, SaveStatus status)
+        private Executed(Command copy, SaveStatus status)
         {
             this(copy, status, copy.waitingOn());
         }
 
-        private Executed(ICommand copy, SaveStatus status, WaitingOn overrideWaitingOn)
+        private Executed(Command copy, SaveStatus status, WaitingOn overrideWaitingOn)
         {
             super(copy, status, overrideWaitingOn);
             this.writes = copy.writes();
@@ -1036,35 +889,6 @@ public abstract class Command implements ICommand
                 && Objects.equals(this.appliedOrInvalidated, other.appliedOrInvalidated);
         }
 
-        public static class Initialise extends Update implements ICommand
-        {
-            final TxnId txnId;
-            final StoreParticipants participants;
-            final Timestamp executeAt;
-            final PartialDeps deps;
-
-            private Initialise(TxnId txnId, StoreParticipants participants, Timestamp executeAt, PartialDeps deps)
-            {
-                super(txnId, deps.keyDeps.keys(), deps.rangeDeps);
-                this.txnId = txnId;
-                this.participants = participants;
-                this.executeAt = executeAt;
-                this.deps = deps;
-            }
-
-            @Override public TxnId txnId() { return txnId; }
-            @Override public Status.Durability durability() { return null; }
-            @Override public StoreParticipants participants() { return participants; }
-            @Override public Ballot promised() { return null; }
-            @Override public PartialTxn partialTxn() { return null; }
-            @Override public PartialDeps partialDeps() { return deps; }
-            @Override public Timestamp executeAt() { return executeAt; }
-            @Override public Ballot acceptedOrCommitted() { return null; }
-            @Override public WaitingOn waitingOn() { return null; }
-            @Override public Writes writes() { return null; }
-            @Override public Result result() { return null; }
-        }
-
         public static class Update
         {
             final RoutingKeys keys;
@@ -1100,9 +924,9 @@ public abstract class Command implements ICommand
                 this.appliedOrInvalidated = txnId.is(Key) ? null : new LargeBitSet(txnIdCount(), false);
             }
 
-            public static Initialise initialise(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, StoreParticipants participants, PartialDeps deps)
+            public static Update initialise(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, StoreParticipants participants, PartialDeps deps)
             {
-                Initialise initialise = new Initialise(txnId, participants, executeAt, deps);
+                Update initialise = new Update(txnId, deps.keyDeps.keys(), deps.rangeDeps);
                 Participants<?> stillWaitsOn = participants.stillWaitsOn();
                 // TODO (expected): refactor this to operate only on participants, not ranges
                 if (stillWaitsOn.domain() == Range) deps.keyDeps.keys().forEach((AbstractRanges)stillWaitsOn, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);

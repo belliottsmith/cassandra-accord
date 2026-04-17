@@ -36,6 +36,7 @@ import accord.coordinate.ExecuteTxn;
 import accord.local.Command.WaitingOn;
 import accord.local.Command.WaitingOn.Update;
 import accord.local.CommandStores.RangesForEpochSupplier;
+import accord.local.MinimalCommand.MinimalWithConcreteDeps;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
 import accord.local.cfk.CommandsForKey;
@@ -952,11 +953,12 @@ public class Commands
         if (waitingId.awaitsOnlyDeps())
             waitingExecuteAt = Timestamp.maxForEpoch(waitingId.epoch());
 
-        WaitingOn.Initialise initialise = Update.initialise(safeStore, waitingId, waitingExecuteAt, participants, deps);
-        return updateWaitingOn(safeStore, initialise, waitingExecuteAt, initialise).build();
+        WaitingOn.Update initialise = Update.initialise(safeStore, waitingId, waitingExecuteAt, participants, deps);
+        // TODO (desired): avoid allocating MinimalWithConcreteDeps here, but overall neater than prior approach of ICommand interface (which has minimal benefit to allocations)
+        return updateWaitingOn(safeStore, new MinimalWithConcreteDeps(waitingId, null, null, participants, waitingExecuteAt, deps), waitingExecuteAt, initialise).build();
     }
 
-    protected static Update updateWaitingOn(SafeCommandStore safeStore, ICommand waiting, Timestamp executeAt, WaitingOn.Update initialise)
+    protected static Update updateWaitingOn(SafeCommandStore safeStore, MinimalWithConcreteDeps waiting, Timestamp executeAt, WaitingOn.Update initialise)
     {
         RedundantBefore redundantBefore = safeStore.redundantBefore();
         TxnId minWaitingOnTxnId = initialise.minWaitingOnTxn();
@@ -988,9 +990,9 @@ public class Commands
      * @param dependencySafeCommand is either committed truncated, or invalidated
      * @return true iff {@code maybeExecute} might now have a different outcome
      */
-    private static boolean updateWaitingOn(SafeCommandStore safeStore, ICommand waiting, Timestamp waitingExecuteAt, Update waitingOn, SafeCommand dependencySafeCommand)
+    private static boolean updateWaitingOn(SafeCommandStore safeStore, MinimalWithConcreteDeps waiting, Timestamp waitingExecuteAt, Update waitingOn, SafeCommand dependencySafeCommand)
     {
-        TxnId waitingId = waiting.txnId();
+        TxnId waitingId = waiting.txnId;
         Command dependency = dependencySafeCommand.current();
         Invariants.require(dependency.hasBeen(PreCommitted));
         TxnId dependencyId = dependency.txnId();
@@ -1008,10 +1010,10 @@ public class Commands
                     Invariants.require(dependency.executeAt().compareTo(waitingExecuteAt) < 0
                                        || !dependencyId.witnesses(waitingId)
                                        || waitingId.awaitsOnlyDeps()
-                                       || waiting.participants().stillWaitsOn().isEmpty()
+                                       || waiting.participants.stillWaitsOn().isEmpty()
                                        || !markStaleIfCannotExecute(dependencyId)
                                        || safeStore.redundantBefore().status(dependencyId, null,
-                                                 waiting.partialDeps().participants(dependencyId)).all(LOCALLY_DEFUNCT)
+                                                 waiting.partialDeps.participants(dependencyId)).all(LOCALLY_DEFUNCT)
                     );
                 case Vestigial:
                 case Erased:
@@ -1041,7 +1043,7 @@ public class Commands
         else
         {
             Participants<?> participants = waiting.partialDeps().participants(dependency.txnId());
-            Participants<?> waitsOn = participants.intersecting(waiting.participants().stillWaitsOn(), Minimal);
+            Participants<?> waitsOn = participants.intersecting(waiting.participants.stillWaitsOn(), Minimal);
             RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, waitsOn);
 
             if (waitsOn.isEmpty() || status.all(LOCALLY_DEFUNCT))

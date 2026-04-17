@@ -66,6 +66,7 @@ import accord.api.Journal;
 import accord.api.Key;
 import accord.api.OwnershipEventListener;
 import accord.api.ProtocolModifiers;
+import accord.api.ProtocolModifiers.CoordinatorBacklogExecution;
 import accord.api.ProtocolModifiers.ReplicaExecution;
 import accord.api.ProtocolModifiers.FastExecution;
 import accord.api.Scheduler;
@@ -446,7 +447,7 @@ public class BurnTestBase
         setUnsafe(ProtocolModifiers.class, "dataStoreDetectsFutureReads", random.nextBoolean());
         setUnsafe(ProtocolModifiers.class, "fastReadExecution", random.pick(FastExecution.values()));
         setUnsafe(ProtocolModifiers.class, "fastWriteExecution", random.pick(FastExecution.values()));
-        setUnsafe(ProtocolModifiers.class, "permitCoordinatorBacklogExecution", random.nextBoolean());
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecution", random.pick(CoordinatorBacklogExecution.values()));
         setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
 
         Supplier<LongSupplier> nowSupplier = () -> {

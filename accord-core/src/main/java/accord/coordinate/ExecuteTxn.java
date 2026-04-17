@@ -73,7 +73,7 @@ import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
-import static accord.api.ProtocolModifiers.permitCoordinatorBacklogExecution;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
 import static accord.api.ProtocolModifiers.executeAtReplica;
 import static accord.api.ProtocolModifiers.replicaExecuteDistributedPersist;
 import static accord.api.ProtocolModifiers.recoverReads;
@@ -570,7 +570,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind()))
                 return CommitOrReadNack.Rejected;
 
-            if (permitCoordinatorBacklogExecution() && txnId.is(SingleKey) && txnId.is(Key))
+            if (coordinatorBacklogExecution(ballot) && txnId.is(SingleKey) && txnId.is(Key))
             {
                 SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(scope.get(0).asRoutingKey());
                 if (safeCfk != null)

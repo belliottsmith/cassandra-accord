@@ -168,7 +168,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     private RedundantBefore redundantBefore = RedundantBefore.EMPTY;
     private MaxConflicts maxConflicts = MaxConflicts.EMPTY;
     private MaxDecidedRX maxDecidedRX = MaxDecidedRX.EMPTY;
-    private int maxConflictsUpdates = 0;
+    private int maxConflictsUpdates = 0, prunedMaxConflictsSize;
     protected RangesForEpoch rangesForEpoch;
     protected @Nullable Ranges refuses;
     List<SyncPointListener> syncPointListeners;
@@ -494,35 +494,16 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     protected void updateMaxConflicts(Timestamp executeAt, MaxConflicts updatedMaxConflicts)
     {
-        if (++maxConflictsUpdates >= agent.maxConflictsPruneInterval())
+        if (++maxConflictsUpdates >= Math.max(prunedMaxConflictsSize, 128) && updatedMaxConflicts.size() >= prunedMaxConflictsSize * 2)
         {
-            int initialSize = updatedMaxConflicts.size();
-            MaxConflicts initialConflicts = updatedMaxConflicts;
             long pruneHlc = executeAt.hlc() - agent.maxConflictsHlcPruneDelta();
             Timestamp pruneBefore = pruneHlc > 0 ? Timestamp.fromValues(executeAt.epoch(), pruneHlc, executeAt.node) : null;
             Ranges ranges = rangesForEpoch.all();
             if (pruneBefore != null)
                 updatedMaxConflicts = updatedMaxConflicts.update(ranges, pruneBefore, pruneBefore);
 
-            int prunedSize = updatedMaxConflicts.size();
-            if (initialSize > 100 && prunedSize == initialSize)
-            {
-                logger.debug("Ineffective prune for {}. Initial size: {}, pruned size: {}, executeAt: {}, pruneBefore: {}", ranges, initialSize, prunedSize, executeAt, pruneBefore);
-                if (dumpCounter == 0)
-                {
-                    logger.trace("initial MaxConflicts dump: {}", initialConflicts);
-                    logger.trace("pruned MaxConflicts dump: {}", updatedMaxConflicts);
-                }
-                dumpCounter++;
-                dumpCounter %= 100;
-            }
-            else if (prunedSize != initialSize && logger.isTraceEnabled())
-            {
-                logger.trace("Successfully pruned {} to {}", initialSize, prunedSize);
-            }
-
-
             maxConflictsUpdates = 0;
+            prunedMaxConflictsSize = updatedMaxConflicts.size();
         }
         unsafeSetMaxConflicts(updatedMaxConflicts);
     }

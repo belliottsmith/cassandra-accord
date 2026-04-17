@@ -24,6 +24,7 @@ import java.util.regex.Pattern;
 
 import javax.annotation.Nullable;
 
+import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
@@ -90,6 +91,8 @@ public class ProtocolModifiers
     public enum DependencyElision { OFF, ALWAYS, IF_DURABLY_COMMITTED, IF_DURABLY_PREAPPLIED }
 
     public enum FastExecution { DISABLED, MAY_BYPASS_COMMANDSFORKEY, MAY_BYPASS_SAFESTORE }
+
+    public enum CoordinatorBacklogExecution { DISABLED, ON_RECOVERY, ALWAYS }
 
     public enum InformOfDurability { NONE, HOME, ALL }
 
@@ -181,8 +184,8 @@ public class ProtocolModifiers
         private static boolean dataStoreDetectsFutureReads = false;
         public static synchronized void setDataStoreDetectsFutureReads(boolean newDataStoreDetectsFutureReads) { pre(); dataStoreDetectsFutureReads = newDataStoreDetectsFutureReads; }
 
-        private static boolean permitCoordinatorBacklogExecution = false;
-        public static synchronized void setPermitCoordinatorBacklogExecution(boolean newCoordinatorExecuteBacklog) { pre();permitCoordinatorBacklogExecution = newCoordinatorExecuteBacklog; }
+        private static CoordinatorBacklogExecution coordinatorBacklogExecution = CoordinatorBacklogExecution.ON_RECOVERY;
+        public static synchronized void setCoordinatorBacklogExecution(CoordinatorBacklogExecution newCoordinatorExecuteBacklog) { pre();coordinatorBacklogExecution = newCoordinatorExecuteBacklog; }
 
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
@@ -292,8 +295,17 @@ public class ProtocolModifiers
     private static boolean dataStoreDetectsFutureReads = Configure.dataStoreDetectsFutureReads;
     public static boolean dataStoreDetectsFutureReads() { return dataStoreDetectsFutureReads; }
 
-    private static boolean permitCoordinatorBacklogExecution = Configure.permitCoordinatorBacklogExecution;
-    public static boolean permitCoordinatorBacklogExecution() { return permitCoordinatorBacklogExecution; }
+    private static CoordinatorBacklogExecution coordinatorBacklogExecution = Configure.coordinatorBacklogExecution;
+    public static boolean coordinatorBacklogExecution(Ballot ballot)
+    {
+        switch (coordinatorBacklogExecution)
+        {
+            default: throw new UnhandledEnum(coordinatorBacklogExecution);
+            case DISABLED: return false;
+            case ALWAYS: return true;
+            case ON_RECOVERY: return !ballot.equals(Ballot.ZERO);
+        }
+    }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

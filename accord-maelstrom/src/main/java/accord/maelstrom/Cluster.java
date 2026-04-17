@@ -55,6 +55,7 @@ import accord.impl.SizeOfIntersectionSorter;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
+import accord.local.MinimalCommand;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.RedundantBefore;
@@ -393,8 +394,8 @@ public class Cluster implements Scheduler
         @Override public void open(Node node) { }
         @Override public void start(Node node) { }
         @Override public Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
-        @Override public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
-        @Override public Command.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
+        @Override public MinimalCommand loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
+        @Override public MinimalCommand.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
         @Override public void saveCommand(int store, CommandUpdate value, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
         @Override public List<TopologyUpdate> loadTopologies() { throw new IllegalStateException("Not impelemented"); }
         @Override public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }

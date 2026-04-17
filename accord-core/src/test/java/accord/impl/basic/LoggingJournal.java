@@ -31,6 +31,7 @@ import accord.api.Journal;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
+import accord.local.MinimalCommand;
 import accord.local.Node;
 import accord.local.RedundantBefore;
 import accord.primitives.EpochSupplier;
@@ -93,13 +94,13 @@ public class LoggingJournal implements Journal
     }
 
     @Override
-    public Command.Minimal loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public MinimalCommand loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         return delegate.loadMinimal(commandStoreId, txnId, redundantBefore, durableBefore);
     }
 
     @Override
-    public Command.MinimalWithDeps loadMinimalWithDeps(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    public MinimalCommand.MinimalWithDeps loadMinimalWithDeps(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         return delegate.loadMinimalWithDeps(commandStoreId, txnId, redundantBefore, durableBefore);
     }
