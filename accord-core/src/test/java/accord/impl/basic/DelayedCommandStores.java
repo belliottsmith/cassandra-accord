@@ -58,7 +58,6 @@ import accord.utils.RandomSource;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
-import org.agrona.collections.Int2ObjectHashMap;
 
 import static accord.api.Journal.CommandUpdate;
 import static accord.utils.Invariants.Paranoia.LINEAR;
@@ -79,6 +78,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
     public void validateShardStateForTesting(Journal.TopologyUpdate lastUpdate)
     {
+        PreviouslyOwned previouslyOwned = lastUpdate.previouslyOwned;
         ShardHolder[] shards = new ShardHolder[lastUpdate.commandStores.size()];
         int i = 0;
         for (Map.Entry<Integer, RangesForEpoch> e : lastUpdate.commandStores.entrySet())
@@ -89,17 +89,21 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
             for (ShardHolder shard : current)
             {
                 if (shard.ranges().equals(ranges))
+                {
+                    Invariants.require(commandStore == null);
                     commandStore = shard.store;
+                }
             }
             Invariants.nonNull(commandStore, "Each set of ranges should have a corresponding command store, but %d did not:(%s)",
                                ranges, Arrays.toString(shards))
                       .restore();
-            ShardHolder shard = new ShardHolder(commandStore, e.getValue());
+
+            ShardHolder shard = new ShardHolder(commandStore, ranges, previouslyOwned.regains(ranges.all()));
             shards[i++] = shard;
         }
         Arrays.sort(shards, Comparator.comparingInt(shard -> shard.store.id()));
 
-        loadSnapshot(new Snapshot(shards, lastUpdate.global.forNode(nodeId()).trim(), lastUpdate.global, new Int2ObjectHashMap<>()));
+        loadSnapshot(new Snapshot(shards, lastUpdate.global.forNode(nodeId()).trim(), lastUpdate.global, lastUpdate.previouslyOwned));
     }
 
     protected void loadSnapshot(Snapshot nextSnapshot)

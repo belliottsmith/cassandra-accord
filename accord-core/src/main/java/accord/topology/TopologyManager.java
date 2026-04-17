@@ -28,7 +28,6 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
-import accord.primitives.Routables;
 import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,6 +54,7 @@ import accord.utils.async.AsyncResults;
 import accord.utils.async.NestedAsyncResult;
 
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
+import static accord.primitives.Routables.Slice.Minimal;
 
 /**
  * Manages topology state changes and update bookkeeping
@@ -315,12 +315,12 @@ public class TopologyManager
     public static class RegainingEpochRange
     {
         public final long epoch;
-        public final Ranges range;
+        public final Ranges ranges;
 
-        public RegainingEpochRange(long epoch, Ranges range)
+        public RegainingEpochRange(long epoch, Ranges ranges)
         {
             this.epoch = epoch;
-            this.range = range;
+            this.ranges = ranges;
         }
 
         public long epoch()
@@ -328,36 +328,43 @@ public class TopologyManager
             return epoch;
         }
 
-        public Ranges range()
+        public Ranges ranges()
         {
-            return range;
+            return ranges;
         }
     }
 
     @Nullable
-    public RegainingEpochRange epochAndRangeToBeRetired(Topology curr, Topology next)
+    public RegainingEpochRange computeRegaining(Topology current, Topology next)
     {
-        Map<Id, Ranges> additions = Topology.computeNodeAdditions(curr, next);
+        Map<Id, Ranges> additions = Topology.computeNodeAdditions(current, next);
         long greatestEpoch = -1;
-        Ranges range = Ranges.EMPTY;
+        Ranges ranges = Ranges.EMPTY;
 
-        synchronized (this)
+        ActiveEpochs active = this.active;
+        for (Map.Entry<Id, Ranges> entry : additions.entrySet())
         {
-            for (Map.Entry<Id, Ranges> entry : additions.entrySet())
+            Ranges addingForNode = entry.getValue();
+            for (ActiveEpoch e : active)
             {
-                for (ActiveEpoch activeEpoch : this.active) {
-                    if (activeEpoch.all().rangesForNode(entry.getKey()).intersects(entry.getValue()) && greatestEpoch < activeEpoch.epoch())
-                    {
-                        greatestEpoch = activeEpoch.epoch();
-                        range = range.union(MERGE_ADJACENT, activeEpoch.all().rangesForNode(entry.getKey()).slice(entry.getValue(), Routables.Slice.Minimal));
-                        break;
-                    }
+                addingForNode = addingForNode.without(e.removedRanges).without(e.retired());
+                if (addingForNode.isEmpty())
+                    break;
+
+                Ranges existingForNode = e.all().rangesForNode(entry.getKey());
+                Ranges regainingForNode = addingForNode.slice(existingForNode, Minimal);
+                if (!regainingForNode.isEmpty())
+                {
+                    greatestEpoch = Math.max(greatestEpoch, e.epoch());
+                    ranges = ranges.union(MERGE_ADJACENT, regainingForNode);
+                    addingForNode = addingForNode.without(regainingForNode);
                 }
+                addingForNode = addingForNode.without(e.addedRanges);
             }
         }
 
         if (greatestEpoch != -1)
-            return new RegainingEpochRange(greatestEpoch, range);
+            return new RegainingEpochRange(greatestEpoch, ranges);
 
         return null;
     }

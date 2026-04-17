@@ -244,6 +244,12 @@ extends SafeCommandStore
     }
 
     @Override
+    public final void setPermanentlyUnsafeToRead(Ranges newPermanentlyUnsafeToRead)
+    {
+        ensureFieldUpdates().newPermanentlyUnsafeToRead = newPermanentlyUnsafeToRead;
+    }
+
+    @Override
     public void setRangesForEpoch(RangesForEpoch rangesForEpoch)
     {
         if (rangesForEpoch != null)

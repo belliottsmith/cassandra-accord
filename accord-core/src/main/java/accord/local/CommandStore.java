@@ -187,7 +187,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      * But they may still be ordered for other key ranges they participate in.
      */
     private NavigableMap<Timestamp, Ranges> safeToRead = emptySafeToRead();
-    private Ranges regainedRanges =  Ranges.EMPTY;
+    private Ranges permanentlyUnsafeToRead = Ranges.EMPTY;
     private final Set<Bootstrap> bootstraps = Collections.synchronizedSet(new DeterministicIdentitySet<>());
     @Nullable private RejectBefore rejectBefore;
 
@@ -406,7 +406,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         {
             for (Map.Entry<Timestamp, Ranges> entry : newSafeToRead.entrySet())
             {
-                Ranges rangeExcluded = entry.getValue().without(this.regainedRanges);
+                Ranges rangeExcluded = entry.getValue().without(this.permanentlyUnsafeToRead);
                 logger.info("{} is excluded from newSafeToRead because it is in the regained ranges", rangeExcluded);
             }
         }
@@ -415,9 +415,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         this.safeToRead = newSafeToRead;
     }
 
-    final void unsafeAddToRegainedRanges(Ranges newRegainedRanges)
+    final void unsafeSetPermanentlyUnsafeToRead(Ranges newPermanentlyUnsafeToRead)
     {
-        this.regainedRanges = newRegainedRanges.union(MERGE_ADJACENT, this.regainedRanges);
+        this.permanentlyUnsafeToRead = newPermanentlyUnsafeToRead;
     }
 
     protected final void unsafeClearSafeToRead()
@@ -1196,11 +1196,12 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         }
     }
 
-    final void markAsRegained(Ranges ranges)
+    final AsyncChain<Void> markPermanentlyUnsafeToRead(Ranges ranges)
     {
-        execute((Empty) () -> "Mark Range As Regained", safeStore -> {
-            safeStore.addToRegainedRanges(ranges);
-        }, agent);
+        return chain((Empty) () -> "Mark Range As Regained", safeStore -> {
+            safeStore.setSafeToRead(purgeHistory(safeToRead, ranges));
+            safeStore.setPermanentlyUnsafeToRead(permanentlyUnsafeToRead.union(MERGE_ADJACENT, ranges));
+        });
     }
 
     public final DataStore unsafeGetDataStore()

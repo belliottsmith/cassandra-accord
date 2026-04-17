@@ -25,12 +25,8 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.HashMap;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -38,13 +34,20 @@ import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.api.*;
-import accord.topology.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Agent;
+import accord.api.AsyncExecutorFactory;
+import accord.api.AsyncExecutor;
+import accord.topology.EpochReady;
+import accord.api.DataStore;
+import accord.api.Journal;
+import accord.api.LocalListeners;
+import accord.api.ProgressLog;
+import accord.api.RoutingKey;
 import accord.local.CommandStore.EpochUpdateHolder;
 import accord.primitives.AbstractRanges;
 import accord.primitives.AbstractUnseekableKeys;
@@ -56,6 +59,8 @@ import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
+import accord.topology.Shard;
+import accord.topology.Topology;
 import accord.utils.IndexedQuadConsumer;
 import accord.utils.IndexedRangeQuadConsumer;
 import accord.utils.Invariants;
@@ -90,6 +95,12 @@ public abstract class CommandStores implements AsyncExecutorFactory
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(CommandStores.class);
 
+    static final Iterator<CommandStore> INVALID = new Iterator<>()
+    {
+        @Override public boolean hasNext() { throw new UnsupportedOperationException(); }
+        @Override public CommandStore next() { throw new UnsupportedOperationException(); }
+    };
+
     public interface LatentStoreSelector
     {
         StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants);
@@ -101,9 +112,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
             @Override
             public StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
             {
-                return snapshot -> new StoreIterator(StoreFinder.find(snapshot, participants)
+                return snapshot -> StoreFinder.find(snapshot, participants)
                                               .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch())
-                                              .iterator(snapshot), txnId.epoch());
+                                              .iterator(snapshot);
             }
         }
 
@@ -116,7 +127,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public interface StoreSelector extends LatentStoreSelector
     {
         default StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants) { return this; }
-        StoreIterator select(Snapshot snapshot);
+        Iterator<CommandStore> select(Snapshot snapshot);
     }
 
     public static class IncludingSpecificStoreSelector implements StoreSelector
@@ -135,35 +146,14 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 StoreFinder finder = StoreFinder.find(snapshot, participants)
                                                 .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch());
                 finder.set(snapshot.byId.get(storeId));
-                return new StoreIterator(finder.iterator(snapshot), txnId.epoch());
+                return finder.iterator(snapshot);
             };
         }
 
         @Override
-        public StoreIterator select(Snapshot snapshot)
+        public Iterator<CommandStore> select(Snapshot snapshot)
         {
-            return new StoreIterator(Collections.singletonList(snapshot.byId(storeId)).iterator(), null);
-        }
-    }
-
-    public static class StoreIterator
-    {
-        public final Iterator<CommandStore> storeIterator;
-        public final Long minEpoch;
-
-        public StoreIterator(Iterator<CommandStore> storeIterator, @Nullable Long minEpoch)
-        {
-            this.storeIterator = storeIterator;
-            this.minEpoch = (minEpoch == null) ? 0L : minEpoch;
-        }
-
-        public Iterator<CommandStore> getStoreIterator()
-        {
-            return storeIterator;
-        }
-
-        public Long getMinEpoch() {
-            return minEpoch;
+            return Collections.singletonList(snapshot.byId(storeId)).iterator();
         }
     }
 
@@ -171,6 +161,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public static class StoreFinder extends LargeBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
     {
         final int[] indexMap;
+        private boolean invalid;
 
         private StoreFinder(int size, int[] indexMap)
         {
@@ -188,7 +179,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             return snapshot -> {
                 StoreFinder finder = StoreFinder.find(snapshot, unseekables);
                 finder.filter(snapshot, unseekables, minEpoch, maxEpoch);
-                return new StoreIterator(finder.iterator(snapshot), minEpoch);
+                return finder.iterator(snapshot);
             };
         }
 
@@ -223,13 +214,23 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 ShardHolder shard = snapshot.shards[i];
                 Ranges shardRanges = shard.ranges().allBetween(minEpoch, maxEpoch);
                 if (shardRanges != shard.ranges.all() && !shardRanges.intersects(unseekables))
+                {
                     unset(i);
+                }
+                else if (unsafelyTouchesRegainedRanges(snapshot, shard, unseekables, minEpoch))
+                {
+                    invalid = true;
+                    break;
+                }
             }
             return this;
         }
 
         public Iterator<CommandStore> iterator(Snapshot snapshot)
         {
+            if (invalid)
+                return INVALID;
+
             return new Iterator<>()
             {
                 int i = firstSetBit();
@@ -307,24 +308,20 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public static class ShardHolder
     {
         public final CommandStore store;
+        @Nullable final Ranges regainsRanges;
         RangesForEpoch ranges;
-        Long retirementEpoch;
 
-        ShardHolder(CommandStore store)
+        ShardHolder(CommandStore store, @Nullable Ranges regainsRanges)
         {
             this.store = store;
+            this.regainsRanges = regainsRanges;
         }
 
-        public ShardHolder(CommandStore store, RangesForEpoch ranges)
+        public ShardHolder(CommandStore store, RangesForEpoch ranges, @Nullable Ranges regainsRanges)
         {
             this.store = store;
+            this.regainsRanges = regainsRanges;
             this.ranges = ranges;
-            this.retirementEpoch = null;
-        }
-
-        public ShardHolder withStoreUnsafe(CommandStore store)
-        {
-            return new ShardHolder(store, ranges);
         }
 
         public RangesForEpoch ranges()
@@ -349,12 +346,77 @@ public abstract class CommandStores implements AsyncExecutorFactory
         RangesForEpoch ranges();
     }
 
+    public static final class PreviouslyOwned
+    {
+        public static final PreviouslyOwned EMPTY = new PreviouslyOwned(0, RangesForEpoch.EMPTY.epochs, RangesForEpoch.EMPTY.ranges);
+        final long maxEpoch;
+        final long[] epochs; // the epoch upon which it was last owned
+        final Ranges[] ranges;
+
+        public PreviouslyOwned(long maxEpoch, long[] epochs, Ranges[] ranges)
+        {
+            this.maxEpoch = maxEpoch;
+            this.epochs = epochs;
+            this.ranges = ranges;
+        }
+
+        PreviouslyOwned prepend(long epoch, Ranges ranges)
+        {
+            Invariants.require(epochs.length == 0 || epoch > epochs[0]);
+            long[] newEpochs = new long[this.epochs.length + 1];
+            Ranges[] newRanges = new Ranges[epochs.length];
+            newEpochs[0] = epoch;
+            newRanges[0] = ranges;
+            System.arraycopy(this.epochs, 0, newEpochs, 1, this.epochs.length);
+            System.arraycopy(this.ranges, 0, newRanges, 1, this.ranges.length);
+            return new PreviouslyOwned(epoch, newEpochs, newRanges);
+        }
+
+        public boolean overlaps(long epoch, Unseekables<?> test)
+        {
+            if (epoch > maxEpoch)
+                return false;
+
+            for (int i = 0 ; i < epochs.length && epoch <= epochs[i] ; ++i)
+            {
+                if (this.ranges[i].intersects(test))
+                    return true;
+            }
+
+            return false;
+        }
+
+        public Ranges regains(Ranges overlapping)
+        {
+            Ranges regains = Ranges.EMPTY;
+            for (Ranges rs : this.ranges)
+                regains = regains.without(rs.slice(overlapping, Minimal));
+            return regains;
+        }
+
+        public int size()
+        {
+            return epochs.length;
+        }
+
+        public long epochs(int i)
+        {
+            return epochs[i];
+        }
+
+        public Ranges ranges(int i)
+        {
+            return ranges[i];
+        }
+    }
+
     // We ONLY remove ranges to keep logic manageable; likely to only merge CommandStores into a new CommandStore via some kind of Bootstrap
     public static class RangesForEpoch
     {
+        public static final RangesForEpoch EMPTY = new RangesForEpoch(new long[0], new Ranges[0]);
+
         final long[] epochs;
         final Ranges[] ranges;
-        public static final RangesForEpoch EMPTY = new RangesForEpoch(new long[0], new Ranges[0]);
 
         public RangesForEpoch(long epoch, Ranges ranges)
         {
@@ -386,7 +448,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             if (this == object) return true;
             if (object == null || getClass() != object.getClass()) return false;
             RangesForEpoch that = (RangesForEpoch) object;
-            return Objects.deepEquals(epochs, that.epochs) && Objects.deepEquals(ranges, that.ranges);
+            return Arrays.equals(epochs, that.epochs) && Arrays.equals(ranges, that.ranges);
         }
 
         @Override
@@ -592,12 +654,10 @@ public abstract class CommandStores implements AsyncExecutorFactory
         final Int2IntHashMap byId;
         private final int[] indexForRange;
         final SearchableRangeList lookupByRange;
-        final Map<Integer, LargeBitSet> overlappingCommandStores;
-        Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges;
 
-        public Snapshot(ShardHolder[] shards, Topology local, Topology global, Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges)
+        public Snapshot(ShardHolder[] shards, Topology local, Topology global, PreviouslyOwned previouslyOwned)
         {
-            super(asMap(shards, previouslyOwnedRanges), global);
+            super(asMap(shards), global, previouslyOwned);
             this.local = local;
             this.shards = shards;
             this.byId = new Int2IntHashMap(shards.length, Hashing.DEFAULT_LOAD_FACTOR, -1);
@@ -642,38 +702,19 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 indexForRange[i] = rangesAndIndexes[i].index;
             }
             lookupByRange = SearchableRangeList.build(ranges);
-
-            overlappingCommandStores = new HashMap<>();
-            for (int i = 0; i < shards.length ; i++)
-                overlappingCommandStores.put(i, new LargeBitSet(shards.length));
-
-            for (int i = 0; i < shards.length; i++)
-            {
-                for (int j = i; j < shards.length; j++)
-                {
-                    if (!shards[i].ranges().all().slice(shards[j].ranges().all(), Minimal).isEmpty())
-                    {
-                        overlappingCommandStores.get(i).set(j);
-                        overlappingCommandStores.get(j).set(i);
-                    }
-                }
-            }
-
-            this.previouslyOwnedRanges = previouslyOwnedRanges;
         }
 
         // This method exists to ensure we do not hold references to command stores
         public Journal.TopologyUpdate asTopologyUpdate()
         {
-            return new Journal.TopologyUpdate(commandStores, global);
+            return new Journal.TopologyUpdate(commandStores, global, previouslyOwned);
         }
 
-        private static Int2ObjectHashMap<CommandStores.RangesForEpoch> asMap(ShardHolder[] shards, Int2ObjectHashMap<CommandStores.RangesForEpoch> previouslyOwnedRanges)
+        private static Int2ObjectHashMap<CommandStores.RangesForEpoch> asMap(ShardHolder[] shards)
         {
             Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores = new Int2ObjectHashMap<>();
             for (ShardHolder shard : shards)
                 commandStores.put(shard.store.id, shard.ranges);
-            commandStores.putAll(previouslyOwnedRanges);
             return commandStores;
         }
 
@@ -700,7 +741,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         this.supplier = supplier;
         this.shardDistributor = shardDistributor;
 
-        this.current = new Snapshot(new ShardHolder[0], Topology.EMPTY, Topology.EMPTY, new Int2ObjectHashMap<>());
+        this.current = new Snapshot(new ShardHolder[0], Topology.EMPTY, Topology.EMPTY, PreviouslyOwned.EMPTY);
         this.journal = journal;
     }
 
@@ -784,7 +825,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
         List<Supplier<EpochReady>> bootstrapUpdates = new ArrayList<>();
         List<ShardHolder> result = new ArrayList<>(prev.shards.length + added.size());
-        Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges = prev.previouslyOwnedRanges;
+        PreviouslyOwned previouslyOwned = prev.previouslyOwned;
 
         for (ShardHolder shard : prev.shards)
         {
@@ -794,20 +835,14 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 // TODO (required): This is updating the a non-volatile field in the previous Snapshot, why modify it at all, even with volatile the guaranteed visibility is weak even with mutual exclusion
                 shard.ranges = shard.ranges().withRanges(newTopology.epoch(), current.without(subtracted));
-                if (current.without(subtracted).isEmpty())
-                {
-                    shard.retirementEpoch = shard.ranges().epochs[shard.ranges.size() - 1] - 1;
-                }
                 shard.store.epochUpdateHolder.remove(epoch, shard.ranges, removeRanges);
+
                 bootstrapUpdates.add(shard.store.unbootstrap(epoch, removeRanges));
             }
 
             Ranges regainedRanges = shard.ranges().all().slice(added, Minimal);
             if (!regainedRanges.isEmpty())
-            {
-                shard.store.markUnsafeToRead(regainedRanges);
-                shard.store.markAsRegained(regainedRanges);
-            }
+                bootstrapUpdates.add(() -> EpochReady.all(epoch, shard.store.markPermanentlyUnsafeToRead(regainedRanges).beginAsResult()));
 
             // TODO (desired): only sync affected shards
             Ranges ranges = shard.ranges().currentRanges();
@@ -816,24 +851,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
             {
                 logger.debug("Epoch {} requires visibility sync for {}", epoch, ranges);
                 bootstrapUpdates.add(shard.store.refreshReadyToCoordinate(node, ranges, epoch));
-            }
-
-            try
-            {
-                if (shard.retirementEpoch != null && node.topology().active().get(shard.retirementEpoch).retired().containsAll(shard.ranges().allAt(shard.retirementEpoch)))
-                {
-                    previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
-                    continue;
-                }
-            }
-            catch (TopologyRetiredException e)
-            {
-                previouslyOwnedRanges.put(shard.store.id(), shard.ranges);
-                continue;
-            }
-            catch (TopologyException e)
-            {
-                throw new IllegalStateException();
             }
 
             result.add(shard);
@@ -847,9 +864,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 EpochUpdateHolder updateHolder = new EpochUpdateHolder();
                 RangesForEpoch rangesForEpoch = new RangesForEpoch(epoch, addRanges);
                 updateHolder.add(epoch, rangesForEpoch, addRanges);
-                ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder));
+                ShardHolder shard = new ShardHolder(supplier.create(nextId++, updateHolder), previouslyOwned.regains(addRanges));
                 shard.ranges = rangesForEpoch;
-                shard.retirementEpoch = null;
 
                 Map<BootstrapRangeAction, Ranges> partitioned = addRanges.partitioningBy(range -> shouldBootstrap(node, prev.global, newLocalTopology, range), BootstrapRangeAction.class);
                 for (Map.Entry<BootstrapRangeAction, Ranges> entry : partitioned.entrySet())
@@ -882,7 +898,11 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 );
             };
         }
-        return new TopologyUpdate(new Snapshot(result.toArray(new ShardHolder[0]), newLocalTopology, newTopology, previouslyOwnedRanges), bootstrap);
+
+        if (!subtracted.isEmpty())
+            previouslyOwned = previouslyOwned.prepend(epoch - 1, subtracted);
+
+        return new TopologyUpdate(new Snapshot(result.toArray(new ShardHolder[0]), newLocalTopology, newTopology, previouslyOwned), bootstrap);
     }
 
     private static boolean requiresSync(Ranges ranges, Topology oldTopology, Topology newTopology)
@@ -922,7 +942,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public AsyncChain<Void> forAll(String reason, Consumer<SafeCommandStore> forEach)
     {
-        return mapReduce(snapshot -> new StoreIterator(Stream.of(snapshot.shards).map(shard -> shard.store).iterator(), null), new MapReduceCommandStores<>(RoutingKeys.EMPTY)
+        return mapReduce(snapshot -> Stream.of(snapshot.shards).map(shard -> shard.store).iterator(), new MapReduceCommandStores<>(RoutingKeys.EMPTY)
         {
             @Override public Void reduce(Void o1, Void o2) { return null; }
             @Override public TxnId primaryTxnId() { return null; }
@@ -991,83 +1011,38 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public <O> AsyncChain<O> mapReduce(IntStream commandStoreIds, MapReduceCommandStores<?, O> mapReduce)
     {
-        return mapReduce(snapshot -> new StoreIterator(commandStoreIds.mapToObj(snapshot::byId).iterator(), null), mapReduce);
+        return mapReduce(snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
     }
 
     public <O> AsyncChain<O> mapReduce(StoreSelector selector, MapReduceCommandStores<?, O> mapReduceConsume)
     {
         Snapshot snapshot = current;
-        StoreIterator storeIterator = selector.select(snapshot);
-        Iterator<CommandStore> stores = storeIterator.getStoreIterator();
+        Iterator<CommandStore> stores = selector.select(snapshot);
+        if (stores == INVALID)
+            return AsyncChains.failure(new OverlappingCommandStoresException());
+
         AsyncChain<O> chain = null;
-        LargeBitSet bitSet = new LargeBitSet(snapshot.shards.length);
         while (stores.hasNext())
         {
             CommandStore store = stores.next();
-            Invariants.require(!snapshot.previouslyOwnedRanges.containsKey(store.id()));
-            bitSet.set(snapshot.byId.get(store.id()));
             AsyncChain<O> next = mapReduceConsume.applyAsync(store);
             if (next != null)
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
-        if (chain == null)
-            for (Map.Entry<Integer, RangesForEpoch> e : snapshot.previouslyOwnedRanges.entrySet())
-            {
-                RangesForEpoch rangesForEpoch = e.getValue();
-
-                if (rangesForEpoch.allSince(storeIterator.getMinEpoch()).intersects(mapReduceConsume.keys()))
-                    return AsyncChains.failure(new RuntimeException("Query sent for deleted CommandStore"));
-            }
-
-        if (!checkQueryDisjointRangesAcrossCommandStores(snapshot.overlappingCommandStores, snapshot.shards, bitSet, snapshot.previouslyOwnedRanges, mapReduceConsume.keys().toRanges(), storeIterator.getMinEpoch()))
-            return AsyncChains.failure(new RuntimeException("Tried to query more than one CommandStore for the same range"));
-
         return chain == null ? AsyncChains.success(null) : chain;
     }
 
-    public static boolean checkQueryDisjointRangesAcrossCommandStores(Map<Integer, LargeBitSet> overlappingCommandStores, ShardHolder[] shards, LargeBitSet commandStoresSeen, Int2ObjectHashMap<RangesForEpoch> previouslyOwnedRanges, Ranges queryRange, Long minEpoch)
+    private static boolean unsafelyTouchesRegainedRanges(Snapshot snapshot, ShardHolder shard, Unseekables<?> unseekables, long minEpoch)
     {
-        // Check that we are not querying two command stores for the same range
-        for (Map.Entry<Integer, LargeBitSet> entry : overlappingCommandStores.entrySet())
-        {
-            Ranges range = Ranges.EMPTY;
-            LargeBitSet overlappingCommandStore = entry.getValue();
-            for (int i = overlappingCommandStore.firstSetBit(); i >= 0 ; i = overlappingCommandStore.nextSetBit(i + 1, -1))
-            {
-                if (commandStoresSeen.get(i))
-                {
-                    Ranges touchedKeys = queryRange.slice(shards[i].ranges().allSince(minEpoch), Minimal);
+        if (shard.regainsRanges == null)
+            return false;
 
-                    if (!range.slice(touchedKeys, Minimal).isEmpty())
-                        return false;
+        unseekables = unseekables.slice(shard.regainsRanges, Minimal);
+        if (unseekables.isEmpty())
+            return false;
 
-                    range = range.with(touchedKeys.toRanges());
-                }
-            }
-
-            // Can only overlap with ranges of CommandStores that we traverse
-            for (Map.Entry<Integer, RangesForEpoch> e : previouslyOwnedRanges.entrySet())
-            {
-                Ranges touchedKeys = queryRange.slice(e.getValue().allSince(minEpoch), Minimal);
-                if (!range.slice(touchedKeys, Minimal).isEmpty())
-                    return false;
-            }
-        }
-
-        return true;
-    }
-
-    public <O> O mapReduceUnsafe(StoreSelector selector, Function<CommandStore, O> map, BiFunction<O, O, O> reduce, O accumulator)
-    {
-        Snapshot snapshot = current;
-        Iterator<CommandStore> stores = selector.select(snapshot).getStoreIterator();
-        while (stores.hasNext())
-        {
-            O next = map.apply(stores.next());
-            accumulator = reduce.apply(accumulator, next);
-        }
-        return accumulator;
+        return snapshot.previouslyOwned.overlaps(minEpoch, unseekables);
     }
 
     /**
@@ -1081,21 +1056,21 @@ public abstract class CommandStores implements AsyncExecutorFactory
         int maxId = -1;
         for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
         {
-            Invariants.require(e.getValue() != null);
+            RangesForEpoch rfe = e.getValue();
+            Invariants.require(rfe != null);
             EpochUpdateHolder holder = new EpochUpdateHolder();
-            holder.add(1, e.getValue(), e.getValue().all());
-            shards[i++] = new ShardHolder(supplier.create(e.getKey(), holder), e.getValue());
+            holder.add(1, rfe, rfe.all());
+            shards[i++] = new ShardHolder(supplier.create(e.getKey(), holder), rfe, update.previouslyOwned.regains(rfe.all()));
             maxId = Math.max(maxId, e.getKey());
         }
         Arrays.sort(shards, Comparator.comparingInt(shard -> shard.store.id));
 
         nextId = maxId + 1;
-        loadSnapshot(new Snapshot(shards, update.global.forNode(supplier.node.id()).trim(), update.global, new Int2ObjectHashMap<>()));
+        loadSnapshot(new Snapshot(shards, update.global.forNode(supplier.node.id()).trim(), update.global, update.previouslyOwned));
     }
 
     public synchronized void resetTopology(Journal.TopologyUpdate update)
     {
-        // TODO: assert
         Snapshot current = this.current;
         Invariants.require(update.global.epoch() == current.local.epoch());
         ShardHolder[] shards = new ShardHolder[current.commandStores.size()];
@@ -1103,11 +1078,11 @@ public abstract class CommandStores implements AsyncExecutorFactory
         for (Map.Entry<Integer, RangesForEpoch> e : update.commandStores.entrySet())
         {
             int storeId = e.getKey();
-            RangesForEpoch ranges = e.getValue();
-            Invariants.require(ranges != null);
-            ShardHolder shard = new ShardHolder(current.byId(storeId), ranges);
+            RangesForEpoch rfe = e.getValue();
+            Invariants.require(rfe != null);
+            ShardHolder shard = new ShardHolder(current.byId(storeId), rfe, update.previouslyOwned.regains(rfe.all()));
             EpochUpdateHolder holder = shard.store.epochUpdateHolder;
-            ranges.forEach(new BiConsumer<>()
+            rfe.forEach(new BiConsumer<>()
             {
                 RangesForEpoch accumulator = null;
                 Ranges prev = null;
@@ -1140,7 +1115,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         }
 
         nextId = maxId + 1;
-        loadSnapshot(new Snapshot(shards, current.local, current.global, new Int2ObjectHashMap<>()));
+        loadSnapshot(new Snapshot(shards, current.local, current.global, update.previouslyOwned));
     }
 
     public synchronized Supplier<EpochReady> updateTopology(Node node, Topology newTopology)

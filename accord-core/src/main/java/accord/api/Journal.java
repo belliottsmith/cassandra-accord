@@ -28,6 +28,7 @@ import javax.annotation.Nullable;
 import accord.impl.CommandChange;
 import accord.local.Command;
 import accord.local.CommandStores;
+import accord.local.CommandStores.PreviouslyOwned;
 import accord.local.DurableBefore;
 import accord.local.Node;
 import accord.local.RedundantBefore;
@@ -85,11 +86,13 @@ public interface Journal
     {
         public final Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores;
         public final Topology global;
+        public final PreviouslyOwned previouslyOwned;
 
-        public TopologyUpdate(@Nonnull Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores, @Nonnull Topology global)
+        public TopologyUpdate(@Nonnull Int2ObjectHashMap<CommandStores.RangesForEpoch> commandStores, @Nonnull Topology global, PreviouslyOwned previouslyOwned)
         {
             this.commandStores = commandStores;
             this.global = global;
+            this.previouslyOwned = previouslyOwned;
         }
 
         public boolean isEquivalent(TopologyUpdate other)
@@ -103,7 +106,7 @@ public interface Journal
 
         public TopologyUpdate cloneWithEquivalentEpoch(long epoch)
         {
-            return new TopologyUpdate(commandStores, global.cloneEquivalentWithEpoch(epoch));
+            return new TopologyUpdate(commandStores, global.cloneEquivalentWithEpoch(epoch), previouslyOwned);
         }
 
         @Override
@@ -150,6 +153,7 @@ public interface Journal
         public RedundantBefore newRedundantBefore;
         public NavigableMap<TxnId, Ranges> newBootstrapBeganAt;
         public NavigableMap<Timestamp, Ranges> newSafeToRead;
+        public Ranges newPermanentlyUnsafeToRead;
         public CommandStores.RangesForEpoch newRangesForEpoch;
 
         public String toString()
@@ -161,6 +165,8 @@ public interface Journal
                 builder.append("newBootstrapBeganAt=").append(newBootstrapBeganAt).append(", ");
             if (newSafeToRead != null)
                 builder.append("newSafeToRead=").append(newSafeToRead).append(", ");
+            if (newPermanentlyUnsafeToRead != null)
+                builder.append("newPermanentlyUnsafeToRead=").append(newPermanentlyUnsafeToRead).append(", ");
             if (newRangesForEpoch != null)
                 builder.append("newRangesForEpoch=").append(newRangesForEpoch).append(", ");
             builder.setLength(builder.length() - 2);
