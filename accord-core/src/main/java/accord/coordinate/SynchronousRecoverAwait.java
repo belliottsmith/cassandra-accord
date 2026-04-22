@@ -123,7 +123,7 @@ public class SynchronousRecoverAwait extends ReadCoordinator<InferredFastPath, R
     @Override
     protected void contact(Id to)
     {
-        node.send(to, new RecoverAwait(to, topologies, txnId, participants, until, notifyProgressLog, recoverId), executor, this);
+        node.send(to, new RecoverAwait(to, topologies, txnId, participants, until, notifyProgressLog, recoverId), executor, this, tracing);
     }
 
     @Override

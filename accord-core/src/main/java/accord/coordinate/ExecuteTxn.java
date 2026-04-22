@@ -135,7 +135,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         {
             Invariants.require(hasReachedQuorum());
             isDone = true;
-            InformDurable.informHome(node, topologies, txnId, route, executeAt, DurablyStable);
+            InformDurable.informHome(node, topologies, txnId, route, executeAt, DurablyStable, tracing);
         }
 
         void maybeInformStable()
@@ -286,8 +286,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         Commit send = new Commit(kind, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
         boolean addCallback = allTopologies.size() == 1 || stable.nodes().contains(to);
-        if (addCallback) node.send(to, send, executor, stable);
-        else node.send(to, send);
+        if (addCallback) node.send(to, send, executor, stable, tracing);
+        else node.send(to, send, tracing);
 
     }
 
@@ -301,7 +301,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             sendExecuteAt = executeAt;
             markUnstableFastRead(to);
         }
-        node.send(to, new ReadTxnData(to, allTopologies, txnId, readScope, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this);
+        node.send(to, new ReadTxnData(to, allTopologies, txnId, readScope, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this, tracing);
     }
 
     private void markUnstableFastRead(Node.Id to)
@@ -313,13 +313,13 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private void sendStableRead(Node.Id to, Commit.Kind kind)
     {
-        node.send(to, new StableThenRead(kind, to, allTopologies, txnId, txn, route, executeAt, stableDeps), executor, this);
+        node.send(to, new StableThenRead(kind, to, allTopologies, txnId, txn, route, executeAt, stableDeps), executor, this, tracing);
     }
 
     private void sendMaximal(Node.Id to)
     {
         Commit send = new Commit(StableWithTxnAndDeps, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
-        node.send(to, send, executor, stable);
+        node.send(to, send, executor, stable, tracing);
     }
 
     private Commit.Kind commitKind()

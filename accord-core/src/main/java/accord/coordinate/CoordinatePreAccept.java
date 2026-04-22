@@ -99,7 +99,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
                 // TODO (expected): can we improve reentrancy logic to avoid these surprising cases without losing benefits?
                 // finishOnFailure first as can trigger reentrancy via proposeAndCommitInvalidate triggering timeouts
                 finishOnFailure();
-                proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, null);
+                proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, tracing, null);
                 break;
             case Success:
                 onPreAcceptedOrNewEpoch();
@@ -153,7 +153,7 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
         else
         {
             BiConsumer<?, Throwable> callback = finishAndTakeCallback();
-            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, (success, invalidated) -> {
+            proposeAndCommitInvalidate(node, executor, Ballot.ZERO, txnId, scope.homeKey(), scope, txnId, tracing, (success, invalidated) -> {
                 failure.addSuppressed(invalidated);
                 callback.accept(null, failure);
                 node.agent().coordinatorEvents().onFailed(failure, txnId, scope, this);

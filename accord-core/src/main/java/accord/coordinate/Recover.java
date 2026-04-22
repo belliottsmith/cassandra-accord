@@ -618,7 +618,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
     {
         locallyInvalidateAndCallback(node, txnId, reportTo.refine(txnId, null, scope), scope, ProgressToken.INVALIDATED, callback, tracing);
         node.withEpochAtLeast(invalidateUntil.epoch(), executor, node.agent(), () -> {
-            Commit.Invalidate.commitInvalidate(node, txnId, scope, invalidateUntil);
+            Commit.Invalidate.commitInvalidate(node, txnId, scope, invalidateUntil, tracing);
         });
     }
 

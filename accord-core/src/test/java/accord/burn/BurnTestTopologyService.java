@@ -86,7 +86,7 @@ public class BurnTestTopologyService implements TopologyService, TopologyListene
         {
             ActiveEpoch e = on.topology().active().ifExists(epoch);
             Topology topology = e == null ? null : e.all();
-            on.reply(from, replyContext, new FetchTopologyReply(topology), null);
+            on.reply(from, replyContext, new FetchTopologyReply(topology), null, null);
             return null;
         }
 
@@ -148,7 +148,7 @@ public class BurnTestTopologyService implements TopologyService, TopologyListene
 
             int idx = randomSupplier.get().nextInt(candidates.size());
             Node.Id node = candidates.remove(idx);
-            originator().send(node, request, executor, this);
+            originator().send(node, request, executor, this, null);
         }
 
         @Override

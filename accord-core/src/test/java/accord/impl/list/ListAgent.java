@@ -121,7 +121,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         {
             ListResult result = (ListResult) success;
             if (result.requestId > Integer.MIN_VALUE)
-                node.reply(result.client, Network.replyCtxFor(result.requestId), result, null);
+                node.reply(result.client, Network.replyCtxFor(result.requestId), result, null, null);
         }
     }
 
@@ -130,7 +130,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     public Tracing trace(TxnId txnId, Participants<?> participants, Coordination.CoordinationKind eventType)
     {
         if (rnd.nextFloat() < 0.01f)
-            return (store, message) -> {};
+            return (commandStore, message) -> {};
 
         return null;
     }

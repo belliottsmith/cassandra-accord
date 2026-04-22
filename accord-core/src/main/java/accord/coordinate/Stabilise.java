@@ -82,7 +82,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
         {
             SortedArrayList<Node.Id> extra = allTopologies.nodes().without(tracker.nodes()).without(allTopologies::isFaulty);
             for (Node.Id to : extra)
-                node.send(to, new Commit(commitKind(), to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
+                node.send(to, new Commit(commitKind(), to, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps), tracing);
         }
     }
 
@@ -107,7 +107,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
                     recordFailure(from, Preempted.preempted(node.agent(), txnId, scope.homeKey()));
                     break;
                 case InsufficientAndWaiting:
-                    resend(from, new Commit(CommitWithTxn, from, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
+                    recontact(from, new Commit(CommitWithTxn, from, allTopologies, txnId, txn, scope, ballot, executeAt, stabiliseDeps));
                     break;
                 case InsufficientEpochs:
                 {
@@ -118,7 +118,8 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
                         catch (TopologyException e) { node.agent().onException(e); }
                     }
                     node.send(from, new Commit(CommitWithTxn, from, topologies,
-                                               txnId, txn, scope, ballot, executeAt, stabiliseDeps));
+                                               txnId, txn, scope, ballot, executeAt, stabiliseDeps),
+                              tracing);
                     break;
                 }
             }

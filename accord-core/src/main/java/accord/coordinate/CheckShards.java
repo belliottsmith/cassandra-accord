@@ -40,7 +40,7 @@ import static accord.utils.Invariants.illegalState;
  * A result of null indicates the transaction is globally persistent
  * A result of CheckStatusOk indicates the maximum status found for the transaction, which may be used to assess progress
  */
-public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoordinator<R, CheckStatusReply> implements Coordination
+public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoordinator<R, CheckStatusReply>
 {
     final U query;
 
@@ -83,7 +83,7 @@ public abstract class CheckShards<R, U extends Participants<?>> extends ReadCoor
     protected void contact(Id id)
     {
         Participants<?> unseekables = query.overlapping(topologies().computeRangesForNode(id));
-        node.send(id, new CheckStatus(txnId, unseekables, sourceEpoch, includeInfo, bumpBallot), executor, this);
+        node.send(id, new CheckStatus(txnId, unseekables, sourceEpoch, includeInfo, bumpBallot), executor, this, tracing);
     }
 
     protected boolean isSufficient(Id from, CheckStatusOk ok) { return isSufficient(ok); }

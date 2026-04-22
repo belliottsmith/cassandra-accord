@@ -19,6 +19,7 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import accord.api.Tracing;
 import accord.impl.LocalDelivery;
 import accord.local.Commands;
 import accord.local.Commands.CommitOutcome;
@@ -265,11 +266,11 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
             else
             {
                 if (kind.saveStatus == Committed)
-                    node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null);
+                    node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null, tracing());
                 return;
             }
         }
-        node.reply(replyTo, replyContext, reply, failure);
+        node.reply(replyTo, replyContext, reply, failure, tracing());
     }
 
     @Override
@@ -298,12 +299,12 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
             }
         }
 
-        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, Timestamp until)
+        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, Timestamp until, @Nullable Tracing tracing)
         {
-            commitInvalidate(node, txnId, inform, until.epoch());
+            commitInvalidate(node, txnId, inform, until.epoch(), tracing);
         }
 
-        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, long untilEpoch)
+        public static void commitInvalidate(Node node, TxnId txnId, Participants<?> inform, long untilEpoch, @Nullable Tracing tracing)
         {
             // TODO (expected, safety): this kind of check needs to be inserted in all equivalent methods
             Invariants.require(untilEpoch >= txnId.epoch());
@@ -319,12 +320,12 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
                 node.agent().onException(e);
                 return;
             }
-            commitInvalidate(node, commitTo, txnId, inform);
+            commitInvalidate(node, commitTo, txnId, inform, tracing);
         }
 
-        public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Participants<?> inform)
+        public static void commitInvalidate(Node node, Topologies commitTo, TxnId txnId, Participants<?> inform, @Nullable Tracing tracing)
         {
-            node.send(commitTo, to -> new Invalidate(to, commitTo, txnId, inform));
+            node.send(commitTo, to -> new Invalidate(to, commitTo, txnId, inform), tracing);
         }
 
         public final long invalidateUntilEpoch;

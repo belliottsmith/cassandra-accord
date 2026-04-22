@@ -150,7 +150,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                 {
                     if (reply == InsufficientAndWaiting)
                     {
-                        CoordinateSyncPoint.sendApply(node, from, syncPoint);
+                        CoordinateSyncPoint.sendApply(node, from, syncPoint, tracing);
                     }
                     else if (reply == Redundant)
                     {
@@ -196,7 +196,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
                 inflight.remove(key).cancel();
                 fail(from, failure);
             }
-        });
+        }, tracing);
     }
 
     public FetchResult result()

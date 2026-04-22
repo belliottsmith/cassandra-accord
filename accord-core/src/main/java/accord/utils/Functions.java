@@ -96,6 +96,12 @@ public class Functions
     {
         return ignore -> false;
     }
+
+    public static <T> Predicate<T> alwaysTrue()
+    {
+        return ignore -> true;
+    }
+
     public static Predicate<Boolean> identityPredicate() { return v -> v; }
 
     public static <I, O extends I> long foldlNonNull(I[] array, FoldToLong<O> foldl, long zero)

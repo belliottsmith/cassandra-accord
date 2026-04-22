@@ -23,11 +23,13 @@ import accord.local.CommandStore;
 
 public interface Tracing
 {
-    void trace(CommandStore store, String message);
+    void trace(CommandStore commandStore, String message);
+    default void done() {}
+    default Tracing send() { return null; }
 
-    default void trace(CommandStore store, String fmt, Object ... args)
+    default void trace(CommandStore commandStore, String fmt, Object ... args)
     {
-        trace(store, safeFormat(fmt, args));
+        trace(commandStore, safeFormat(fmt, args));
     }
 
     static String safeFormat(String fmt, Object ... args)

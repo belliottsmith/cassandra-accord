@@ -98,7 +98,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
         @Override
         public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
         {
-            process.process(on, from, success -> on.reply(from, replyContext, success ? SUCCESS : FAILURE, null));
+            process.process(on, from, success -> on.reply(from, replyContext, success ? SUCCESS : FAILURE, null, null));
             return null;
         }
 
@@ -130,7 +130,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
             Invariants.requireArgument(reply == SUCCESS || reply == FAILURE);
             if (reply == FAILURE)
             {
-                originator.send(from, request, executor, this);
+                originator.send(from, request, executor, this, null);
                 return;
             }
 
@@ -145,7 +145,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
         @Override
         public void onFailure(Node.Id from, Throwable failure)
         {
-            originator.send(from, request, executor, this);
+            originator.send(from, request, executor, this, null);
         }
 
         @Override
@@ -197,7 +197,7 @@ public class MessageTask extends AsyncResults.SettableResult<Void> implements Ru
     public void run()
     {
         for (Node.Id to : recipients)
-            originator.send(to, request, executor, callback);
+            originator.send(to, request, executor, callback, null);
     }
 
     @Override

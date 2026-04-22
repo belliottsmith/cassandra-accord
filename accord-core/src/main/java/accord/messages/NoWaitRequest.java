@@ -21,13 +21,13 @@ package accord.messages;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;
 import accord.impl.LocalDelivery;
 import accord.local.Node;
-import accord.local.MapReduceConsumeCommandStores;
 import accord.primitives.Participants;
 import accord.primitives.TxnId;
 import accord.utils.Invariants;
@@ -36,7 +36,7 @@ import accord.utils.async.Cancellable;
 import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> extends MapReduceConsumeCommandStores<P, R> implements Request, Timeouts.Timeout
+public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> extends AbstractRequest<P, R> implements Timeouts.Timeout
 {
     public static final CancellationException CANCELLATION_EXCEPTION = new CancellationException();
 
@@ -60,29 +60,27 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
     }
 
     private static final class Done extends Cancellation { Done() { super(null, null); } }
+    private static boolean isDone(@Nonnull Cancellable cancellation) { return cancellation.getClass() == Done.class; }
 
     private static final Done CANCEL = new Done();
     private static final Done DONE = new Done();
     private static final Cancellation EMPTY = new Cancellation(null, null);
 
-    public final TxnId txnId;
-    protected transient Node node;
-    protected transient Node.Id replyTo;
-    protected transient ReplyContext replyContext;
-    private boolean hasSentFinalReply;
-
     private transient volatile Cancellation cancellation;
     private static final AtomicReferenceFieldUpdater<NoWaitRequest, Cancellation> cancellationUpdater = AtomicReferenceFieldUpdater.newUpdater(NoWaitRequest.class, Cancellation.class, "cancellation");
 
+    private boolean hasSentFinalReply;
+
     protected NoWaitRequest(TxnId txnId, P scope)
     {
-        super(scope);
-        this.txnId = txnId;
+        super(txnId, scope);
     }
 
     @Override
     public final Cancellable process(Node on, Node.Id replyTo, ReplyContext replyContext)
     {
+        if (tracing() != null)
+            tracing().trace(null, "Submitting");
         this.node = on;
         this.replyTo = replyTo;
         this.replyContext = replyContext;
@@ -134,7 +132,11 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
         {
             Invariants.require(isCancelled());
             if (!(replyContext instanceof LocalDelivery<?>))
+            {
+                if (tracing() != null)
+                   tracing().trace(null, "Completed with no reply");
                 return; // for now we don't report cancellation/timeout remotely, and rely on the coordinator's timeouts
+            }
             // we must report something for local delivery, as we rely on this callback instead of registering a separate timeout
             failure = CANCELLATION_EXCEPTION;
         }
@@ -144,7 +146,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
             hasSentFinalReply = true;
         }
         if (failure != null) cancel();
-        node.reply(replyTo, replyContext, reply, failure);
+        node.reply(replyTo, replyContext, reply, failure, tracing());
     }
 
     @Override
@@ -156,7 +158,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
     protected boolean cancel()
     {
         Cancellable clear = cancelInternal();
-        if (clear.getClass() == Done.class)
+        if (isDone(clear))
             return false;
 
         cleanup(clear);
@@ -179,7 +181,10 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
 
     protected final @Nullable Cancellable timeoutInternal()
     {
-        return clearInternal(CANCEL).cancel;
+        Cancellation cancellation = clearInternal(CANCEL);
+        if (tracing() != null && !isDone(cancellation))
+            tracing().trace(null, "Timeout");
+        return cancellation.cancel;
     }
 
     protected final Cancellable cancelInternal()
@@ -191,7 +196,7 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
      * invoked on any termination, to ensure state is cleared
      * @return
      */
-    protected final Cancellation clearInternal(Done done)
+    private final Cancellation clearInternal(Done done)
     {
         while (true)
         {
@@ -214,12 +219,6 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
     public R reduce(R o1, R o2)
     {
         throw illegalState();
-    }
-
-    @Override
-    public TxnId primaryTxnId()
-    {
-        return txnId;
     }
 
     @Override

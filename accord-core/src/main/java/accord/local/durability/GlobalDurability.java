@@ -158,8 +158,8 @@ public class GlobalDurability implements Callback<Reply>
                 inflight += 2;
             }
 
-            node.send(selectSendTo.apply(currentGlobalTopology), new SetGloballyDurable(node.durableBefore()), executor, this);
-            node.send(selectReadFrom.apply(currentGlobalTopology), new GetDurableBefore(), executor, this);
+            node.send(selectSendTo.apply(currentGlobalTopology), new SetGloballyDurable(node.durableBefore()), executor, this, null);
+            node.send(selectReadFrom.apply(currentGlobalTopology), new GetDurableBefore(), executor, this, null);
         }
         catch (Exception e)
         {

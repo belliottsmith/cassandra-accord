@@ -36,6 +36,7 @@ import com.google.common.annotations.VisibleForTesting;
 import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.TopologyService;
+import accord.api.Tracing;
 import accord.impl.LocalDelivery;
 import accord.local.cfk.ExecuteTxnBacklog;
 import accord.messages.ReplyContext.NoReplyContext;
@@ -498,46 +499,69 @@ public class Node implements NodeCommandStoreService
         return time.elapsed(timeUnit);
     }
 
-    public void send(Topologies topologies, Request send)
+    public void send(Topologies topologies, Request send, @Nullable Tracing tracing)
     {
         SortedArrayList<Node.Id> nodes = topologies.nodes();
         for (int i = 0 ; i < nodes.size() ; ++i)
         {
             Node.Id to = nodes.get(i);
             if (!topologies.isFaulty(nodes.get(i)))
-                send(to, send);
+                send(to, send, tracing);
         }
     }
 
-    public void send(Topologies topologies, Function<Id, Request> requestFactory)
+    public void send(Topologies topologies, Function<Id, Request> requestFactory, @Nullable Tracing tracing)
     {
         SortedArrayList<Node.Id> nodes = topologies.nodes();
         for (int i = 0 ; i < nodes.size() ; ++i)
         {
             Node.Id to = nodes.get(i);
             if (!topologies.isFaulty(nodes.get(i)))
-                send(to, requestFactory.apply(to));
+                send(to, requestFactory.apply(to), tracing);
         }
     }
 
     // send to a specific node
-    public <T extends Reply> Cancellable send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback)
+    public <T extends Reply> Cancellable send(Id to, Request send, @Nonnull AsyncExecutor executor, Callback<T> callback, @Nullable Tracing tracing)
     {
+        maybeTraceRemote(to, send, tracing);
         if (to.equals(id)) return new LocalDelivery<>(executor, callback).deliver(this, send);
         else return messageSink.send(to, send, executor, callback);
     }
 
     // send to a specific node
-    public void send(Id to, Request send)
+    public void send(Id to, Request send, @Nullable Tracing tracing)
     {
+        maybeTrace(to, send, tracing);
         if (to.equals(id)) send.process(this, to, new NoReplyContext(this, send));
         else messageSink.send(to, send);
     }
 
-    public void reply(Id replyingToNode, ReplyContext replyContext, Reply success, Throwable failure)
+    private void maybeTrace(Node.Id to, Request send, @Nullable Tracing tracing)
+    {
+        if (tracing != null)
+        {
+            if (to.equals(id)) tracing.trace(null, "Delivering locally: %s", send);
+            else tracing.trace(null, "Sending to %s: %s", to, send);
+        }
+    }
+
+    public void maybeTraceRemote(Node.Id to, Request send, @Nullable Tracing tracing)
+    {
+        if (tracing != null  && send instanceof MapReduceCommandStores<?, ?> && (tracing = tracing.send()) != null)
+        {
+            if (to.equals(id)) tracing.trace(null, "Delivering locally: %s", send);
+            else tracing.trace(null, "Sending to %s: %s", to, send);
+            ((MapReduceCommandStores<?, ?>)send).setTracing(tracing);
+        }
+    }
+
+    public void reply(Id replyingToNode, ReplyContext replyContext, Reply success, Throwable failure, @Nullable Tracing tracing)
     {
         if (failure != null)
         {
+            if (tracing != null)
+                tracing.trace(null, "Replying: %s", failure);
             agent.onException(failure);
             if (success != null)
                 agent().onException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, success)));
@@ -547,6 +571,11 @@ public class Node implements NodeCommandStoreService
             NullPointerException e = new NullPointerException();
             agent.onException(e);
             throw e;
+        }
+        else
+        {
+            if (tracing != null)
+                tracing.trace(null, "Replying: %s", success);
         }
         replyContext.reply(replyingToNode, messageSink, success, failure);
     }
@@ -738,7 +767,7 @@ public class Node implements NodeCommandStoreService
             }
             catch (Throwable t)
             {
-                reply(from, replyContext, null, t);
+                reply(from, replyContext, null, t, null);
             }
         });
     }

@@ -99,7 +99,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                     // but we make this explicit for the caller with informDurableOnDone
                     finishWithSuccess(null);
                     if (informDurableOnDone)
-                        InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, stableDeps, AllQuorums);
+                        InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, stableDeps, AllQuorums, tracing);
                 }
                 break;
             case RaceWithRecovery:
@@ -111,7 +111,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                 break;
             case Insufficient:
                 Invariants.expect(applyKind != Maximal, "Received Insufficient reply from %s, but already sent Maximal", from);
-                node.send(from, factory.create(Maximal, from, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
+                node.send(from, factory.create(Maximal, from, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)), tracing);
                 break;
 
             case InsufficientEpochs:
@@ -119,7 +119,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                 Topologies topologies = tracker.topologies();
                 try { topologies = node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), ALL); }
                 catch (TopologyException e) { node.agent().onException(e); }
-                node.send(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
+                node.send(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)), tracing);
                 break;
         }
     }

@@ -38,7 +38,7 @@ public class GetDurableBefore implements Request, PreLoadContext
     @Override
     public Cancellable process(Node node, Node.Id replyTo, ReplyContext replyContext)
     {
-        node.reply(replyTo, replyContext, new DurableBeforeReply(node.durableBefore()), null);
+        node.reply(replyTo, replyContext, new DurableBeforeReply(node.durableBefore()), null, null);
         return null;
     }
 

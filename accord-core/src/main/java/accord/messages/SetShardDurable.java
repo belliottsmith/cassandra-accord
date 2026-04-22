@@ -59,7 +59,7 @@ public class SetShardDurable extends NoWaitRequest<Route<?>, SimpleReply>
         // TODO (required): does this need to strictly precede updating RedundantBefore? Because updating the global map is more expensive.
         node.markDurable(syncPoint.route.toRanges(), syncIdWithFlags, durability.compareTo(Universal) >= 0 ? syncIdWithFlags : TxnId.NONE)
         .invoke((success, fail) -> {
-            if (fail != null) node.reply(replyTo, replyContext, null, fail);
+            if (fail != null) node.reply(replyTo, replyContext, null, fail, tracing());
             else node.commandStores().mapReduceConsume(waitForEpoch(), waitForEpoch(), this);
         });
         return null;

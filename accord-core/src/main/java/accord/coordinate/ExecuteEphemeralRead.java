@@ -105,7 +105,7 @@ public class ExecuteEphemeralRead extends ReadCoordinator<Result, ReadReply>
     @Override
     public void contact(Id to)
     {
-        node.send(to, new ReadEphemeralTxnData(to, allTopologies, txnId, route, txn, deps, route, flags.get(to)), executor, this);
+        node.send(to, new ReadEphemeralTxnData(to, allTopologies, txnId, route, txn, deps, route, flags.get(to)), executor, this, tracing);
     }
 
     @Override

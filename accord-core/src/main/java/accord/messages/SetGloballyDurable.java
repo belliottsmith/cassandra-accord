@@ -42,7 +42,7 @@ public class SetGloballyDurable implements Request, PreLoadContext
     public Cancellable process(Node node, Node.Id from, ReplyContext replyContext)
     {
         node.markDurable(durableBefore).invoke((success, fail) -> {
-            node.reply(from, replyContext, fail == null ? Ok : null, fail);
+            node.reply(from, replyContext, fail == null ? Ok : null, fail, null);
         });
         return null;
     }

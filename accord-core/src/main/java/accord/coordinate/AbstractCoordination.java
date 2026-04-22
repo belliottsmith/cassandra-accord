@@ -34,8 +34,8 @@ import accord.impl.LocalDelivery;
 import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;
-import accord.messages.Callback;
 import accord.messages.Request;
+import accord.messages.Callback;
 import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.TxnId;
@@ -196,7 +196,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
 
     void contact(Function<Node.Id, Request> request, @Nullable Predicate<Node.Id> include)
     {
-        executor.executeMaybeImmediately(() -> {
+        boolean immediate = executor.executeMaybeImmediately(() -> {
             AbstractTracker<?> tracker = tracker();
             Topologies topologies = tracker.topologies();
             if (tracing != null)
@@ -222,18 +222,22 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
                         Invariants.require(replyState[i] == null);
                         expectingReply.set(i);
                         // TODO (expected): do not cancel PreAccept, Accept, Commit, Stable or Apply to self on done
-                        replyState[i] = node.send(to, request.apply(to), executor, this);
+                        replyState[i] = node.send(to, request.apply(to), executor, this, tracing);
                         Invariants.require(expectingReply.get(i) || replyState[i] == null);
                     }
                 }
             }
         });
+        Invariants.expect(immediate);
     }
 
-    void resend(Node.Id to, Request send)
+    // this is a special case, where the request is expected to reply, responding to the existing callback
+    // but for local requests, there is no registered callback, the reply is direct to the reply context, so we need to supply it again
+    void recontact(Node.Id to, Request send)
     {
+        node.maybeTraceRemote(to, send, tracing);
         if (to.equals(node.id())) new LocalDelivery<>(executor, this).deliver(node, send);
-        else node.send(to, send);
+        else node.send(to, send, tracing);
     }
 
     @Override
@@ -431,6 +435,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         protected AbstractLocalExecute()
         {
             super(AbstractCoordination.this.scope);
+            setTracing(AbstractCoordination.this.tracing);
         }
 
         protected void start()

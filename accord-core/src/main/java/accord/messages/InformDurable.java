@@ -22,6 +22,7 @@ import javax.annotation.Nullable;
 import accord.api.ProtocolModifiers;
 import accord.api.ProtocolModifiers.InformOfDurability;
 import accord.api.RoutingKey;
+import accord.api.Tracing;
 import accord.local.Commands;
 import accord.local.LoadKeys;
 import accord.local.Node;
@@ -82,20 +83,20 @@ public class InformDurable extends RouteRequest<Reply> implements PreLoadContext
         this.durability = durability;
     }
 
-    public static void informDefault(Node node, Topologies any, TxnId txnId, Route<?> route, @Nullable Ballot ballot, Timestamp executeAt, @Nullable Deps deps, Durability durability)
+    public static void informDefault(Node node, Topologies any, TxnId txnId, Route<?> route, @Nullable Ballot ballot, Timestamp executeAt, @Nullable Deps deps, Durability durability, @Nullable Tracing tracing)
     {
         node.agent().coordinatorEvents().onDurable(durability, ballot, txnId);
         InformOfDurability inform = informOfDurability(txnId, deps);
         switch (inform)
         {
             default: throw new UnhandledEnum(inform);
-            case ALL:  informAll(node, any, txnId, route, executeAt, durability); break;
-            case HOME: informHome(node, any, txnId, route, executeAt, durability); break;
+            case ALL:  informAll(node, any, txnId, route, executeAt, durability, tracing); break;
+            case HOME: informHome(node, any, txnId, route, executeAt, durability, tracing); break;
             case NONE: break;
         }
     }
 
-    public static void informHome(Node node, Topologies any, TxnId txnId, Route<?> route, @Nullable Timestamp executeAt, Durability durability)
+    public static void informHome(Node node, Topologies any, TxnId txnId, Route<?> route, @Nullable Timestamp executeAt, Durability durability, @Nullable Tracing tracing)
     {
         Shard homeShard;
         try
@@ -109,12 +110,12 @@ public class InformDurable extends RouteRequest<Reply> implements PreLoadContext
         }
         Topology latest = any.current();
         Topologies homeTopology = new Topologies.Single(any, new Topology(txnId.epoch(), latest.removedIds(), latest.hardRemovedIds(), latest.staleIds(), homeShard));
-        node.send(homeTopology, to -> new InformDurable(to, homeTopology, route.homeKeyOnlyRoute(), txnId, executeAt, txnId.epoch(), txnId.epoch(), durability));
+        node.send(homeTopology, to -> new InformDurable(to, homeTopology, route.homeKeyOnlyRoute(), txnId, executeAt, txnId.epoch(), txnId.epoch(), durability), tracing);
     }
 
-    public static void informAll(Node node, Topologies inform, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability)
+    public static void informAll(Node node, Topologies inform, TxnId txnId, Route<?> route, Timestamp executeAt, Durability durability, @Nullable Tracing tracing)
     {
-        node.send(inform, to -> new InformDurable(to, inform, route, txnId, executeAt, inform.oldestEpoch(), inform.currentEpoch(), durability));
+        node.send(inform, to -> new InformDurable(to, inform, route, txnId, executeAt, inform.oldestEpoch(), inform.currentEpoch(), durability), tracing);
     }
 
     static Shard homeShard(Node node, Topologies any, TxnId txnId, RoutingKey homeKey) throws TopologyException

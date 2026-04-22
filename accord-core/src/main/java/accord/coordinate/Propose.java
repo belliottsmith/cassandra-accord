@@ -20,8 +20,11 @@ package accord.coordinate;
 
 import java.util.function.BiConsumer;
 
+import javax.annotation.Nullable;
+
 import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
+import accord.api.Tracing;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
@@ -268,7 +271,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
             }
         }
 
-        public static void proposeAndCommitInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, BiConsumer<?, Throwable> callback)
+        public static void proposeAndCommitInvalidate(Node node, SequentialAsyncExecutor executor, Ballot ballot, TxnId txnId, RoutingKey invalidateWithParticipant, Route<?> commitInvalidationTo, Timestamp invalidateUntil, @Nullable Tracing tracing, BiConsumer<?, Throwable> callback)
         {
             proposeInvalidate(node, executor, ballot, txnId, invalidateWithParticipant, (success, fail) -> {
                 if (fail != null)
@@ -279,7 +282,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
                 else
                 {
                     node.withEpochExact(invalidateUntil.epoch(), executor, callback == null ? node.agent() : callback, t -> Rethrowable.rethrowable(t), () -> {
-                        commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
+                        commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil, tracing);
                         if (callback != null) callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
                         else node.agent().coordinatorEvents().onInvalidated(txnId);
                     });
