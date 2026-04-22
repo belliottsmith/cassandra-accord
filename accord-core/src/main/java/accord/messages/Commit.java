@@ -28,11 +28,9 @@ import accord.local.Node.Id;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.local.SequentialAsyncExecutor;
 import accord.primitives.SaveStatus;
 import accord.local.StoreParticipants;
 import accord.messages.ReadData.CommitOrReadNack;
-import accord.messages.ReadData.ReadReply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -48,11 +46,9 @@ import accord.topology.ActiveEpochs;
 import accord.topology.Topologies;
 import accord.topology.TopologyException;
 import accord.utils.Invariants;
-import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
-import static accord.messages.Commit.Kind.CommitSlowPath;
 import static accord.messages.Commit.Kind.CommitWithTxn;
 import static accord.messages.MessageType.StandardMessage.COMMIT_INVALIDATE_REQ;
 import static accord.messages.MessageType.StandardMessage.COMMIT_REQ;
@@ -191,14 +187,6 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
     public @Nullable PartialDeps partialDeps()
     {
         return partialDeps;
-    }
-
-    public static void commitMinimalNoRead(SortedArrayList<Id> contact, Node node, SequentialAsyncExecutor executor, Topologies stabilise, Topologies all, Ballot ballot, TxnId txnId, Txn txn, FullRoute<?> route, Timestamp executeAt, Deps unstableDeps, Callback<ReadReply> callback)
-    {
-        Invariants.requireArgument(stabilise.size() == 1, "Invalid coordinate epochs: %s", stabilise);
-        // we want to send to everyone, and we want to include all the relevant data, but we stabilise on the coordination epoch replica responses
-        for (Node.Id to : contact)
-            node.send(to, new Commit(CommitSlowPath, to, all, txnId, txn, route, ballot, executeAt, unstableDeps), executor, callback);
     }
 
     @Override

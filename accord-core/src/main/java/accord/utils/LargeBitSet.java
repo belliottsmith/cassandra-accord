@@ -492,7 +492,10 @@ public class LargeBitSet implements SimpleBitSet
 
     public void clear()
     {
-        count = 0;
-        Arrays.fill(bits, 0L);
+        if (count > 0)
+        {
+            count = 0;
+            Arrays.fill(bits, 0L);
+        }
     }
 }

@@ -82,6 +82,13 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     public abstract @Nonnull AbstractTracker<?> tracker();
     @Override public SortedList<Node.Id> nodes() { return nodes; }
 
+    @Override
+    final void setDone()
+    {
+        super.setDone();
+        clearInFlight(false);
+    }
+
     void recordOk(int fromIndex, Ok ok)
     {
         Invariants.require(replyState[fromIndex] == null, "%s", this);
@@ -93,19 +100,25 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     {
         Invariants.require(replyState != null, "%s", this);
         setDoneWithReplies();
+        clearInFlight(false);
+        SortedListMap<Node.Id, Ok> result = new SortedListMap<>(nodes, replyState, replyCount);
+        replyState = null;
+        return result;
+    }
+
+    private void clearInFlight(boolean cancelSelf)
+    {
         for (int i = expectingReply.nextSetBit(0) ; i >= 0 ; i = expectingReply.nextSetBit(i + 1))
         {
             Object cancel = replyState[i];
             if (cancel != null)
             {
-                ((Cancellable)cancel).cancel();
+                if (cancelSelf || !nodes.get(i).equals(node.id()))
+                    ((Cancellable)cancel).cancel();
                 replyState[i] = null;
             }
         }
         expectingReply.clear();
-        SortedListMap<Node.Id, Ok> result = new SortedListMap<>(nodes, replyState, replyCount);
-        replyState = null;
-        return result;
     }
 
     <V> V foldlOks(BiFunction<Ok, V, V> foldl, V zero)
@@ -208,6 +221,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
                     {
                         Invariants.require(replyState[i] == null);
                         expectingReply.set(i);
+                        // TODO (expected): do not cancel PreAccept, Accept, Commit, Stable or Apply to self on done
                         replyState[i] = node.send(to, request.apply(to), executor, this);
                         Invariants.require(expectingReply.get(i) || replyState[i] == null);
                     }

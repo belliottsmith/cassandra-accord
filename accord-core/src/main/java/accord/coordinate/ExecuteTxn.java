@@ -263,7 +263,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             else sendStableRead(to, kind);
         }
 
-        boolean sendOnlyReadStableMessages = sendOnlyReadStableMessages(txnId);
+        boolean sendOnlyReadStableMessages = flags.isAnyReadyToExecute() && sendOnlyReadStableMessages(txnId);
         if (sendOnlyReadStableMessages && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
             return;
 
@@ -470,7 +470,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     public void onFailure(Id from, Throwable failure)
     {
-        if (isPrivilegedVoteCommitting && from.id == node.id().id) finishWithFailure(failure);
+        if (isPrivilegedVoteCommitting && from.id == node.id().id && !isDone()) finishWithFailure(failure);
         else super.onFailure(from, failure);
     }
 
@@ -609,14 +609,18 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             {
                 committed = true;
                 long slowAt = node.agent().selfSlowAt(txnId, READ_REQ, MICROSECONDS);
-                slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
+                // TODO (desired): avoid converting to MICROSECONDS again here
+                if (slowAt >= 0)
                 {
-                    @Override public void timeout() { executor.executeMaybeImmediately(() -> {
-                        onSlowResponse(node.id());
-                        slowTimeout = null;
-                    }); }
-                    @Override public int stripe() { return txnId.hashCode(); }
-                }, slowAt, MICROSECONDS);
+                    slowTimeout = node.timeouts().registerAt(new Timeouts.Timeout()
+                    {
+                        @Override public void timeout() { executor.executeMaybeImmediately(() -> {
+                            onSlowResponse(node.id());
+                            slowTimeout = null;
+                        }); }
+                        @Override public int stripe() { return txnId.hashCode(); }
+                    }, slowAt, MICROSECONDS);
+                }
             }
             else if (failure == null)
             {
@@ -637,24 +641,33 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (!super.timeoutInternal())
                 return false;
 
-            slowTimeout = null;
-            if (committed) callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
-            else callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
+            cancelSlowTimeout();
+            if (committed)
+                callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly read from local coordinator"));
+            else
+                callback.failure(node.id(), new Timeout(txnId, route.homeKey(), "Could not promptly commit to local coordinator"));
             return true;
         }
 
         @Override
         protected void reply(ReadReply reply, Throwable fail)
         {
-            if (slowTimeout != null && reply != Waiting)
-            {
-                slowTimeout.cancel();
-                slowTimeout = null;
-            }
+            if (reply != Waiting)
+                cancelSlowTimeout();
 
             // TODO (expected): execute immediately if already on CommandStore
             if (fail == null) callback.success(node.id(), reply);
             else callback.failure(node.id(), fail);
+        }
+
+        private void cancelSlowTimeout()
+        {
+            Timeouts.RegisteredTimeout cancel = slowTimeout;
+            if (cancel != null)
+            {
+                cancel.cancel();
+                slowTimeout = null;
+            }
         }
 
         @Override

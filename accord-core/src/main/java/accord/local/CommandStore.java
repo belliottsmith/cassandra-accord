@@ -494,16 +494,23 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
 
     protected void updateMaxConflicts(Timestamp executeAt, MaxConflicts updatedMaxConflicts)
     {
-        if (++maxConflictsUpdates >= Math.max(prunedMaxConflictsSize, 128) && updatedMaxConflicts.size() >= prunedMaxConflictsSize * 2)
+        if (++maxConflictsUpdates >= Math.max(prunedMaxConflictsSize, 128))
         {
-            long pruneHlc = executeAt.hlc() - agent.maxConflictsHlcPruneDelta();
-            Timestamp pruneBefore = pruneHlc > 0 ? Timestamp.fromValues(executeAt.epoch(), pruneHlc, executeAt.node) : null;
-            Ranges ranges = rangesForEpoch.all();
-            if (pruneBefore != null)
-                updatedMaxConflicts = updatedMaxConflicts.update(ranges, pruneBefore, pruneBefore);
+            if (updatedMaxConflicts.size() >= prunedMaxConflictsSize * 2)
+            {
+                long pruneHlc = executeAt.hlc() - agent.maxConflictsHlcPruneDelta();
+                Timestamp pruneBefore = pruneHlc > 0 ? Timestamp.fromValues(executeAt.epoch(), pruneHlc, executeAt.node) : null;
+                Ranges ranges = rangesForEpoch.all();
+                if (pruneBefore != null)
+                    updatedMaxConflicts = updatedMaxConflicts.update(ranges, pruneBefore, pruneBefore);
 
-            maxConflictsUpdates = 0;
-            prunedMaxConflictsSize = updatedMaxConflicts.size();
+                maxConflictsUpdates = 0;
+                prunedMaxConflictsSize = updatedMaxConflicts.size();
+            }
+            else
+            {
+                maxConflictsUpdates = prunedMaxConflictsSize * 2 - updatedMaxConflicts.size();
+            }
         }
         unsafeSetMaxConflicts(updatedMaxConflicts);
     }

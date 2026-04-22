@@ -488,7 +488,7 @@ public class Pruning
         cachedAny().forceDiscard(removedExecuteAts, removedExecuteAtCount);
         int newMaxAppliedWriteByExecuteAt = cfk.maxAppliedWriteByExecuteAt - removedCommittedCount;
         int newMaxAppliedUnreadyWriteById = recomputeMaxAppliedUnreadyWriteById(cfk.bounds, newById, cfk.maxAppliedUnreadyWriteById);
-        Invariants.require(newById[retainCount] == newPrunedBefore);
+        Invariants.require(newById[retainCount].equals(newPrunedBefore));
         return new CommandsForKey(cfk.key, cfk.bounds, newById, minUndecidedById, newMaxAppliedUnreadyWriteById, newCommittedByExecuteAt, newMaxAppliedWriteByExecuteAt, cfk.maxUniqueHlc, cfk.loadingPruned, retainCount, cfk.unmanageds, true);
     }
 

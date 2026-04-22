@@ -45,7 +45,7 @@ import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owne
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Unsynced;
 import static accord.api.ProtocolModifiers.SendStableMessages.FOR_READS;
 import static accord.api.ProtocolModifiers.SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC;
-import static accord.api.ProtocolModifiers.SendStableMessages.TO_ALL_DIRECT_EXECUTE_ELSE_FOR_READS;
+import static accord.api.ProtocolModifiers.SendStableMessages.TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
 import static accord.primitives.TxnId.Cardinality.Any;
@@ -70,7 +70,7 @@ public class ProtocolModifiers
          * If the transaction is able to be direct executed, send Stable messages to all replicas so that they may do so.
          * Otherwise, behaves as {@link #FOR_READS}.
          */
-        TO_ALL_DIRECT_EXECUTE_ELSE_FOR_READS,
+        TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS,
 
         /**
          * Thrifty execution. Send a Stable message only to replicas we want to read from, so that they may execute the read.
@@ -229,7 +229,7 @@ public class ProtocolModifiers
     public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
 
     private static final SendStableMessages sendStableMessages = Configure.sendStableMessages;
-    public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_DIRECT_EXECUTE_ELSE_FOR_READS && (!txnId.is(SingleKey) || !txnId.is(Txn.Kind.Write))); }
+    public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && (!txnId.is(SingleKey) || !txnId.is(Txn.Kind.Write))); }
     public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
     private static final boolean sendMinimalCommits = Configure.sendMinimalCommits;
@@ -318,9 +318,9 @@ public class ProtocolModifiers
 
         switch (replicaExecution)
         {
-            default: throw new UnhandledEnum(replicaExecution);
-            case NONE: return false;
-            case ALL: txnId.is(Txn.Kind.Write);
+            default:          throw new UnhandledEnum(replicaExecution);
+            case NONE:        return false;
+            case ALL:         return txnId.is(Txn.Kind.Write);
             case BLIND_WRITE: return txnId.is(Txn.Kind.Write) && txn != null && txn.read().keys().isEmpty();
         }
     }

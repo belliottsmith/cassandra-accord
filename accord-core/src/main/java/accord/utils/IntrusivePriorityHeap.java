@@ -32,7 +32,9 @@ import java.util.stream.Stream;
  */
 public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node> implements Comparator<N>
 {
+    private static final int NORMAL_MIN_SIZE = 8;
     private static final Node[] EMPTY = new Node[0];
+    private static final Node[] TINY_EMPTY = new Node[0];
 
     public static abstract class Node
     {
@@ -53,6 +55,17 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
     int heapifiedSize;
     int size;
 
+    public IntrusivePriorityHeap()
+    {
+        this(false);
+    }
+
+    public IntrusivePriorityHeap(boolean tiny)
+    {
+        if (tiny)
+            heap = TINY_EMPTY;
+    }
+
     /**
      * insert unsorted; can be used as a simple list
      */
@@ -60,7 +73,11 @@ public abstract class IntrusivePriorityHeap<N extends IntrusivePriorityHeap.Node
     {
         Invariants.require(node.heapIndex < 0);
         if (size == heap.length)
-            heap = Arrays.copyOf(heap, Math.max(size * 2, 8));
+        {
+            if (heap.length >= NORMAL_MIN_SIZE) heap = Arrays.copyOf(heap, size * 2);
+            else if (heap == EMPTY) heap = new Node[NORMAL_MIN_SIZE];
+            else heap = Arrays.copyOf(heap, Math.max(size + 2, size * 2));
+        }
 
         node.heapIndex = size;
         heap[size++] = node;
