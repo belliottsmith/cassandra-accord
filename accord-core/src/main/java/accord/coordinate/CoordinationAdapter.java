@@ -105,14 +105,14 @@ public interface CoordinationAdapter<R>
     {
         public static TxnAdapter standard()
         {
-            return TxnAdapter.STANDARD;
+            return ProtocolModifiers.sendMinimal() ? TxnAdapter.MINIMAL : TxnAdapter.MAXIMAL;
         }
 
         // note that by default the recovery adapter is only used for the initial recovery decision - if e.g. propose is initiated
         // then we revert back to standard adapter behaviour for later steps
         public static CoordinationAdapter<Result> recover()
         {
-            return TxnAdapter.RECOVERY;
+            return TxnAdapter.MAXIMAL;
         }
 
         public static SyncPointAdapter<SyncPoint> exclusiveSyncPoint()
@@ -127,8 +127,8 @@ public interface CoordinationAdapter<R>
 
         public static class TxnAdapter implements CoordinationAdapter<Result>
         {
-            static final TxnAdapter STANDARD = new TxnAdapter(Minimal);
-            static final TxnAdapter RECOVERY = new TxnAdapter(Maximal);
+            static final TxnAdapter MINIMAL = new TxnAdapter(Minimal);
+            static final TxnAdapter MAXIMAL = new TxnAdapter(Maximal);
 
             final Apply.Kind applyKind;
             public TxnAdapter(Apply.Kind applyKind)

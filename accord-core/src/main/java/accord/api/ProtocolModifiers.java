@@ -90,6 +90,8 @@ public class ProtocolModifiers
 
     public enum DependencyElision { OFF, ALWAYS, IF_DURABLY_COMMITTED, IF_DURABLY_PREAPPLIED }
 
+    public enum AbandonFastPath { IF_ANY_DELAYED_OR_REJECTED, IF_FAST_QUORUM_DELAYED_OR_REJECTED }
+
     public enum FastExecution { DISABLED, MAY_BYPASS_COMMANDSFORKEY, MAY_BYPASS_SAFESTORE }
 
     public enum CoordinatorBacklogExecution { DISABLED, ON_RECOVERY, ALWAYS }
@@ -112,6 +114,9 @@ public class ProtocolModifiers
 
         private static MediumPath defaultMediumPath = MediumPath.TrackStable;
         public static synchronized void setDefaultMediumPath(MediumPath newDefaultMediumPath) { pre(); defaultMediumPath = newDefaultMediumPath; }
+
+        private static AbandonFastPath abandonFastPath = AbandonFastPath.IF_ANY_DELAYED_OR_REJECTED;
+        public static synchronized void setAbandonFastPath(AbandonFastPath newAbandonFastPath) { pre(); abandonFastPath = newAbandonFastPath; }
 
         private static boolean recoveryAwaitsSupersedingSyncPoints = true;
         public static synchronized void setRecoveryAwaitsSupersedingSyncPoints(boolean newRecoveryAwaitsSupersedingSyncPoints) { pre(); recoveryAwaitsSupersedingSyncPoints = newRecoveryAwaitsSupersedingSyncPoints; }
@@ -212,6 +217,9 @@ public class ProtocolModifiers
     private static final MediumPath defaultMediumPath = Configure.defaultMediumPath;
     public static MediumPath defaultMediumPath() { return defaultMediumPath; }
 
+    private static final AbandonFastPath abandonFastPath = Configure.abandonFastPath;
+    public static AbandonFastPath abandonFastPath() { return abandonFastPath; }
+
     private static final boolean recoveryAwaitsSupersedingSyncPoints = Configure.recoveryAwaitsSupersedingSyncPoints;
     public static boolean recoveryAwaitsSupersedingSyncPoints() { return recoveryAwaitsSupersedingSyncPoints; }
 
@@ -233,7 +241,7 @@ public class ProtocolModifiers
     public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
     private static final boolean sendMinimalCommits = Configure.sendMinimalCommits;
-    public static boolean sendMinimalCommits() { return sendMinimalCommits; }
+    public static boolean sendMinimal() { return sendMinimalCommits; }
 
     private static final boolean dataStoreRequiresUniqueHlcs = Configure.dataStoreRequiresUniqueHlcs;
     public static boolean dataStoreRequiresUniqueHlcs() { return dataStoreRequiresUniqueHlcs; }

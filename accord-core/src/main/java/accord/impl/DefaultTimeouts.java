@@ -18,12 +18,14 @@
 
 package accord.impl;
 
+import java.util.concurrent.Executor;
+
 import accord.local.TimeService;
 
 public class DefaultTimeouts extends AbstractTimeouts<AbstractTimeouts.Stripe>
 {
-    public DefaultTimeouts(TimeService time)
+    public DefaultTimeouts(TimeService time, Executor executor)
     {
-        super(time, Stripe[]::new, Stripe::new);
+        super(time, executor, Stripe[]::new, Stripe::new);
     }
 }

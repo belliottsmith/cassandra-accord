@@ -80,7 +80,7 @@ import static accord.api.ProtocolModifiers.recoverReads;
 import static accord.api.ProtocolModifiers.fastReadExecutionMayResendTxn;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
-import static accord.api.ProtocolModifiers.sendMinimalCommits;
+import static accord.api.ProtocolModifiers.sendMinimal;
 import static accord.api.ProtocolModifiers.sendNoStableIfFastExec;
 import static accord.api.ProtocolModifiers.sendOnlyReadStableMessages;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
@@ -324,7 +324,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private Commit.Kind commitKind()
     {
-        if (!sendMinimalCommits())
+        if (!sendMinimal())
             return StableWithTxnAndDeps;
 
         switch (path)

@@ -147,7 +147,7 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
                              scheduler,
                              SizeOfIntersectionSorter.SUPPLIER,
                              DefaultRemoteListeners::new,
-                             DefaultTimeouts::new,
+                             time -> new DefaultTimeouts(time, Runnable::run),
                              DefaultProgressLogs::new,
                              DefaultLocalListeners.Factory::new,
                              InMemoryCommandStores.SingleThread::new,

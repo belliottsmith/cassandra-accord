@@ -18,6 +18,7 @@
 
 package accord.coordinate.tracking;
 
+import accord.api.ProtocolModifiers;
 import accord.coordinate.tracking.QuorumTracker.QuorumShardTracker;
 import accord.local.Node;
 import accord.primitives.TxnId;
@@ -25,6 +26,7 @@ import accord.primitives.TxnId.FastPath;
 import accord.topology.Shard;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
 
 import com.google.common.annotations.VisibleForTesting;
 
@@ -84,7 +86,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
                     return complete(NewFastPathSuccess);
             }
 
-            return quorumIfFastPathRejectedOrDelayed();
+            return quorumOrDelayed();
         }
 
         public final ShardOutcome<? super FastPathTracker> onFailure(@Nonnull Node.Id from)
@@ -122,11 +124,23 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
             return NoChange;
         }
 
-        final ShardOutcome<? super FastPathTracker> quorumIfFastPathRejectedOrDelayed()
+        final ShardOutcome<? super FastPathTracker> quorumOrDelayed()
         {
-            return hasReachedQuorum() && (hasRejectedFastPath() || fastPathIsDelayed())
-                   ? mediumOrSlowSuccess()
-                   : NoChange;
+            boolean success = false;
+            if (hasReachedQuorum())
+            {
+                switch (ProtocolModifiers.abandonFastPath())
+                {
+                    default: throw new UnhandledEnum(ProtocolModifiers.abandonFastPath());
+                    case IF_ANY_DELAYED_OR_REJECTED:
+                        success = fastPathFailures + fastPathDelayed > 0;
+                        break;
+                    case IF_FAST_QUORUM_DELAYED_OR_REJECTED:
+                        success = hasRejectedFastPath() || fastPathIsDelayed();
+                }
+            }
+
+            return success ? mediumOrSlowSuccess() : NoChange;
         }
 
         final ShardOutcome<? super FastPathTracker> mediumOrSlowSuccess()
@@ -193,7 +207,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
             if (shard.isInFastPath(node))
                 ++fastPathFailures; // Quorum success can not count towards fast path success
 
-            return quorumIfFastPathRejectedOrDelayed();
+            return quorumOrDelayed();
         }
     }
 

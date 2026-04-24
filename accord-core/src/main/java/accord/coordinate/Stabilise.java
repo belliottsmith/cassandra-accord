@@ -42,7 +42,7 @@ import accord.topology.TopologyException;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.UnhandledEnum;
 
-import static accord.api.ProtocolModifiers.sendMinimalCommits;
+import static accord.api.ProtocolModifiers.sendMinimal;
 import static accord.coordinate.ExecutePath.SLOW;
 import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.messages.Commit.Kind.CommitSlowPath;
@@ -128,7 +128,7 @@ public abstract class Stabilise<R> extends AbstractCoordination<FullRoute<?>, R,
 
     private static Commit.Kind commitKind()
     {
-        return sendMinimalCommits() ? CommitSlowPath : CommitWithTxn;
+        return sendMinimal() ? CommitSlowPath : CommitWithTxn;
     }
 
     @Override

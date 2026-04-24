@@ -172,9 +172,9 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
 
         final Long2ObjectHashMap<RegisteredCallback> callbacks = new Long2ObjectHashMap<>();
 
-        public CallbackStripe(TimeService time)
+        public CallbackStripe(TimeService time, Executor executor)
         {
-            super(time);
+            super(time, executor);
         }
 
         <T> RegisteredCallback<T> register(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long failDeadline)
@@ -246,14 +246,14 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
         }
     }
 
-    public RequestCallbacks(TimeService time)
+    public RequestCallbacks(TimeService time, Executor executor)
     {
-        super(time, CallbackStripe[]::new, CallbackStripe::new);
+        super(time, executor, CallbackStripe[]::new, CallbackStripe::new);
     }
 
-    public RequestCallbacks(TimeService time, int stripeCount)
+    public RequestCallbacks(TimeService time, Executor executor, int stripeCount)
     {
-        super(time, stripeCount, CallbackStripe[]::new, CallbackStripe::new);
+        super(time, executor, stripeCount, CallbackStripe[]::new, CallbackStripe::new);
     }
 
     public <T> Cancellable registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportFailAt, TimeUnit units)

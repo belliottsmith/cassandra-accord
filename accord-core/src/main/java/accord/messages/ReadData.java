@@ -763,6 +763,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         boolean isOk();
     }
 
+    // TODO (expected): merge with ApplyReply
     public static class CommitOrReadNack implements ReadData.ReadReply
     {
         public enum Kind
