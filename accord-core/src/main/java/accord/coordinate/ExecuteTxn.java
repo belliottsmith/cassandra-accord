@@ -171,7 +171,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     private final StableTracker stable;
     private @Nullable SortedListSet<Node.Id> unstableFastReads;
 
-    private final Participants<?> readScope;
     private Data data;
     private long uniqueHlc;
     private boolean isPrivilegedVoteCommitting;
@@ -194,7 +193,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         this.sendDeps = sendDeps;
         this.flags = flags;
         this.stable = new StableTracker(topologies.forEpochs(txnId.epoch(), executeAt.epoch()));
-        this.readScope = txn == null ? route : route.overlapping(txn.keys());
         Invariants.require(!txnId.awaitsOnlyDeps());
         Invariants.require(!txnId.awaitsPreviouslyOwned());
     }
@@ -301,7 +299,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             sendExecuteAt = executeAt;
             markUnstableFastRead(to);
         }
-        node.send(to, new ReadTxnData(to, allTopologies, txnId, readScope, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this, tracing);
+        node.send(to, new ReadTxnData(to, allTopologies, txnId, route, sendTxn, sendExecuteAt, executeAt.epoch(), flags), executor, this, tracing);
     }
 
     private void markUnstableFastRead(Node.Id to)
@@ -393,8 +391,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 return Action.None;
 
             case Redundant:
-                if (executeAtReplica(txnId, txn))
-                    return Action.None;
+                return Action.Reject;
 
             case Rejected:
                 invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));

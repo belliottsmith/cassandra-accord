@@ -101,7 +101,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
             {
                 ++fastPathFailures;
 
-                if (hasRejectedFastPath() && hasReachedQuorum())
+                if (fastPathIsRejected() && hasReachedQuorum())
                     return mediumOrSlowSuccess();
             }
 
@@ -136,7 +136,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
                         success = fastPathFailures + fastPathDelayed > 0;
                         break;
                     case IF_FAST_QUORUM_DELAYED_OR_REJECTED:
-                        success = hasRejectedFastPath() || fastPathIsDelayed();
+                        success = fastPathIsRejected() || fastPathIsDelayed();
                 }
             }
 
@@ -166,7 +166,7 @@ public class FastPathTracker extends PreAcceptTracker<FastPathTracker.FastPathSh
         }
 
         @VisibleForTesting
-        public final boolean hasRejectedFastPath()
+        public final boolean fastPathIsRejected()
         {
             return shard.rejectsFastPath(fastQuorumSize, fastPathFailures);
         }

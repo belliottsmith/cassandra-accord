@@ -36,7 +36,6 @@ import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.Any;
-import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.primitives.TxnId.MediumPath.NoMediumPath;
 import static accord.utils.Invariants.illegalArgument;
 

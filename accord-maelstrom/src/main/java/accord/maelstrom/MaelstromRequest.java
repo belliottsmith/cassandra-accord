@@ -54,7 +54,7 @@ public class MaelstromRequest extends Body implements Request
     {
         node.coordinate(txn).invoke((success, fail) -> {
             Reply reply = success != null ? new MaelstromReply(MaelstromReplyContext.messageIdFor(replyContext), (MaelstromResult) success) : null;
-            node.reply(client, replyContext, reply, fail);
+            node.reply(client, replyContext, reply, fail, null);
         });
         return null;
     }

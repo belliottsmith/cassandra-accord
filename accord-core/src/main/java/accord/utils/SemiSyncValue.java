@@ -26,8 +26,6 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import javax.annotation.Nonnull;
 
-import static org.apache.cassandra.utils.Clock.Global.nanoTime;
-
 /**
  * A value that may be updated asynchronously. Edits to the value are queued, and when prompted by the implementation
  * an attempt is made to exclusively drain any pending edits. Before reading the value any pending edits are

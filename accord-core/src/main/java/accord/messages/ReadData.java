@@ -62,6 +62,7 @@ import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.api.ProtocolModifiers.dataStoreDetectsFutureReads;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassCommandsForKey;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
+import static accord.api.ProtocolModifiers.fastWritesMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
@@ -73,6 +74,7 @@ import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
+import static accord.utils.Invariants.require;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (required): (v1.1) if one shard times out waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)
@@ -741,7 +743,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
 
     protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (data != null && !data.validateReply(txnId, executeAt, !requiresListenersDuringExecution)) reply(CommitOrReadNack.Redundant, null);
+        if (data != null && !txnId.awaitsOnlyDeps() && !data.validateReply(txnId, executeAt, fastWritesMayBypassSafeStore() || !requiresListenersDuringExecution ? (uniqueHlc == 0 ? executeAt.hlc() : uniqueHlc) : 0)) reply(CommitOrReadNack.Redundant, null);
         else reply(new ReadOk(unavailable, data, uniqueHlc), null);
     }
 

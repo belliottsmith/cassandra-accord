@@ -66,6 +66,7 @@ import accord.api.Journal;
 import accord.api.Key;
 import accord.api.OwnershipEventListener;
 import accord.api.ProtocolModifiers;
+import accord.api.ProtocolModifiers.Configure;
 import accord.api.ProtocolModifiers.CoordinatorBacklogExecution;
 import accord.api.ProtocolModifiers.ReplicaExecution;
 import accord.api.ProtocolModifiers.FastExecution;
@@ -444,11 +445,14 @@ public class BurnTestBase
         }
 
         setUnsafe(ProtocolModifiers.class, "recoverReads", true);
-        setUnsafe(ProtocolModifiers.class, "dataStoreDetectsFutureReads", random.nextBoolean());
-        setUnsafe(ProtocolModifiers.class, "fastReadExecution", random.pick(FastExecution.values()));
-        setUnsafe(ProtocolModifiers.class, "fastWriteExecution", random.pick(FastExecution.values()));
+        boolean detectsFutureReads = random.nextBoolean();
+        FastExecution[] fastExecuteOptions = detectsFutureReads ? FastExecution.values() : new FastExecution[] { FastExecution.DISABLED, FastExecution.MAY_BYPASS_COMMANDSFORKEY };
+        setUnsafe(ProtocolModifiers.class, "dataStoreDetectsFutureReads", detectsFutureReads);
+        setUnsafe(ProtocolModifiers.class, "fastReadExecution", random.pick(fastExecuteOptions));
+        setUnsafe(ProtocolModifiers.class, "fastWriteExecution", random.pick(fastExecuteOptions));
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecution", random.pick(CoordinatorBacklogExecution.values()));
         setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
+        Configure.validate();
 
         Supplier<LongSupplier> nowSupplier = () -> {
             RandomSource forked = random.fork();

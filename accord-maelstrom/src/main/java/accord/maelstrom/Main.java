@@ -185,7 +185,7 @@ public class Main
                           time, new UniqueTimeService.AtomicUniqueTime(time),
                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                           MaelstromAgent.INSTANCE, new DefaultRandom(), scheduler, SizeOfIntersectionSorter.SUPPLIER,
-                          DefaultRemoteListeners::new, DefaultTimeouts::new, DefaultProgressLogs::new, DefaultLocalListeners.Factory::new,
+                          DefaultRemoteListeners::new, p -> new DefaultTimeouts(p, Runnable::run), DefaultProgressLogs::new, DefaultLocalListeners.Factory::new,
                           InMemoryCommandStores.SingleThread::new, new CoordinationAdapter.DefaultFactory(),
                           DurableBefore.NOOP_PERSISTER, journal);
             CountDownLatch latch = new CountDownLatch(1);

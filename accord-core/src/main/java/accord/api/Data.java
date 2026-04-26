@@ -44,7 +44,7 @@ public interface Data
         }
 
         @Override
-        public boolean validateReply(TxnId txnId, Timestamp executeAt, boolean futureReadPossible)
+        public boolean validateReply(TxnId txnId, Timestamp executeAt, long safeToReadHlc)
         {
             return true;
         }
@@ -60,9 +60,9 @@ public interface Data
     /**
      * Optionally perform some validity checks prior to sending this object as a read reply
      */
-    default boolean validateReply(TxnId txnId, Timestamp executeAt, boolean futureReadPossible)
+    default boolean validateReply(TxnId txnId, Timestamp executeAt, long safeToReadHlc)
     {
-        Invariants.require(!futureReadPossible);
+        Invariants.require(safeToReadHlc == 0);
         return true;
     }
 }

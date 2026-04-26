@@ -46,7 +46,9 @@ public abstract class MapReduceCommandStores<P extends Participants<?>, O> imple
         }
         if (tracing != null)
             tracing.trace(safeStore.commandStore(), "Processing");
-        return applyInternal(safeStore);
+
+        O result = applyInternal(safeStore);
+        return result;
     }
 
     public final AsyncChain<O> applyAsync(CommandStore commandStore)

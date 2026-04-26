@@ -228,7 +228,6 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
                 }
             }
         });
-        Invariants.expect(immediate);
     }
 
     // this is a special case, where the request is expected to reply, responding to the existing callback

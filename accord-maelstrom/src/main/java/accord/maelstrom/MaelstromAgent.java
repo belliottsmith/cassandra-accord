@@ -59,7 +59,7 @@ public class MaelstromAgent implements Agent, CoordinatorEventListener, Ownershi
         if (success != null)
         {
             MaelstromResult result = (MaelstromResult) success;
-            node.reply(result.client, MaelstromReplyContext.contextFor(result.requestId), new MaelstromReply(result.requestId, result), null);
+            node.reply(result.client, MaelstromReplyContext.contextFor(result.requestId), new MaelstromReply(result.requestId, result), null, null);
         }
     }
 

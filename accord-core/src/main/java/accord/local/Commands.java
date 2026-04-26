@@ -28,6 +28,7 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.Data;
 import accord.api.ProtocolModifiers.DependencyElision;
 import accord.api.Result;
 import accord.api.RoutingKey;
@@ -108,6 +109,7 @@ import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
+import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.Outcome.Apply;
@@ -855,66 +857,11 @@ public class Commands
         {
             default: throw UnhandledEnum.invalid(command.status());
             case Stable:
-                if (executeAtReplica(txnId, command.partialTxn()) && !command.participants().executes().isEmpty())
+                if (executeAtReplica(txnId, command.partialTxn()) && !command.participants().executes().isEmpty() && safeStore.safeToReadAt(command.executeAt()).containsAll(command.participants().executes()))
                 {
-                    FullRoute<?> route = (FullRoute<?>) command.route();
-                    Txn txn = command.partialTxn().reconstitute(route);
-                    // TODO (required): compute ApplyAt
-                    Timestamp applyAt;
-                    {
-                        Timestamp executeAt = command.executeAt();
-                        long minUniqueHlc = command.waitingOn().minUniqueHlc();
-                        if (!txnId.is(Txn.Kind.Write) || minUniqueHlc == 0) applyAt = executeAt;
-                        else applyAt = new TimestampWithUniqueHlc(executeAt, minUniqueHlc);
-                    }
-
-                    if (!txn.read().keys().isEmpty())
-                    {
-                        PartialTxn partialTxn = command.partialTxn();
-                        Participants<?> executes = command.participants().executes();
-                        CommandStore unsafeStore = safeStore.commandStore();
-                        safeCommand.readyToExecute(safeStore);
-                        safeStore = safeStore;
-                        safeCommand = safeCommand;
-                        txn.read(safeStore, applyAt, executes).begin((success, fail) -> {
-                            if (fail != null)
-                            {
-                                unsafeStore.agent().onException(fail);
-                                unsafeStore.execute(PreLoadContext.contextFor(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore0 -> {
-                                    SafeCommand safeCommand0 = safeStore0.get(txnId);
-                                    Command command0 = safeCommand0.current();
-                                    if (command0.saveStatus().compareTo(ReadyToExecute) < 0)
-                                    {
-                                        safeStore0.notifyListeners(safeCommand0, safeCommand0.current());
-                                    }
-                                }, unsafeStore.agent());
-                            }
-                            else
-                            {
-                                Writes writes = txn.execute(txnId, applyAt, success);
-                                Result result = txn.result(txnId, applyAt, success);
-                                unsafeStore.node().coordinations().forEach(txnId, coordination -> {
-                                    if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
-                                        ((ExecuteTxn) coordination).onLocalDirectSuccess(applyAt, writes, result);
-                                });
-                                writes.applyDirect(unsafeStore, executes, partialTxn)
-                                              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, result, false))
-                                      .begin(unsafeStore.agent());
-                            }
-                        });
+                    if (null == (command = replicaExecute(safeStore, safeCommand, command, txnId)))
                         break;
-                    }
-
-                    Writes writes = txn.execute(txnId, applyAt, null);
-                    Result result = txn.result(txnId, applyAt, null);
-
-                    safeStore.node().coordinations().forEach(txnId, coordination -> {
-                        if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
-                            ((ExecuteTxn) coordination).onLocalDirectSuccess(applyAt, writes, result);
-                    });
-//                    RemoteSuccess.report(safeStore.node().coordinations(), txnId, result);
-                    command = safeCommand.preapplied(safeStore, applyAt, writes, result);
-                    // fall-through
+                    // else fall-through
                 }
                 else
                 {
@@ -946,6 +893,115 @@ public class Commands
 
         adapter.notWaiting(safeStore);
         return true;
+    }
+
+    private static Command replicaExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, TxnId txnId)
+    {
+        FullRoute<?> route = (FullRoute<?>) command.route();
+        PartialTxn txn = command.partialTxn();
+        txn.reconstitute(route);
+        Timestamp applyAt;
+        {
+            Timestamp executeAt = command.executeAt();
+            long minUniqueHlc = command.waitingOn().minUniqueHlc();
+            if (!txnId.is(Txn.Kind.Write) || minUniqueHlc == 0) applyAt = executeAt;
+            else applyAt = new TimestampWithUniqueHlc(executeAt, minUniqueHlc);
+        }
+
+        if (!txn.read().keys().isEmpty())
+        {
+            Participants<?> executes = command.participants().executes();
+            CommandStore unsafeStore = safeStore.commandStore();
+            safeCommand.readyToExecute(safeStore);
+            safeStore = safeStore;
+            long stamp = safeStore.commandStore().node().currentStamp();
+            txn.read(safeStore, applyAt, executes).begin((data, fail) -> {
+                if (fail != null)
+                {
+                    unsafeStore.agent().onException(fail);
+                    notifyAfterFailedFastApply(unsafeStore, txnId);
+                }
+                else
+                {
+                    if (!fastWritesMayBypassSafeStore())
+                        replicaExecuteSlowApply(unsafeStore, txnId, txn, data, applyAt, stamp);
+                    else if (stamp == unsafeStore.node.currentStamp() || unsafeStore.unsafeGetSafeToRead().lowerEntry(applyAt).getValue().containsAll(executes))
+                        replicaExecuteFastApply(unsafeStore, txnId, txn, data, applyAt, executes);
+                    else
+                        notifyAfterFailedFastApply(unsafeStore, txnId);
+                }
+            });
+            return null;
+        }
+
+        Writes writes = txn.execute(txnId, applyAt, null);
+        Result result = txn.result(txnId, applyAt, null);
+
+        command = safeCommand.preapplied(safeStore, applyAt, writes, result);
+        replicaExecuteReport(safeStore.commandStore(), txnId, applyAt, writes, result);
+        return command;
+    }
+
+    private static void replicaExecuteFastApply(CommandStore unsafeStore, TxnId txnId, PartialTxn txn, Data data, Timestamp applyAt, Participants<?> executes)
+    {
+        Writes writes = txn.execute(txnId, applyAt, data);
+        Result result = txn.result(txnId, applyAt, data);
+        writes.applyDirect(unsafeStore, executes, txn)
+              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, result, false))
+              .begin((s, f) -> {
+                  if (f == null)
+                  {
+                      replicaExecuteReport(unsafeStore, txnId, applyAt, writes, result);
+                  }
+                  else
+                  {
+                      unsafeStore.agent.onException(f);
+                      notifyAfterFailedFastApply(unsafeStore, txnId);
+                  }
+              });
+    }
+
+    private static void replicaExecuteSlowApply(CommandStore unsafeStore, TxnId txnId, PartialTxn txn, Data data, Timestamp applyAt, long stamp)
+    {
+        unsafeStore.execute(PreLoadContext.contextFor(txnId, "Replica Apply"), safeStore -> {
+            SafeCommand safeCommand = safeStore.unsafeGet(txnId);
+            Command command = safeCommand.current();
+            if (stamp != unsafeStore.node.currentStamp() && !safeStore.safeToReadAt(applyAt).containsAll(command.route()))
+            {
+                notifyAfterFailedFastApply(safeStore, txnId);
+            }
+            else
+            {
+                Writes writes = txn.execute(txnId, applyAt, data);
+                Result result = txn.result(txnId, applyAt, data);
+                if (command.saveStatus.compareTo(SaveStatus.PreApplied) <= 0)
+                    apply(Applying, safeStore, safeCommand, command.participants, command.acceptedOrCommitted(), txnId, command.route(), applyAt, command.partialDeps(), command.partialTxn(), writes, result);
+                replicaExecuteReport(unsafeStore, txnId, applyAt, writes, result);
+            }
+        });
+    }
+
+    private static void replicaExecuteReport(CommandStore unsafeStore, TxnId txnId, Timestamp applyAt, Writes writes, Result result)
+    {
+        unsafeStore.node().coordinations().forEach(txnId, coordination -> {
+            if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+                ((ExecuteTxn) coordination).onLocalDirectSuccess(applyAt, writes, result);
+        });
+    }
+
+    private static void notifyAfterFailedFastApply(CommandStore unsafeStore, TxnId txnId)
+    {
+        unsafeStore.execute(PreLoadContext.contextFor(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore -> {
+            notifyAfterFailedFastApply(safeStore, txnId);
+        }, unsafeStore.agent());
+    }
+
+    private static void notifyAfterFailedFastApply(SafeCommandStore safeStore, TxnId txnId)
+    {
+        SafeCommand safeCommand = safeStore.get(txnId);
+        Command command = safeCommand.current();
+        if (command.saveStatus().compareTo(ReadyToExecute) <= 0)
+            safeStore.notifyListeners(safeCommand, null);
     }
 
     protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp waitingExecuteAt, StoreParticipants participants, PartialDeps deps)
@@ -1870,7 +1926,8 @@ public class Commands
 
         if (commitKind == StableMediumPath)
         {
-            if (haveKnown.is(DepsProposedFixed) && expectKnown.is(DepsKnown) && ballot != null && ballot.equals(Ballot.ZERO) && participants.stillTouches().equals(cur.participants().touches()))
+            if ((haveKnown.is(DepsProposedFixed) || (haveKnown.is(DepsProposed) && cur.acceptedOrCommitted().equals(Ballot.ZERO)))
+                && expectKnown.is(DepsKnown) && ballot != null && ballot.equals(Ballot.ZERO) && participants.stillTouches().equals(cur.participants().touches()))
                 return UPDATE_TXN_MERGE_DEPS;
             return INSUFFICIENT;
         }

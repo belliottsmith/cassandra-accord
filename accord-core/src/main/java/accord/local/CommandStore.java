@@ -408,8 +408,8 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
      */
     final void unsafeSetSafeToRead(NavigableMap<Timestamp, Ranges> newSafeToRead)
     {
-        node.updateStamp();
         this.safeToRead = newSafeToRead;
+        node.updateStamp();
     }
 
     protected final void unsafeClearSafeToRead()

@@ -39,6 +39,8 @@ import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.CleanCfkBefore.SHARD_APPLIED;
 import static accord.api.ProtocolModifiers.DependencyElision.IF_DURABLY_COMMITTED;
+import static accord.api.ProtocolModifiers.FastExecution.MAY_BYPASS_COMMANDSFORKEY;
+import static accord.api.ProtocolModifiers.FastExecution.MAY_BYPASS_SAFESTORE;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.Chase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.ChaseFixedPoint.DoNotChase;
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections.Include.Owned;
@@ -115,6 +117,9 @@ public class ProtocolModifiers
         private static MediumPath defaultMediumPath = MediumPath.TrackStable;
         public static synchronized void setDefaultMediumPath(MediumPath newDefaultMediumPath) { pre(); defaultMediumPath = newDefaultMediumPath; }
 
+        private static boolean permitFastQuorumMediumPath = true;
+        public static synchronized void setPermitFastQuorumMediumPath(boolean newPermitFastQuorumMediumPath) { pre(); permitFastQuorumMediumPath = newPermitFastQuorumMediumPath; }
+
         private static AbandonFastPath abandonFastPath = AbandonFastPath.IF_ANY_DELAYED_OR_REJECTED;
         public static synchronized void setAbandonFastPath(AbandonFastPath newAbandonFastPath) { pre(); abandonFastPath = newAbandonFastPath; }
 
@@ -177,13 +182,13 @@ public class ProtocolModifiers
         public static synchronized void setInformOfDurability(InformOfDurability newInformOfDurability) { pre(); informOfDurability = newInformOfDurability; }
         public static synchronized void setInformOfSingleKeyDurabilityIfDepsSizeAtLeast(int newInformOfSingleKeyDurabilityIfDepsSizeAtLeast) { pre();informOfSingleKeyDurabilityIfDepsSizeAtLeast = newInformOfSingleKeyDurabilityIfDepsSizeAtLeast; }
 
-        private static FastExecution fastReadExecution = FastExecution.MAY_BYPASS_SAFESTORE;
+        private static FastExecution fastReadExecution = MAY_BYPASS_COMMANDSFORKEY;
         public static synchronized void setFastReadExecution(FastExecution newFastReads) { pre();fastReadExecution = newFastReads; }
 
         private static boolean fastReadExecMayResendTxn = true;
         public static synchronized void setFastReadExecMayResendTxn(boolean newFastReadExecMayResendTxn) { pre(); fastReadExecMayResendTxn = newFastReadExecMayResendTxn; }
 
-        private static FastExecution fastWriteExecution = FastExecution.MAY_BYPASS_SAFESTORE;
+        private static FastExecution fastWriteExecution = MAY_BYPASS_COMMANDSFORKEY;
         public static synchronized void setFastWriteExecution(FastExecution newFastWrites) { pre();fastWriteExecution = newFastWrites; }
 
         private static boolean dataStoreDetectsFutureReads = false;
@@ -197,10 +202,16 @@ public class ProtocolModifiers
 
         private static float replicaExecuteDistributedPersistChance = 1.0f;
         public static synchronized void setReplicaExecuteDistributedPersistChance(float newChance) { pre(); replicaExecuteDistributedPersistChance = newChance; }
+
+        public static void validate()
+        {
+            Invariants.require(dataStoreDetectsFutureReads || fastWriteExecution != MAY_BYPASS_SAFESTORE && fastReadExecution != MAY_BYPASS_SAFESTORE, "MAY_BYPASS_SAFESTORE is only permitted when dataStoreDetectsFutureReads");
+        }
     }
 
     static
     {
+        Configure.validate();
         Configure.setConfigured();
     }
 
@@ -216,6 +227,9 @@ public class ProtocolModifiers
 
     private static final MediumPath defaultMediumPath = Configure.defaultMediumPath;
     public static MediumPath defaultMediumPath() { return defaultMediumPath; }
+
+    private static final boolean permitFastQuorumMediumPath = Configure.permitFastQuorumMediumPath;
+    public static boolean permitFastQuorumMediumPath() { return permitFastQuorumMediumPath; }
 
     private static final AbandonFastPath abandonFastPath = Configure.abandonFastPath;
     public static AbandonFastPath abandonFastPath() { return abandonFastPath; }
@@ -290,14 +304,14 @@ public class ProtocolModifiers
     }
 
     private static FastExecution fastReadExecution = Configure.fastReadExecution;
-    public static boolean fastReadsMayBypassSafeStore(TxnId txnId) { return fastReadExecution == FastExecution.MAY_BYPASS_SAFESTORE && (dataStoreDetectsFutureReads() || txnId.is(EphemeralRead)); }
+    public static boolean fastReadsMayBypassSafeStore(TxnId txnId) { return fastReadExecution == MAY_BYPASS_SAFESTORE && (dataStoreDetectsFutureReads() || txnId.is(EphemeralRead)); }
     public static boolean fastReadsMayBypassCommandsForKey(TxnId txnId) { return fastReadExecution != FastExecution.DISABLED && !txnId.is(Txn.Kind.Write); }
 
     private static final boolean fastReadExecutionMayResendTxn = Configure.fastReadExecMayResendTxn;
     public static boolean fastReadExecutionMayResendTxn() { return fastReadExecutionMayResendTxn; }
 
     private static FastExecution fastWriteExecution = Configure.fastWriteExecution;
-    public static boolean fastWritesMayBypassSafeStore() { return fastWriteExecution == FastExecution.MAY_BYPASS_SAFESTORE; }
+    public static boolean fastWritesMayBypassSafeStore() { return fastWriteExecution == MAY_BYPASS_SAFESTORE; }
     public static boolean fastWritesMayBypassCommandsForKey() { return fastWriteExecution != FastExecution.DISABLED; }
 
     private static boolean dataStoreDetectsFutureReads = Configure.dataStoreDetectsFutureReads;

@@ -360,7 +360,7 @@ public class Cluster implements Scheduler
                                           time, new UniqueTimeService.AtomicUniqueTime(time),
                                           MaelstromStore::new, new ShardDistributor.EvenSplit(8, ignore -> new MaelstromKey.Splitter()),
                                           MaelstromAgent.INSTANCE,
-                                          randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, DefaultTimeouts::new,
+                                          randomSupplier.get(), sinks, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, p -> new DefaultTimeouts(p, Runnable::run),
                                           DefaultProgressLogs::new, DefaultLocalListeners.Factory::new, InMemoryCommandStores.SingleThread::new,
                                           new CoordinationAdapter.DefaultFactory(), DurableBefore.NOOP_PERSISTER, new NoOpJournal()));
             }

@@ -22,11 +22,14 @@ import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers;
 import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
 import accord.api.Tracing;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.AbstractTracker;
+import accord.coordinate.tracking.FastPathTracker;
+import accord.coordinate.tracking.PreAcceptTracker;
 import accord.coordinate.tracking.QuorumTracker;
 import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Commands.AcceptOutcome;
@@ -55,6 +58,7 @@ import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Accept.AcceptFlags.filterDeps;
 import static accord.messages.Accept.Kind.MEDIUM;
+import static accord.messages.Accept.Kind.SLOW;
 import static accord.messages.Commit.Invalidate.commitInvalidate;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Status.AcceptedInvalidate;
@@ -70,7 +74,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
     final Deps deps;
 
     final Timestamp executeAt;
-    final QuorumTracker tracker;
+    final PreAcceptTracker<?> tracker;
     final int acceptFlags;
 
     Propose(Node node, SequentialAsyncExecutor executor, Topologies topologies, Accept.Kind kind, Ballot ballot, TxnId txnId, Txn txn, Route<?> require, FullRoute<?> route, Timestamp executeAt, Deps deps, BiConsumer<? super R, Throwable> callback)
@@ -82,7 +86,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         this.require = require;
         this.deps = deps;
         this.executeAt = executeAt;
-        this.tracker = new QuorumTracker(topologies);
+        this.tracker = kind == SLOW && ProtocolModifiers.permitFastQuorumMediumPath() ? new FastPathTracker(topologies, txnId) : new QuorumTracker(topologies);
         this.acceptFlags = AcceptFlags.encode(txnId, require != scope);
         Invariants.require(txnId.isSyncPoint() || deps.maxTxnId(txnId).compareTo(executeAt) <= 0,
                            "Attempted to propose %s with an earlier executeAt than a conflicting transaction it witnessed: %s vs executeAt: %s", txnId, deps, executeAt);
@@ -126,7 +130,7 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
             case Retired:
             case Success:
                 recordOk(fromIndex, reply);
-                if (tracker.recordSuccess(from) == Success)
+                if (tracker.recordSuccess(from, true) == Success)
                     onAccepted();
         }
     }
@@ -140,9 +144,17 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
     public void onFailureInternal(Id from, int fromIndex, Throwable failure)
     {
         recordFailure(failure);
-        if (tracker.recordFailure(from) == Failed)
-            finishOnFailure();
+        switch (tracker.recordFailure(from))
+        {
+            case Failed:
+                finishOnFailure();
+                break;
+            case Success:
+                onAccepted();
+                break;
+        }
     }
+
 
     void onAccepted()
     {
@@ -152,16 +164,18 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
         //  Or we must pick it up as an Unstable dependency here.
         Deps newDeps = mergeNewDeps();
         Deps deps = mergeDeps(newDeps);
-        node.agent().coordinatorEvents().onAccepted(txnId, ballot, executePath());
-        if (kind == MEDIUM) adapter().execute(node, executor, tracker.topologies(), scope, ballot, ExecutePath.MEDIUM, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, finishAndTakeCallback());
-        else adapter().stabilise(node, executor, tracker.topologies(), scope, ballot, txnId, txn, executeAt, deps, finishAndTakeCallback());
-    }
-
-    private ExecutePath executePath()
-    {
-        if (kind == MEDIUM) return ExecutePath.MEDIUM;
-        if (ballot.equals(Ballot.ZERO)) return ExecutePath.SLOW;
-        return ExecutePath.RECOVER;
+        if (kind == MEDIUM || tracker.hasFastPathAccepted())
+        {
+            ExecutePath path = ballot.equals(Ballot.ZERO) ? ExecutePath.MEDIUM : ExecutePath.RECOVER;
+            node.agent().coordinatorEvents().onAccepted(txnId, ballot, path);
+            adapter().execute(node, executor, tracker.topologies(), scope, ballot, path, CoordinationFlags.none(), txnId, txn, executeAt, deps, newDeps, finishAndTakeCallback());
+        }
+        else
+        {
+            ExecutePath path = ballot.equals(Ballot.ZERO) ? ExecutePath.SLOW : ExecutePath.RECOVER;
+            node.agent().coordinatorEvents().onAccepted(txnId, ballot, path);
+            adapter().stabilise(node, executor, tracker.topologies(), scope, ballot, txnId, txn, executeAt, deps, finishAndTakeCallback());
+        }
     }
 
     Deps mergeDeps()
