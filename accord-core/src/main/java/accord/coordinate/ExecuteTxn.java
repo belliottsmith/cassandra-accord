@@ -61,6 +61,7 @@ import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
+import accord.primitives.Status;
 import accord.primitives.Timestamp;
 import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
@@ -101,6 +102,7 @@ import static accord.messages.MessageType.StandardMessage.STABLE_THEN_READ_REQ;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.Stable;
+import static accord.primitives.Status.Durability.AllQuorums;
 import static accord.primitives.Status.Durability.DurablyStable;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -391,7 +393,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 return Action.None;
 
             case Redundant:
-                return Action.Reject;
+                return Action.ApproveIfQuorum;
 
             case Rejected:
                 invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
@@ -408,7 +410,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void onDone(Success success, Throwable failure)
     {
-        if (failure == null)
+        if (success == Success.Success)
         {
             stable.setDone();
             Timestamp executeAt = this.executeAt;
@@ -423,6 +425,10 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, data) : null;
             Result result = txn.result(txnId, executeAt, data);
             adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
+        }
+        else if (success == Success.Quorum)
+        {
+            InformDurable.informDefault(node, topologies, txnId, route, ballot, executeAt, stableDeps, AllQuorums, tracing);
         }
         else
         {
