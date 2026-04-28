@@ -280,7 +280,7 @@ public class ListRequest implements Request
                         if (attempt < 100)
                         {
                             node.reply(client, replyContext, ListResult.heartBeat(client, ((Packet)replyContext).requestId, txnId), null, null);
-                            node.scheduler().once(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), retryDelay(attempt), TimeUnit.MINUTES);
+                            node.scheduler().selfRecurring(() -> checkOnResult(finalHomeKey, txnId, attempt + 1, null), retryDelay(attempt), TimeUnit.MINUTES);
                         }
                         else
                         {

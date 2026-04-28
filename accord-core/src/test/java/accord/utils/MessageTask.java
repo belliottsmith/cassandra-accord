@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -44,6 +45,9 @@ import accord.utils.async.Cancellable;
  */
 public class MessageTask extends AsyncResults.SettableResult<Void> implements Runnable
 {
+    static final AtomicInteger nextId = new AtomicInteger();
+    final int id = nextId.incrementAndGet();
+
     public interface NodeProcess
     {
         void process(Node node, Node.Id from, Consumer<Boolean> onDone);

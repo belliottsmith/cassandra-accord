@@ -34,6 +34,7 @@ import javax.annotation.Nullable;
 import accord.api.CoordinatorEventListener;
 import accord.api.OwnershipEventListener;
 import accord.api.ProgressLog.BlockedUntil;
+import accord.api.ReplicaEventListener;
 import accord.api.Result;
 import accord.api.Scheduler;
 import accord.api.Tracing;
@@ -77,7 +78,7 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
-public class ListAgent implements InMemoryAgent, CoordinatorEventListener, OwnershipEventListener
+public class ListAgent implements InMemoryAgent, CoordinatorEventListener, OwnershipEventListener, ReplicaEventListener
 {
     final Scheduler scheduler;
     final RandomSource rnd;
@@ -143,6 +144,12 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
 
     @Override
     public CoordinatorEventListener coordinatorEvents()
+    {
+        return this;
+    }
+
+    @Override
+    public ReplicaEventListener replicaEvents()
     {
         return this;
     }
@@ -277,6 +284,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         return result.chain();
     }
 
+    @Override
     public long minStaleHlc(Node node, boolean isRequested)
     {
         return node.now() - SECONDS.toMillis(rnd.nextBoolean() ? 1 : 10);
@@ -311,8 +319,10 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     }
 
     @Override
-    public boolean reportRemoteSuccess(Result success)
+    public void onLocalExecution(Node node, TxnId txnId, Result success)
     {
-        return true;
+        ListResult result = (ListResult) success;
+        if (result.requestId > Integer.MIN_VALUE)
+            node.reply(result.client, Network.replyCtxFor(result.requestId), result, null, null);
     }
 }

@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
@@ -37,9 +38,13 @@ import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.TopologyService;
 import accord.api.Tracing;
+import accord.coordinate.ExecuteTxn;
 import accord.impl.LocalDelivery;
 import accord.local.cfk.ExecuteTxnBacklog;
+import accord.messages.RemoteSuccess;
 import accord.messages.ReplyContext.NoReplyContext;
+import accord.primitives.Route;
+import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.topology.ActiveEpoch;
 import accord.topology.ActiveEpochs;
@@ -84,6 +89,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.TxnId.Cardinality;
+import accord.topology.Topology;
 import accord.topology.TopologyException;
 import accord.topology.TopologyManager;
 import accord.topology.TopologyRetiredException;
@@ -103,6 +109,7 @@ import static accord.api.ProtocolModifiers.defaultMediumPath;
 import static accord.api.ProtocolModifiers.ensurePermitted;
 import static accord.api.ProtocolModifiers.usePrivilegedCoordinator;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Txn.Kind.Read;
@@ -497,6 +504,45 @@ public class Node implements NodeCommandStoreService
     public long elapsed(TimeUnit timeUnit)
     {
         return time.elapsed(timeUnit);
+    }
+
+    @Override
+    public void reportLocalExecution(TxnId txnId, Route<?> route, Ballot ballot, @Nullable Timestamp applyAt, @Nullable Writes writes, Result result)
+    {
+        if (applyAt != null && writes != null)
+        {
+            class Finder implements Consumer<Coordination>
+            {
+                ExecuteTxn coordinator;
+
+                @Override
+                public void accept(Coordination coordination)
+                {
+                    if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+                        coordinator = (ExecuteTxn) coordination;
+                }
+            }
+            Finder finder = new Finder();
+            coordinations().forEach(txnId, finder);
+            if (finder.coordinator != null)
+                finder.coordinator.onLocalDirectSuccess(applyAt, writes, result);
+        }
+
+        if (Ballot.ZERO.equals(ballot) && !txnId.node.equals(id) && agent.reportRemoteSuccess(result))
+        {
+            if (applyAt != null && applyAt.epoch() == txnId.epoch())
+            {
+                ActiveEpoch epoch = topology().active().ifExists(txnId.epoch());
+                if (epoch != null)
+                {
+                    Topology.NodeInfo info = epoch.all().nodeInfo(txnId.node);
+                    if (info != null && info.ranges.containsAll(route))
+                        return;
+                }
+            }
+            send(txnId.node, new RemoteSuccess(txnId, result), null);
+        }
+        agent.replicaEvents().onLocalExecution(this, txnId, result);
     }
 
     public void send(Topologies topologies, Request send, @Nullable Tracing tracing)

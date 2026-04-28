@@ -26,6 +26,7 @@ import javax.annotation.Nullable;
 
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
+import accord.primitives.Routable;
 import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
@@ -52,6 +53,8 @@ import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
 import static accord.primitives.TxnId.Cardinality.Any;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
+import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
 import static accord.utils.Invariants.illegalState;
 
 /**
@@ -206,6 +209,7 @@ public class ProtocolModifiers
         public static void validate()
         {
             Invariants.require(dataStoreDetectsFutureReads || fastWriteExecution != MAY_BYPASS_SAFESTORE && fastReadExecution != MAY_BYPASS_SAFESTORE, "MAY_BYPASS_SAFESTORE is only permitted when dataStoreDetectsFutureReads");
+            Invariants.require(permitCoordinatorLocalExecution || (!permittedFastPaths.contains(PrivilegedCoordinatorWithDeps) && !permittedFastPaths.contains(PrivilegedCoordinatorWithoutDeps)), "Privileged coordinator optimisations require coordinator local execution");
         }
     }
 
@@ -304,8 +308,8 @@ public class ProtocolModifiers
     }
 
     private static FastExecution fastReadExecution = Configure.fastReadExecution;
-    public static boolean fastReadsMayBypassSafeStore(TxnId txnId) { return fastReadExecution == MAY_BYPASS_SAFESTORE && (dataStoreDetectsFutureReads() || txnId.is(EphemeralRead)); }
-    public static boolean fastReadsMayBypassCommandsForKey(TxnId txnId) { return fastReadExecution != FastExecution.DISABLED && !txnId.is(Txn.Kind.Write); }
+    public static boolean fastReadsMayBypassSafeStore(TxnId txnId) { return fastReadExecution == MAY_BYPASS_SAFESTORE && (dataStoreDetectsFutureReads() || txnId.is(EphemeralRead)) && txnId.is(Routable.Domain.Key); }
+    public static boolean fastReadsMayBypassCommandsForKey(TxnId txnId) { return fastReadExecution != FastExecution.DISABLED && !txnId.is(Txn.Kind.Write) && txnId.is(Routable.Domain.Key); }
 
     private static final boolean fastReadExecutionMayResendTxn = Configure.fastReadExecMayResendTxn;
     public static boolean fastReadExecutionMayResendTxn() { return fastReadExecutionMayResendTxn; }

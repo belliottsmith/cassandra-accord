@@ -78,7 +78,7 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
 
         /**
          * This response is unsuitable by itself, but if a quorum of such responses is received for the shard
-         * we will Success.Quorum
+         * we will report Success.Quorum
          */
         ApproveIfQuorum,
 

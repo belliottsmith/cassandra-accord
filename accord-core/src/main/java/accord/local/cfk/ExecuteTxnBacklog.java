@@ -30,7 +30,6 @@ import accord.local.PreLoadContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.CommandsForKey.TxnInfo;
-import accord.messages.RemoteSuccess;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -81,16 +80,14 @@ public class ExecuteTxnBacklog implements NotifySink
             if (notify.equals(node.id()))
                 return;
 
-            node.agent().coordinatorEvents().onRecoveryStarted(txnId, ballot);
-            Adapters.standard().execute(node, node.someSequentialExecutor(), null, route, command.acceptedOrCommitted(), path, CoordinationFlags.none(), txnId, txn, executeAt, deps, deps, (success, fail) -> {
-                if (fail == null)
-                {
-                    if (node.agent().reportRemoteSuccess(success))
-                        node.send(notify, new RemoteSuccess(txnId, success), null);
-                }
-                node.agent().coordinatorEvents().onRecoveryStopped(node, txnId, ballot, success, fail);
+            node.withEpochAtLeast(txnId.epoch(), null, node.agent(), () -> {
+                node.agent().coordinatorEvents().onRecoveryStarted(txnId, ballot);
+                Adapters.standard().execute(node, node.someSequentialExecutor(), null, route, command.acceptedOrCommitted(), path, CoordinationFlags.none(), txnId, txn, executeAt, deps, deps, (result, fail) -> {
+                    if (fail == null) node.reportLocalExecution(txnId, route, ballot, null, null, result);
+                    else node.agent().onException(fail);
+                });
             });
-        }, node.agent());
+        });
     }
 
     @Override

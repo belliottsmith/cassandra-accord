@@ -156,5 +156,5 @@ public interface Agent extends UncaughtExceptionListener
     AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean requested);
     long minStaleHlc(Node node, boolean requested);
 
-    boolean reportRemoteSuccess(Result success);
+    default boolean reportRemoteSuccess(Result success) { return true; }
 }

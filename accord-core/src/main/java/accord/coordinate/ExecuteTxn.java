@@ -75,7 +75,6 @@ import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
-import static accord.api.ProtocolModifiers.executeAtReplica;
 import static accord.api.ProtocolModifiers.replicaExecuteDistributedPersist;
 import static accord.api.ProtocolModifiers.recoverReads;
 import static accord.api.ProtocolModifiers.fastReadExecutionMayResendTxn;
@@ -227,7 +226,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (mayFastExecute)
                 markUnstableFastRead(node.id());
             new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, READ_REQ, MICROSECONDS));
-            start(Collections.emptyList(), Collections.singletonList(node.id()));
+            if (!isPrivilegedVoteCommitting)
+                start(Collections.emptyList(), Collections.singletonList(node.id()));
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
@@ -288,7 +288,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         boolean addCallback = allTopologies.size() == 1 || stable.nodes().contains(to);
         if (addCallback) node.send(to, send, executor, stable, tracing);
         else node.send(to, send, tracing);
-
     }
 
     private void sendUnstableRead(Node.Id to, ExecuteFlags flags)
@@ -388,12 +387,15 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             default: throw UnhandledEnum.unknown(nack.kind);
             case InsufficientEpochs: throw UnhandledEnum.invalid(nack.kind);
             case Waiting:
-                if (from.id == node.id().id)
+                if (from.id == node.id().id && isPrivilegedVoteCommitting)
+                {
+                    start(Collections.emptyList(), Collections.singletonList(node.id()));
                     isPrivilegedVoteCommitting = false;
+                }
                 return Action.None;
 
             case Redundant:
-                return Action.ApproveIfQuorum;
+                return Action.Reject;
 
             case Rejected:
                 invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
@@ -428,7 +430,10 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         }
         else if (success == Success.Quorum)
         {
+            if (tracing != null)
+                tracing.trace(null, "A quorum of responses reported Redundant; marking durable");
             InformDurable.informDefault(node, topologies, txnId, route, ballot, executeAt, stableDeps, AllQuorums, tracing);
+            invokeCallback(null, Preempted.preempted(node.agent(), txnId, route.homeKey()));
         }
         else
         {

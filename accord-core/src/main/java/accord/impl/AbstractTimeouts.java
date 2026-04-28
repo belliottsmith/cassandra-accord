@@ -183,7 +183,7 @@ public class AbstractTimeouts<S extends AbstractTimeouts.Stripe> implements Time
             if (notify)
             {
                 try { executor.execute(this); }
-                catch (RejectedExecutionException t) { notify(nowMicros, ReentrantLock::tryLock); }
+                catch (RejectedExecutionException t) { notify(nowMicros, AbstractTimeouts::lock); }
             }
         }
 

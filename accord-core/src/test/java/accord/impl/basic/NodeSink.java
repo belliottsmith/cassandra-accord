@@ -101,9 +101,9 @@ public class NodeSink implements ReplySink
     @Override
     public Cancellable send(Id to, Request send, int attempt, @Nonnull AsyncExecutor executor, Callback callback)
     {
-        if (to.equals(self))
-            return sendToSelf(send, executor, callback);
-
+//        if (to.equals(self))
+//            return sendToSelf(send, executor, callback);
+//
         TimeUnit units = timeouts.units();
         long now = timeouts.now();
         long expiresAt = timeouts.expiresAt();
@@ -111,17 +111,15 @@ public class NodeSink implements ReplySink
         long messageId = nextMessageId++;
         SafeCallback sc = new SafeCallback(executor, callback);
         callbacks.put(messageId, sc);
-        if (maybeEnqueue(to, messageId, expiresAt, send, sc))
-        {
-            parent.pending.add(PendingRunnable.create(() -> {
-                if (sc == callbacks.get(messageId))
-                    sc.slowResponse(to);
-            }), slowAt - now, units);
-            parent.pending.add(PendingRunnable.create(() -> {
-                if (sc == callbacks.remove(messageId))
-                    sc.timeout(to);
-            }), expiresAt - now, units);
-        }
+        maybeEnqueue(to, messageId, expiresAt, send, sc);
+        parent.pending.add(PendingRunnable.create(() -> {
+            if (sc == callbacks.get(messageId))
+                sc.slowResponse(to);
+        }), slowAt - now, units);
+        parent.pending.add(PendingRunnable.create(() -> {
+            if (sc == callbacks.remove(messageId))
+                sc.timeout(to);
+        }), expiresAt - now, units);
         return () -> callbacks.remove(messageId);
     }
 

@@ -265,8 +265,8 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
             }
             else
             {
-                if (kind.saveStatus == Committed)
-                    node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null, tracing());
+                // TODO (expected): indicate in some way whether a reply is needed
+                node.reply(replyTo, replyContext, new ReadData.ReadOk(null, null, 0), null, tracing());
                 return;
             }
         }

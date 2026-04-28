@@ -1180,11 +1180,5 @@ public class CommandsForKeyTest
         {
             return 0;
         }
-
-        @Override
-        public boolean reportRemoteSuccess(Result success)
-        {
-            return false;
-        }
     }
 }

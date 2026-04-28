@@ -743,8 +743,17 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
 
     protected void reply(Ranges unavailable, Data data, long uniqueHlc)
     {
-        if (data != null && !txnId.awaitsOnlyDeps() && !data.validateReply(txnId, executeAt, fastWritesMayBypassSafeStore() || !requiresListenersDuringExecution ? (uniqueHlc == 0 ? executeAt.hlc() : uniqueHlc) : 0)) reply(CommitOrReadNack.Redundant, null);
-        else reply(new ReadOk(unavailable, data, uniqueHlc), null);
+        if (data != null && !txnId.awaitsOnlyDeps() && !data.validateReply(txnId, executeAt, validateHlc()))
+            reply(CommitOrReadNack.Redundant, null);
+        else
+            reply(new ReadOk(unavailable, data, uniqueHlc), null);
+    }
+
+    private long validateHlc()
+    {
+        if (!requiresListenersDuringExecution || (fastWritesMayBypassSafeStore() && txnId.isWrite()))
+            return uniqueHlc == 0 ? executeAt.hlc() : uniqueHlc;
+        return 0;
     }
 
     protected void reply(ReadReply reply, Throwable fail)

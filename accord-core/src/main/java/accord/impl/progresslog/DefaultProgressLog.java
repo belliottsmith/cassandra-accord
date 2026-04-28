@@ -965,6 +965,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         return TinyEnumSet.contains(modeFlags, ModeFlag.HOME_EXPECTS_LOCALLY_APPLIED);
     }
 
+    @Override
     public void maybeNotify()
     {
         if (stopped)

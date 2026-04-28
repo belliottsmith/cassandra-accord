@@ -44,6 +44,7 @@ import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
 import accord.messages.Commit;
+import accord.messages.RemoteSuccess;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -66,6 +67,8 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.primitives.Writes;
+import accord.topology.ActiveEpoch;
+import accord.topology.Topology;
 import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
@@ -757,8 +760,8 @@ public class Commands
             if (!command.hasBeen(PreApplied))
                 safeCommand.preapplied(safeStore, applyAt, writes, result);
 
-            safeCommand.applied(safeStore, force);
-            safeStore.agent().replicaEvents().onApplied(safeStore, command);
+            Command applied = safeCommand.applied(safeStore, force);
+            safeStore.agent().replicaEvents().onApplied(safeStore, applied);
             safeStore.notifyListeners(safeCommand, command);
         }
 
@@ -908,6 +911,7 @@ public class Commands
             else applyAt = new TimestampWithUniqueHlc(executeAt, minUniqueHlc);
         }
 
+        Ballot ballot = command.acceptedOrCommitted();
         if (!txn.read().keys().isEmpty())
         {
             Participants<?> executes = command.participants().executes();
@@ -924,9 +928,9 @@ public class Commands
                 else
                 {
                     if (!fastWritesMayBypassSafeStore())
-                        replicaExecuteSlowApply(unsafeStore, txnId, txn, data, applyAt, stamp);
+                        replicaExecuteSlowApply(unsafeStore, ballot, txnId, route, txn, data, applyAt, stamp);
                     else if (stamp == unsafeStore.node.currentStamp() || unsafeStore.unsafeGetSafeToRead().lowerEntry(applyAt).getValue().containsAll(executes))
-                        replicaExecuteFastApply(unsafeStore, txnId, txn, data, applyAt, executes);
+                        replicaExecuteFastApply(unsafeStore, ballot, txnId, route, txn, data, applyAt, executes);
                     else
                         notifyAfterFailedFastApply(unsafeStore, txnId);
                 }
@@ -937,31 +941,22 @@ public class Commands
         Writes writes = txn.execute(txnId, applyAt, null);
         Result result = txn.result(txnId, applyAt, null);
 
+        safeStore.commandStore().node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
         command = safeCommand.preapplied(safeStore, applyAt, writes, result);
-        replicaExecuteReport(safeStore.commandStore(), txnId, applyAt, writes, result);
         return command;
     }
 
-    private static void replicaExecuteFastApply(CommandStore unsafeStore, TxnId txnId, PartialTxn txn, Data data, Timestamp applyAt, Participants<?> executes)
+    private static void replicaExecuteFastApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, Participants<?> executes)
     {
         Writes writes = txn.execute(txnId, applyAt, data);
         Result result = txn.result(txnId, applyAt, data);
+        unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
         writes.applyDirect(unsafeStore, executes, txn)
               .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, result, false))
-              .begin((s, f) -> {
-                  if (f == null)
-                  {
-                      replicaExecuteReport(unsafeStore, txnId, applyAt, writes, result);
-                  }
-                  else
-                  {
-                      unsafeStore.agent.onException(f);
-                      notifyAfterFailedFastApply(unsafeStore, txnId);
-                  }
-              });
+              .begin(unsafeStore.agent);
     }
 
-    private static void replicaExecuteSlowApply(CommandStore unsafeStore, TxnId txnId, PartialTxn txn, Data data, Timestamp applyAt, long stamp)
+    private static void replicaExecuteSlowApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, long stamp)
     {
         unsafeStore.execute(PreLoadContext.contextFor(txnId, "Replica Apply"), safeStore -> {
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
@@ -974,18 +969,10 @@ public class Commands
             {
                 Writes writes = txn.execute(txnId, applyAt, data);
                 Result result = txn.result(txnId, applyAt, data);
+                unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
                 if (command.saveStatus.compareTo(SaveStatus.PreApplied) <= 0)
                     apply(Applying, safeStore, safeCommand, command.participants, command.acceptedOrCommitted(), txnId, command.route(), applyAt, command.partialDeps(), command.partialTxn(), writes, result);
-                replicaExecuteReport(unsafeStore, txnId, applyAt, writes, result);
             }
-        });
-    }
-
-    private static void replicaExecuteReport(CommandStore unsafeStore, TxnId txnId, Timestamp applyAt, Writes writes, Result result)
-    {
-        unsafeStore.node().coordinations().forEach(txnId, coordination -> {
-            if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
-                ((ExecuteTxn) coordination).onLocalDirectSuccess(applyAt, writes, result);
         });
     }
 
