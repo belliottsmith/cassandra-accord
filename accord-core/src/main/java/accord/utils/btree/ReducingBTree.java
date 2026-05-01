@@ -433,6 +433,8 @@ public class ReducingBTree
             super.reset();
             merge = null;
             reduce = null;
+            pendingMerge = null;
+            pendingInputs.clear();
         }
     }
 
@@ -637,7 +639,7 @@ public class ReducingBTree
                     if (childTo < 0) childTo = -1 - childTo;
                     if (childTo > ki)
                     {
-                        accumulator = foldl((Object[])tree[branchSize + ei], keys, childFrom, childTo, fold, accumulator, p1, p2);
+                        accumulator = foldlWithDefault((Object[])tree[branchSize + ei], keys, childFrom, childTo, fold, ifNull, accumulator, p1, p2);
                         ki = childTo;
                     }
                     else
@@ -648,7 +650,7 @@ public class ReducingBTree
                 }
             }
             if (ki < to)
-                accumulator = foldl((Object[])tree[branchSize * 2], keys, ki, to, fold, accumulator, p1, p2);
+                accumulator = foldlWithDefault((Object[])tree[branchSize * 2], keys, ki, to, fold, ifNull, accumulator, p1, p2);
         }
         return accumulator;
     }

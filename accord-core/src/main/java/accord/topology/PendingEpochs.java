@@ -195,7 +195,7 @@ class PendingEpochs
     void removeFirst(long epoch)
     {
         Invariants.require(start < end);
-        Invariants.require(epochs[start].epoch == epoch, "% != %d", epochs[start].epoch, epoch);
+        Invariants.require(epochs[start].epoch == epoch, "%d != %d", epochs[start].epoch, epoch);
         epochs[start++] = null;
     }
 }

@@ -280,8 +280,8 @@ abstract class Propose<R> extends AbstractCoordination<FullRoute<?>, R, AcceptRe
                 {
                     node.withEpochExact(invalidateUntil.epoch(), executor, callback == null ? node.agent() : callback, t -> Rethrowable.rethrowable(t), () -> {
                         commitInvalidate(node, txnId, commitInvalidationTo, invalidateUntil);
-                        if (callback != null)
-                            callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
+                        if (callback != null) callback.accept(null, Invalidated.invalidated(node.agent(), txnId, invalidateWithParticipant));
+                        else node.agent().coordinatorEvents().onInvalidated(txnId);
                     });
                 }
             });

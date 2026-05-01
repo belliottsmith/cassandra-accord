@@ -671,8 +671,8 @@ public class Commands
         if (command.hasBeen(Applied) && !forceApply)
             return;
 
-        safeCommand.applied(safeStore, forceApply);
-        safeStore.agent().replicaEvents().onApplied(safeStore, command);
+        Command applied = safeCommand.applied(safeStore, forceApply);
+        safeStore.agent().replicaEvents().onApplied(safeStore, applied);
         safeStore.notifyListeners(safeCommand, command);
     }
 
