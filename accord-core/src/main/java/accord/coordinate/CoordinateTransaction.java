@@ -55,7 +55,6 @@ import accord.utils.async.Cancellable;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.CoordinationFlags.empty;
 import static accord.coordinate.ExecutePath.FAST;
-import static accord.coordinate.Propose.NotAccept.proposeAndCommitInvalidate;
 import static accord.local.Commands.AcceptOutcome.Success;
 import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Accept.Kind.SLOW;

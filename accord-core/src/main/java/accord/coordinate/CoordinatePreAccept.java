@@ -23,7 +23,6 @@ import java.util.function.BiFunction;
 
 import javax.annotation.Nullable;
 
-import accord.api.Result;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.FastPathTracker;
 import accord.coordinate.tracking.PreAcceptTracker;

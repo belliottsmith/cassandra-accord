@@ -33,7 +33,6 @@ import java.util.function.Supplier;
 
 import accord.api.AsyncExecutor;
 import accord.api.Journal;
-import accord.api.MessageSink;
 import accord.api.MessageSink.ReplySink;
 import accord.api.Scheduler;
 import accord.coordinate.CoordinationAdapter;

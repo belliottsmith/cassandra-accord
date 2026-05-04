@@ -22,7 +22,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 
-import accord.api.MessageSink;
 import accord.api.MessageSink.ReplySink;
 import accord.api.RoutingKey;
 import accord.local.Node;

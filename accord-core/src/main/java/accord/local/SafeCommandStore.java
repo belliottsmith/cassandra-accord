@@ -328,7 +328,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             commandStore().markExclusiveSyncPointLocallyApplied(this, txnIdWithFlags, ranges, prevSaveStatus);
         }
 
-        if (updated.partialDeps() != null)
+        if (updated.partialDeps() != null && (prev == null || updated.partialDeps() != prev.partialDeps()))
         {
             RedundantBefore addRedundantBefore = RedundantBefore.EMPTY;
             RangeDeps deps = updated.partialDeps().rangeDeps;

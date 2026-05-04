@@ -74,7 +74,6 @@ import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
-import static accord.utils.Invariants.require;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 // TODO (required): (v1.1) if one shard times out waiting to reply, but another shard produces a reply, return a partial response (or response with suitably populated unavailable)

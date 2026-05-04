@@ -94,8 +94,6 @@ import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 
-import static accord.local.Command.Executed.executed;
-import static accord.local.Command.NotDefined.notDefined;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.NotDefined;

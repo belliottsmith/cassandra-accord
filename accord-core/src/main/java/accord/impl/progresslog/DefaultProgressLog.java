@@ -132,7 +132,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private final Object2ObjectHashMap<TxnId, PendingTask> pendingHome = new Object2ObjectHashMap<>();
 
     private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
-    private final Map<TxnId, Boolean> debugDeleted = Invariants.debug() ? new Object2ObjectHashMap<>() : null;
+    private final Map<TxnId, Boolean> debugDeleted = Invariants.debug() && Invariants.isParanoid() ? new Object2ObjectHashMap<>() : null;
 
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
     private static final RunInvoker[] EMPTY_AWAITING_EPOCH_BUFFER = new RunInvoker[0];

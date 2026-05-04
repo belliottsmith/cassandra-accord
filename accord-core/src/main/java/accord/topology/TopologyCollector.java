@@ -20,7 +20,6 @@ package accord.topology;
 
 import accord.api.TopologySorter;
 import accord.local.Node;
-import accord.primitives.Participants;
 import accord.primitives.Routables;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;

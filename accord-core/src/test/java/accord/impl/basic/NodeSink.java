@@ -26,7 +26,6 @@ import java.util.function.Function;
 import javax.annotation.Nonnull;
 
 import accord.api.AsyncExecutor;
-import accord.api.MessageSink;
 import accord.api.MessageSink.ReplySink;
 import accord.impl.LocalDelivery;
 import accord.impl.basic.Cluster.Link;
@@ -37,7 +36,6 @@ import accord.messages.Message;
 import accord.messages.Reply;
 import accord.messages.Reply.FailureReply;
 import accord.messages.ReplyContext;
-import accord.messages.ReplyContext.NoReplyContext;
 import accord.messages.Request;
 import accord.messages.SafeCallback;
 import accord.utils.Invariants;
@@ -85,25 +83,9 @@ public class NodeSink implements ReplySink
         maybeEnqueue(to, nextMessageId++, timeouts.expiresAt(), send, null);
     }
 
-    private Cancellable sendToSelf(Request send, @Nonnull AsyncExecutor executor, Callback callback)
-    {
-        long expiresAt = timeouts.expiresAt();
-        long slowAt = timeouts.slowAt();
-        Node node = lookup.apply(self);
-        PendingRunnable pending = PendingRunnable.create(() -> {
-            new LocalDelivery<>(executor, callback).deliver(node, send);
-        });
-
-        parent.pending.add(pending, timeouts.localDelay(), timeouts.units());
-        return null;
-    }
-
     @Override
     public Cancellable send(Id to, Request send, int attempt, @Nonnull AsyncExecutor executor, Callback callback)
     {
-//        if (to.equals(self))
-//            return sendToSelf(send, executor, callback);
-//
         TimeUnit units = timeouts.units();
         long now = timeouts.now();
         long expiresAt = timeouts.expiresAt();
@@ -111,15 +93,17 @@ public class NodeSink implements ReplySink
         long messageId = nextMessageId++;
         SafeCallback sc = new SafeCallback(executor, callback);
         callbacks.put(messageId, sc);
-        maybeEnqueue(to, messageId, expiresAt, send, sc);
-        parent.pending.add(PendingRunnable.create(() -> {
-            if (sc == callbacks.get(messageId))
-                sc.slowResponse(to);
-        }), slowAt - now, units);
-        parent.pending.add(PendingRunnable.create(() -> {
-            if (sc == callbacks.remove(messageId))
-                sc.timeout(to);
-        }), expiresAt - now, units);
+        if (maybeEnqueue(to, messageId, expiresAt, send, sc) || parent.random.decide(0.05f))
+        {
+            parent.pending.add(PendingRunnable.create(() -> {
+                if (sc == callbacks.get(messageId))
+                    sc.slowResponse(to);
+            }), slowAt - now, units);
+            parent.pending.add(PendingRunnable.create(() -> {
+                if (sc == callbacks.remove(messageId))
+                    sc.timeout(to);
+            }), expiresAt - now, units);
+        }
         return () -> callbacks.remove(messageId);
     }
 

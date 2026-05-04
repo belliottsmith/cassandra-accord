@@ -19,7 +19,6 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
-import accord.api.ProtocolModifiers;
 import accord.api.ProtocolModifiers.InformOfDurability;
 import accord.api.RoutingKey;
 import accord.api.Tracing;
