@@ -1009,7 +1009,7 @@ public class Cluster
 
         // depending on arrival order, an unmanaged txn may be ready to execute immediately or have to wait for another transaction to commit
         if (before == SaveStatus.Stable || before == SaveStatus.ReadyToExecute)
-            return after == SaveStatus.Stable || after == SaveStatus.ReadyToExecute;
+            return after == SaveStatus.Stable || after == SaveStatus.ReadyToExecute || after == SaveStatus.Applied;
 
         if (before == SaveStatus.PreApplied || before == SaveStatus.Applying || before == SaveStatus.Applied)
             return after == SaveStatus.PreApplied || after == SaveStatus.Applying || after == SaveStatus.Applied;

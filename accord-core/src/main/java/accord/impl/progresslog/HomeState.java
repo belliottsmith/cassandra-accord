@@ -112,7 +112,7 @@ abstract class HomeState extends BaseTxnState
 
     private static @Nonnull Progress homeProgress(long encodedState)
     {
-        return Progress.forOrdinal((int) ((encodedState >>> PROGRESS_SHIFT) & PROGRESS_MASK));
+        return Progress.forId((int) ((encodedState >>> PROGRESS_SHIFT) & PROGRESS_MASK));
     }
 
     final int homeRunCounter()

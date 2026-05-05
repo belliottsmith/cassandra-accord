@@ -74,6 +74,7 @@ import static accord.impl.progresslog.TxnStateKind.Waiting;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.Status.PreApplied;
 import static accord.primitives.Status.PreCommitted;
 import static accord.utils.ArrayBuffers.cachedAny;
@@ -239,11 +240,16 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
         boolean recordWaiting = force || beforeSaveStatus != afterSaveStatus;
         boolean updatedDurability = force || !before.durability().isAtLeast(after.durability());
-        boolean updateWaiting = updatedDurability && afterSaveStatus.compareTo(after.durability().durablyUnblocked().unblockedFrom) < 0;
         boolean update = recordWaiting || updatedDurability || (afterRoute != null && beforeRoute == null);
         if (update)
         {
             TxnState state = get(txnId);
+            boolean updateWaiting = afterSaveStatus.compareTo(after.durability().durablyUnblocked().unblockedFrom) < 0;
+            if (updateWaiting)
+            {
+                if (after.durability.durablyUnblocked() != CanApply) updateWaiting = updatedDurability;
+                else updateWaiting = afterSaveStatus.compareTo(ReadyToExecute) >= 0 && beforeSaveStatus.compareTo(ReadyToExecute) < 0;
+            }
             if (updateWaiting)
             {
                 if (state == null)
@@ -571,7 +577,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private int runBufferHomeCount() { return runBufferHomeIndex - runBufferHomeLastIndex; }
     private int runBufferTotalCount() { return runBufferWaitingCount() + runBufferHomeCount(); }
 
-    private void addToRunBuffer(RunInvoker readyToRun)
+    void addToRunBuffer(RunInvoker readyToRun)
     {
         if (runBufferWaitingEndIndex == runBufferHomeLastIndex)
         {

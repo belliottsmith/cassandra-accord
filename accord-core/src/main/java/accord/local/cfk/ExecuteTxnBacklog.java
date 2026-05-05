@@ -80,7 +80,7 @@ public class ExecuteTxnBacklog implements NotifySink
             if (notify.equals(node.id()))
                 return;
 
-            node.withEpochAtLeast(txnId.epoch(), null, node.agent(), () -> {
+            node.withEpochAtLeast(executeAt.epoch(), null, node.agent(), () -> {
                 node.agent().coordinatorEvents().onRecoveryStarted(txnId, ballot);
                 Adapters.standard().execute(node, node.someSequentialExecutor(), null, route, command.acceptedOrCommitted(), path, CoordinationFlags.none(), txnId, txn, executeAt, deps, deps, (result, fail) -> {
                     if (fail == null) node.reportLocalExecution(txnId, route, ballot, null, null, result);
