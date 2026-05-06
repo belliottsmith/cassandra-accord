@@ -41,7 +41,8 @@ public interface Coordination
         BeginInvalidate, MaybeRecover, PrepareRecovery, BeginRecovery, RecoverAwait, CollectLatestDeps,
         PreAccept, Propose, ProposeInvalidate, Stabilise, Execute, ExecuteSyncPoint, Persist,
         ExecuteBacklog,
-        AsyncAwait, SyncAwait, Bootstrap, FetchDurableBefore, Other;
+        AsyncAwait, SyncAwait, Bootstrap, FetchDurableBefore, Other,
+        Client;
 
         private static final CoordinationKind[] LOOKUP = values();
         public static final TinyEnumSet<CoordinationKind> COORDINATES_STATE_MACHINE = TinyEnumSet.of(
