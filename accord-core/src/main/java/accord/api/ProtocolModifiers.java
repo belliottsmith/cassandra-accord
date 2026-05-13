@@ -144,8 +144,8 @@ public class ProtocolModifiers
         private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;
         public static synchronized void setSendStableMessages(SendStableMessages newSendStableMessages) { pre(); sendStableMessages = newSendStableMessages; }
 
-        private static boolean sendMinimalCommits = true;
-        public static synchronized void setSendMinimalCommits(boolean newSendMinimalCommits) { pre(); sendMinimalCommits = newSendMinimalCommits; }
+        private static boolean sendMinimal = true;
+        public static synchronized void setSendMinimal(boolean newSendMinimal) { pre(); sendMinimal = newSendMinimal; }
 
         private static boolean permitCoordinatorLocalExecution = true;
         public static synchronized void setPermitCoordinatorLocalExecution(boolean newPermitCoordinatorLocalExecution) { pre(); permitCoordinatorLocalExecution = newPermitCoordinatorLocalExecution; }
@@ -261,8 +261,8 @@ public class ProtocolModifiers
     public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && (!txnId.is(SingleKey) || !txnId.is(Txn.Kind.Write))); }
     public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
-    private static final boolean sendMinimalCommits = Configure.sendMinimalCommits;
-    public static boolean sendMinimal() { return sendMinimalCommits; }
+    private static final boolean sendMinimal = Configure.sendMinimal;
+    public static boolean sendMinimal() { return sendMinimal; }
 
     private static final boolean dataStoreRequiresUniqueHlcs = Configure.dataStoreRequiresUniqueHlcs;
     public static boolean dataStoreRequiresUniqueHlcs() { return dataStoreRequiresUniqueHlcs; }

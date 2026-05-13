@@ -86,7 +86,9 @@ import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ExecutePath.FAST;
+import static accord.coordinate.ExecutePath.MEDIUM;
 import static accord.coordinate.ExecutePath.RECOVER;
+import static accord.coordinate.ExecutePath.SLOW;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
@@ -277,15 +279,18 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         // TODO (desired): migrate to SortedListSet; or introduce a specialised version for integer keys; or introduce a hash equivalent
         Topologies all = allTopologies;
-        Commit.Kind kind = commitKind();
         for (int i = 0, size = sendReadTo.size() ; i < size ; ++i)
         {
             Node.Id to = sendReadTo.get(i);
             ExecuteFlags flags = this.flags.get(to);
-            Invariants.require(kind.compareTo(StableFastPath) >= 0);
             boolean sendUnstable = flags.contains(READY_TO_EXECUTE) && sendNoStableIfFastExec() && path != RECOVER;
             if (sendUnstable) sendUnstableRead(to, flags);
-            else sendStableRead(to, kind);
+            else
+            {
+                Commit.Kind kind = commitKind(to);
+                Invariants.require(kind.compareTo(StableFastPath) >= 0);
+                sendStableRead(to, kind);
+            }
         }
 
         boolean sendOnlyReadStableMessages = flags.isAnyReadyToExecute() && sendOnlyReadStableMessages(txnId);
@@ -303,13 +308,13 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (sendOnlyReadStableMessages && all.current().contains(to))
                 continue;
 
-            sendStableOnly(to, kind);
+            sendStableOnly(to);
         }
     }
 
-    private void sendStableOnly(Node.Id to, Commit.Kind kind)
+    private void sendStableOnly(Node.Id to)
     {
-        Commit send = new Commit(kind, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
+        Commit send = new Commit(commitKind(to), to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
         boolean addCallback = allTopologies.size() == 1 || stable.nodes().contains(to);
         if (addCallback) node.send(to, send, executor, stable, tracing);
         else node.send(to, send, tracing);
@@ -346,9 +351,10 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         node.send(to, send, executor, stable, tracing);
     }
 
-    private Commit.Kind commitKind()
+    private Commit.Kind commitKind(Node.Id to)
     {
-        if (!sendMinimal())
+        // we MUST send StableFastPath to self to ensure we use the privileged coordinator fast commit machinery that rejects if we have witnessed a future ballot
+        if (!sendMinimal() && (path != FAST || !to.equals(node.id())))
             return StableWithTxnAndDeps;
 
         switch (path)
@@ -369,7 +375,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         ExecuteFlags flags = this.flags.get(to);
         boolean sendUnstable = !sendOnlyReadStableMessages(txnId) || path == RECOVER || flags.contains(READY_TO_EXECUTE);
         if (sendUnstable) sendUnstableRead(to, flags);
-        else sendStableRead(to, commitKind());
+        else sendStableRead(to, commitKind(to));
     }
 
     @Override
@@ -467,16 +473,18 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                     if (sendOnlyReadStableMessages(txnId))
                     {
                         // send additional stable messages to record the transaction outcome
-                        Commit.Kind kind = commitKind();
                         if (!candidates.isEmpty())
                         {
                             for (int i = 0, size = candidates.size() ; i < size ; ++i)
-                                sendStableOnly(candidates.get(i), kind);
+                            {
+                                Node.Id to = candidates.get(i);
+                                sendStableOnly(to);
+                            }
                         }
                         if (unstableFastReads != null)
                         {
                             for (Node.Id to : unstableFastReads)
-                                sendStableOnly(to, kind);
+                                sendStableOnly(to);
                         }
                     }
                 }
@@ -591,7 +599,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         @Override
         protected CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
         {
-            if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind()))
+            if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind(node.id())))
                 return CommitOrReadNack.Rejected;
 
             if (coordinatorBacklogExecution(ballot) && txnId.is(SingleKey) && txnId.is(Key))
