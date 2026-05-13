@@ -236,8 +236,8 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     void recontact(Node.Id to, Request send)
     {
         node.maybeTraceRemote(to, send, tracing);
-        if (permitLocalDelivery() && to.equals(node.id())) new LocalDelivery<>(node, this).deliver(send);
-        else node.send(to, send, tracing);
+        if (permitLocalDelivery()) Invariants.expect(!to.equals(node.id())); // we should never have to recontact ourselves, and callbacks/timeouts will not work correctly if we do
+        node.send(to, send, tracing);
     }
 
     @Override
