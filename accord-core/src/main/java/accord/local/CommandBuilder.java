@@ -18,7 +18,7 @@
 
 package accord.local;
 
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
@@ -44,7 +44,7 @@ public class CommandBuilder
     private Ballot acceptedOrCommitted = Ballot.ZERO;
     private Command.WaitingOn waitingOn;
     private Writes writes;
-    private Result result;
+    private PersistableResult result;
 
     public CommandBuilder(TxnId txnId)
     {
@@ -166,12 +166,12 @@ public class CommandBuilder
         return this;
     }
 
-    public Result result()
+    public PersistableResult result()
     {
         return result;
     }
 
-    public CommandBuilder result(Result result)
+    public CommandBuilder result(PersistableResult result)
     {
         this.result = result;
         return this;

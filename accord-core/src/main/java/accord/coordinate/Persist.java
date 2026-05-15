@@ -24,7 +24,7 @@ import java.util.function.Predicate;
 
 import javax.annotation.Nullable;
 
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
@@ -61,7 +61,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     protected final Timestamp executeAt;
     protected final Deps stableDeps;
     protected final Writes writes;
-    protected final Result result;
+    protected final PersistableResult result;
     protected final CoordinationFlags flags;
     // TODO (expected): track separate ALL and Quorum, so we can report Universal durability to permit faster GC
     protected final SimpleTracker<?> tracker;
@@ -69,12 +69,12 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     protected final Apply.Kind applyKind;
     protected final boolean informDurableOnDone;
 
-    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind)
+    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, PersistableResult result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind)
     {
         this(node, executor, all, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, route, flags, informDurableOnDone, factory, applyKind, QuorumTracker::new, node.agent());
     }
 
-    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, Result result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind, Function<Topologies, SimpleTracker<?>> trackerFactory, BiConsumer<? super Void, Throwable> callback)
+    protected Persist(Node node, SequentialAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, PersistableResult result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind, Function<Topologies, SimpleTracker<?>> trackerFactory, BiConsumer<? super Void, Throwable> callback)
     {
         super(node, executor, txnId, route, all.nodes(), callback);
         this.ballot = ballot;

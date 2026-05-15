@@ -22,7 +22,7 @@ import accord.api.Data;
 import accord.api.DataStore;
 import accord.api.Query;
 import accord.api.Read;
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.Update;
 import accord.api.Write;
 import accord.local.CommandStore;
@@ -56,7 +56,7 @@ public class MockStore implements DataStore
         }
     };
 
-    public static final Result RESULT = new Result() {};
+    public static final PersistableResult RESULT = new PersistableResult() {};
     public static final Query QUERY = (txnId, executeAt, keys, data, read, update) -> RESULT;
     public static final Write WRITE = (commandStore, key, txnId, executeAt, command) -> AsyncChains.success(null);
 

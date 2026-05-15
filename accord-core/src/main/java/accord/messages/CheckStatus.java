@@ -20,7 +20,7 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.RoutingKey;
 import accord.coordinate.Infer.InvalidIf;
 import accord.local.Command;
@@ -101,7 +101,7 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
                                              Ballot promised, Ballot maxAcceptedOrCommitted, Ballot acceptedOrCommitted,
                                              @Nullable Timestamp executeAt, boolean isCoordinating, Durability durability,
                                              @Nullable Route<?> route, @Nullable RoutingKey homeKey, InvalidIf invalidIf,
-                                             PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, Result result)
+                                             PartialTxn partialTxn, PartialDeps committedDeps, Writes writes, PersistableResult result)
         {
             return new CheckStatusOkFull(map, maxKnowledgeStatus, maxStatus, promised, maxAcceptedOrCommitted, acceptedOrCommitted,
                                          executeAt, isCoordinating, durability, route, homeKey, invalidIf, partialTxn, committedDeps, writes, result);
@@ -538,7 +538,7 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
         public final PartialTxn partialTxn;
         public final PartialDeps stableDeps; // only set if status >= Committed, so safe to merge
         public final Writes writes;
-        public final Result result;
+        public final PersistableResult result;
 
         public CheckStatusOkFull(KnownMap map, boolean isCoordinating, Durability durability, InvalidIf invalidIf, Command command)
         {
@@ -551,7 +551,7 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
 
         protected CheckStatusOkFull(KnownMap map, SaveStatus maxNotTruncatedSaveStatus, SaveStatus maxSaveStatus, Ballot promised, Ballot maxAcceptedOrCommitted, Ballot acceptedOrCommitted,
                                     Timestamp executeAt, boolean isCoordinating, Durability durability, Route<?> route,
-                                    RoutingKey homeKey, InvalidIf invalidIf, PartialTxn partialTxn, PartialDeps stableDeps, Writes writes, Result result)
+                                    RoutingKey homeKey, InvalidIf invalidIf, PartialTxn partialTxn, PartialDeps stableDeps, Writes writes, PersistableResult result)
         {
             super(map, maxNotTruncatedSaveStatus, maxSaveStatus, promised, maxAcceptedOrCommitted, acceptedOrCommitted,
                   executeAt, isCoordinating, durability, route, homeKey, invalidIf);
@@ -636,7 +636,7 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
             else if (fullMin.stableDeps == null) committedDeps = fullMax.stableDeps;
             else committedDeps = fullMax.stableDeps.with(fullMin.stableDeps);
             Writes writes = (fullMax.writes != null ? fullMax : fullMin).writes;
-            Result result = (fullMax.result != null ? fullMax : fullMin).result;
+            PersistableResult result = (fullMax.result != null ? fullMax : fullMin).result;
 
             return new CheckStatusOkFull(max.map, max.maxKnowledgeSaveStatus, max.maxSaveStatus,
                                          max.maxPromised, max.maxAcceptedOrCommitted, max.acceptedOrCommitted,

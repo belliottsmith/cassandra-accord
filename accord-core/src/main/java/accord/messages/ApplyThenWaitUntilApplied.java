@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
@@ -56,7 +57,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     @SuppressWarnings("unused")
     public static class SerializerSupport
     {
-        public static ApplyThenWaitUntilApplied create(TxnId txnId, Participants<?> readScope, long minEpoch, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, Result result)
+        public static ApplyThenWaitUntilApplied create(TxnId txnId, Participants<?> readScope, long minEpoch, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, PersistableResult result)
         {
             return new ApplyThenWaitUntilApplied(txnId, readScope, minEpoch, executeAt, route, txn, deps, writes, result);
         }
@@ -66,19 +67,19 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
     private PartialTxn txn;
     private PartialDeps deps;
     private Writes writes;
-    private Result result;
+    private PersistableResult result;
 
     public PartialTxn   txn() { return txn; }
     public PartialDeps deps() { return deps; }
     public Writes    writes() { return writes; }
     public Result    result() { return result; }
 
-    public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, Result result)
+    public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, PersistableResult result)
     {
         this(to, topologies, executeAt, executeAt.epoch(), route, txnId, txn, deps, readScope, writes, result);
     }
 
-    public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, long executeAtEpoch, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, Result result)
+    public ApplyThenWaitUntilApplied(Node.Id to, Topologies topologies, Timestamp executeAt, long executeAtEpoch, FullRoute<?> route, TxnId txnId, Txn txn, Deps deps, Participants<?> readScope, Writes writes, PersistableResult result)
     {
         super(to, topologies, txnId, readScope, executeAt, executeAtEpoch);
         Route<?> scope = computeScope(to, topologies, route);
@@ -89,7 +90,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         this.result = result;
     }
 
-    protected ApplyThenWaitUntilApplied(TxnId txnId, Participants<?> readScope, long minEpoch, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, Result result)
+    protected ApplyThenWaitUntilApplied(TxnId txnId, Participants<?> readScope, long minEpoch, Timestamp executeAt, FullRoute<?> route, PartialTxn txn, PartialDeps deps, Writes writes, PersistableResult result)
     {
         super(txnId, readScope, minEpoch, executeAt, executeAt.epoch());
         this.route = route;
@@ -111,7 +112,7 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         PartialTxn txn = this.txn;
         PartialDeps deps = this.deps;
         Writes writes = this.writes;
-        Result result = this.result;
+        PersistableResult result = this.result;
         if (!isPending())
             return null; // we can't throw an exception here else we override any non-exceptional reply informing the reason
 

@@ -293,7 +293,7 @@ public interface CoordinationAdapter<R>
                 try
                 {
                     Topologies all = execution(node, any, sendTo, route, txnId, executeAt);
-                    new PersistTxn(node, executor, all, txnId, ballot, require, txn, executeAt, deps, writes, result, route, flags, informDurableOnDone, Apply.FACTORY, applyKind)
+                    new PersistTxn(node, executor, all, txnId, ballot, require, txn, executeAt, deps, writes, result.toPersistable(), route, flags, informDurableOnDone, Apply.FACTORY, applyKind)
                     .start();
                 }
                 catch (TopologyException e)
@@ -408,7 +408,7 @@ public interface CoordinationAdapter<R>
                 try
                 {
                     Topologies all = forExecution(node, sendTo, txnId, executeAt, deps);
-                    new PersistSyncPoint(node, executor, all, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, informDurableOnDone, route, Maximal)
+                    new PersistSyncPoint(node, executor, all, txnId, ballot, sendTo, txn, executeAt, deps, writes, result.toPersistable(), informDurableOnDone, route, Maximal)
                     .start();
                 }
                 catch (Throwable t)

@@ -30,7 +30,6 @@ import javax.annotation.Nullable;
 import accord.api.Timeouts;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.RequestStatus;
-import accord.impl.LocalDelivery;
 import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
 import accord.local.SequentialAsyncExecutor;

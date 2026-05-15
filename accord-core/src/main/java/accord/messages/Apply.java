@@ -21,6 +21,7 @@ package accord.messages;
 import javax.annotation.Nullable;
 
 import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
@@ -65,7 +66,7 @@ public class Apply extends RouteRequest<ApplyReply>
     public static final Factory FACTORY = Apply::new;
     public static class SerializationSupport
     {
-        public static Apply create(TxnId txnId, Ballot ballot, Route<?> scope, long minEpoch, long waitForEpoch, long maxEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result, ExecuteFlags flags)
+        public static Apply create(TxnId txnId, Ballot ballot, Route<?> scope, long minEpoch, long waitForEpoch, long maxEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, PersistableResult result, ExecuteFlags flags)
         {
             return new Apply(kind, txnId, ballot, scope, minEpoch, waitForEpoch, maxEpoch, executeAt, deps, txn, fullRoute, writes, result, flags);
         }
@@ -73,7 +74,7 @@ public class Apply extends RouteRequest<ApplyReply>
 
     public interface Factory
     {
-        Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute, ExecuteFlags flags);
+        Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, PersistableResult result, FullRoute<?> fullRoute, ExecuteFlags flags);
     }
 
     public enum Kind { Minimal, Maximal }
@@ -85,7 +86,7 @@ public class Apply extends RouteRequest<ApplyReply>
     private @Nullable PartialTxn txn;
     public final @Nullable FullRoute<?> fullRoute;
     private @Nullable Writes writes;
-    private Result result;
+    private PersistableResult result;
     public final long minEpoch;
     public final long maxEpoch;
     public final ExecuteFlags flags;
@@ -95,7 +96,7 @@ public class Apply extends RouteRequest<ApplyReply>
     public Writes    writes() { return writes; }
     public Result    result() { return result; }
 
-    protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, Result result, FullRoute<?> fullRoute, ExecuteFlags flags)
+    protected Apply(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps deps, Writes writes, PersistableResult result, FullRoute<?> fullRoute, ExecuteFlags flags)
     {
         super(to, participates, sendTo, txnId);
         Invariants.require(txnId.kind() != Txn.Kind.Write || writes != null);
@@ -112,7 +113,7 @@ public class Apply extends RouteRequest<ApplyReply>
         this.maxEpoch = participates.currentEpoch();
     }
 
-    protected Apply(Kind kind, TxnId txnId, Ballot ballot, Route<?> route, long minEpoch, long waitForEpoch, long maxEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, Result result, ExecuteFlags flags)
+    protected Apply(Kind kind, TxnId txnId, Ballot ballot, Route<?> route, long minEpoch, long waitForEpoch, long maxEpoch, Timestamp executeAt, PartialDeps deps, @Nullable PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, PersistableResult result, ExecuteFlags flags)
     {
         super(txnId, route, waitForEpoch);
         this.kind = kind;
@@ -208,30 +209,30 @@ public class Apply extends RouteRequest<ApplyReply>
         PartialTxn txn = this.txn;
         PartialDeps deps = this.deps;
         Writes writes = this.writes;
-        Result result = this.result;
+        PersistableResult result = this.result;
         if (ifDoneExpectCancelled()) // check cancellation after reading nullable fields
             return null;
 
         return apply(newSaveStatus, safeStore, participants, ballot, txn, txnId, executeAt, deps, bestRoute(), writes, result);
     }
 
-    public static ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
+    public static ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, PersistableResult result)
     {
         return apply(PreApplied, safeStore, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
     }
 
-    public static ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
+    public static ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, PersistableResult result)
     {
         SafeCommand safeCommand = safeStore.get(txnId, participants);
         return apply(newSaveStatus, safeStore, safeCommand, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
     }
 
-    public static ApplyReply apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
+    public static ApplyReply apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, PersistableResult result)
     {
         return apply(PreApplied, safeStore, safeCommand, participants, ballot, txn, txnId, executeAt, deps, route, writes, result);
     }
 
-    public static ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, Result result)
+    public static ApplyReply apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, PersistableResult result)
     {
         switch (Commands.apply(newSaveStatus, safeStore, safeCommand, participants, ballot, txnId, route, executeAt, deps, txn, writes, result))
         {
