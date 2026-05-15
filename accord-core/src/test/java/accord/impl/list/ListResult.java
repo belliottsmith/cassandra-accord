@@ -23,15 +23,15 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import accord.api.Result.PersistableResult;
 import accord.local.Node.Id;
-import accord.api.Result;
 import accord.messages.MessageType;
 import accord.primitives.Keys;
 import accord.messages.Reply;
 import accord.primitives.Seekables;
 import accord.primitives.TxnId;
 
-public class ListResult implements Result, Reply
+public class ListResult implements PersistableResult, Reply
 {
     public enum Status
     { Applied, RecoveryApplied, HeartBeat, Invalidated, Lost, Other, Truncated, Failure }

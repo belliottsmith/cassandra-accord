@@ -23,7 +23,7 @@ import java.util.function.BiConsumer;
 
 import javax.annotation.Nonnull;
 
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.DurabilityTracker;
 import accord.coordinate.tracking.RequestStatus;
@@ -123,7 +123,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         node.agent().coordinatorEvents().onExecuting(syncPoint.syncId, null, syncPoint.waitFor, null);
         // TODO (desired): special Apply message that doesn't resend deps if path=MEDIUM
         Txn txn = node.agent().emptySystemTxn(syncPoint.syncId.kind(), syncPoint.syncId.domain());
-        Result result = txn.result(syncPoint.syncId, syncPoint.executeAt, null);
+        PersistableResult result = txn.result(syncPoint.syncId, syncPoint.executeAt, null).toPersistable();
         super.start();
         contact(to -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.fullRoute, syncPoint.syncId, txn, syncPoint.waitFor, scope, null, result));
     }

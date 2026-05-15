@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.util.NavigableMap;
 import java.util.TreeMap;
 
+import accord.api.Result.PersistableResult;
 import accord.local.Node;
 import accord.local.Node.Id;
 import com.google.gson.TypeAdapter;
@@ -34,7 +35,7 @@ import accord.primitives.Keys;
 
 import static accord.utils.Invariants.illegalState;
 
-public class MaelstromResult implements Result
+public class MaelstromResult implements PersistableResult
 {
     final Node.Id client;
     final long requestId;

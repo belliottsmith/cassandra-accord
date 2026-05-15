@@ -21,7 +21,6 @@ package accord.impl;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
-import accord.api.AsyncExecutor;
 import accord.api.MessageSink;
 import accord.api.Timeouts;
 import accord.api.Timeouts.RegisteredTimeout;

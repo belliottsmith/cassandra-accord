@@ -18,7 +18,7 @@
 package accord.messages;
 
 import accord.api.ProtocolModifiers;
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.RoutingKey;
 import accord.api.Tracing;
 import accord.coordinate.FetchData.FetchResult;
@@ -98,7 +98,7 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
     @Nullable final PartialDeps stableDeps;
     @Nullable final Timestamp committedExecuteAt;
     @Nullable final Writes writes;
-    @Nullable final Result result;
+    @Nullable final PersistableResult result;
     final BiConsumer<? super FetchResult, Throwable> callback;
     final @Nullable Tracing tracing;
 
@@ -121,7 +121,7 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
     @Nullable PartialDeps stableDeps,
     @Nullable Timestamp committedExecuteAt,
     @Nullable Writes writes,
-    @Nullable Result result,
+    @Nullable PersistableResult result,
     BiConsumer<? super FetchResult, Throwable> callback,
     @Nullable Tracing tracing)
     {

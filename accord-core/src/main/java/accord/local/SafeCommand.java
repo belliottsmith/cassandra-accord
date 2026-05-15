@@ -21,7 +21,7 @@ package accord.local;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.local.Command.Truncated;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
@@ -158,12 +158,12 @@ public abstract class SafeCommand
         return update(safeStore, Command.readyToExecute(current().asCommitted()));
     }
 
-    public Command.Executed preapplied(SafeCommandStore safeStore, Timestamp applyAt, Writes writes, Result result)
+    public Command.Executed preapplied(SafeCommandStore safeStore, Timestamp applyAt, Writes writes, PersistableResult result)
     {
         return update(safeStore, Command.preapplied(current(), applyAt, writes, result));
     }
 
-    public Command.Executed preapplied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    public Command.Executed preapplied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return update(safeStore, Command.preapplied(current(), participants, promised, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }
@@ -173,7 +173,7 @@ public abstract class SafeCommand
         return update(safeStore, Command.applying(current().asExecuted()));
     }
 
-    public Command.Executed applying(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    public Command.Executed applying(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return update(safeStore, Command.applying(current(), participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }
@@ -188,7 +188,7 @@ public abstract class SafeCommand
         return update(safeStore, Command.applied(current().asExecuted()), forceUpdate);
     }
 
-    public Command.Executed applied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    public Command.Executed applied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return update(safeStore, Command.applied(current(), participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }

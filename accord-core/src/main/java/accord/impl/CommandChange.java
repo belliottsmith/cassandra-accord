@@ -28,6 +28,7 @@ import javax.annotation.Nullable;
 import com.google.common.annotations.VisibleForTesting;
 
 import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.local.Cleanup;
 import accord.local.Cleanup.Input;
 import accord.local.Command;
@@ -203,7 +204,7 @@ public class CommandChange
         protected Timestamp executesAtLeast;
 
         protected Writes writes;
-        protected Result result;
+        protected PersistableResult result;
 
         protected Cleanup cleanup;
 
@@ -588,7 +589,7 @@ public class CommandChange
             return new MinimalCommand.MinimalWithConcreteDeps(txnId, saveStatus, durability, participants, executeAt, partialDeps());
         }
 
-        public void forceResult(Result newValue)
+        public void forceResult(PersistableResult newValue)
         {
             this.result = newValue;
         }
@@ -667,7 +668,7 @@ public class CommandChange
             }
         }
 
-        private static Command.Truncated truncated(TxnId txnId, SaveStatus status, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Timestamp executesAtLeast, Writes writes, Result result)
+        private static Command.Truncated truncated(TxnId txnId, SaveStatus status, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Timestamp executesAtLeast, Writes writes, PersistableResult result)
         {
             switch (status)
             {

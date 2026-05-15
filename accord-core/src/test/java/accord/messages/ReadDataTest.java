@@ -35,7 +35,7 @@ import accord.api.Data;
 import accord.api.MessageSink.ReplySink;
 import accord.api.Query;
 import accord.api.Read;
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.RoutingKey;
 import accord.api.Update;
 import accord.api.Write;
@@ -302,7 +302,7 @@ class ReadDataTest
             Writes writes = new Writes(txnId, executeAt, keys, write);
 
             forEach(store -> check(store.chain(PreLoadContext.contextFor(txnId, "Test"), safe -> {
-                CheckedCommands.apply(safe, txnId, route, executeAt, deps, partialTxn, writes, Mockito.mock(Result.class));
+                CheckedCommands.apply(safe, txnId, route, executeAt, deps, partialTxn, writes, Mockito.mock(PersistableResult.class));
             })));
             return writeResult;
         }

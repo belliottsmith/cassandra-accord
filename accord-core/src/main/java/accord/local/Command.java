@@ -26,6 +26,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.RoutingKey;
 import accord.local.MinimalCommand.MinimalWithConcreteDeps;
 import accord.primitives.AbstractRanges;
@@ -151,7 +152,7 @@ public abstract class Command extends MinimalWithConcreteDeps
     public final @Nullable PartialTxn partialTxn() { return partialTxn; }
 
     public @Nullable Writes writes() { return null; }
-    public @Nullable Result result() { return null; }
+    public @Nullable PersistableResult result() { return null; }
     public @Nullable WaitingOn waitingOn() { return null; }
 
     /**
@@ -317,7 +318,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             return truncated(command, participants, newSaveStatus);
         }
 
-        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, Result result)
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, PersistableResult result)
         {
             Invariants.requireArgument(!txnId.awaitsOnlyDeps());
             return validate(new Truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result));
@@ -328,7 +329,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             Timestamp executesAtLeast = command.executesAtLeast();
             PartialDeps partialDeps = newSaveStatus.known.is(DepsKnown) ? command.partialDeps : null;
             Writes writes = null;
-            Result result = null;
+            PersistableResult result = null;
             if (newSaveStatus.known.is(Outcome.Apply))
             {
                 writes = command.writes();
@@ -337,12 +338,12 @@ public abstract class Command extends MinimalWithConcreteDeps
             return truncated(command.txnId(), newSaveStatus, command.durability(), participants, command.executeAt, partialDeps, writes, result, executesAtLeast);
         }
 
-        public static Truncated truncated(Command common, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result, @Nullable Timestamp executesAtLeast)
+        public static Truncated truncated(Command common, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable PersistableResult result, @Nullable Timestamp executesAtLeast)
         {
             return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, partialDeps, writes, result, executesAtLeast);
         }
 
-        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Writes writes, Result result, @Nullable Timestamp executesAtLeast)
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Writes writes, PersistableResult result, @Nullable Timestamp executesAtLeast)
         {
             if (!txnId.awaitsOnlyDeps())
             {
@@ -371,7 +372,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         }
 
         @Nullable final Writes writes;
-        @Nullable final Result result;
+        @Nullable final PersistableResult result;
 
         public Truncated(Command copy, SaveStatus saveStatus)
         {
@@ -380,7 +381,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             this.result = copy.result();
         }
 
-        public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result)
+        public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable PersistableResult result)
         {
             super(txnId, saveStatus, durability, participants, Ballot.MAX, executeAt, null, partialDeps, Ballot.MAX);
             this.writes = writes;
@@ -405,7 +406,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         }
 
         @Override
-        public @Nullable Result result()
+        public @Nullable PersistableResult result()
         {
             return result;
         }
@@ -431,7 +432,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             this.executesAtLeast = executesAtLeast;
         }
 
-        public TruncatedAwaitsOnlyDeps(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable Result result, @Nullable Timestamp executesAtLeast)
+        public TruncatedAwaitsOnlyDeps(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable PersistableResult result, @Nullable Timestamp executesAtLeast)
         {
             super(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result);
             this.executesAtLeast = executesAtLeast;
@@ -634,7 +635,7 @@ public abstract class Command extends MinimalWithConcreteDeps
 
     public static class Executed extends Committed
     {
-        public static Executed executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, Result result)
+        public static Executed executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, PersistableResult result)
         {
             return validate(new Executed(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result));
         }
@@ -650,7 +651,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         }
 
         private final Writes writes;
-        private final Result result;
+        private final PersistableResult result;
 
         private Executed(Command copy, SaveStatus status)
         {
@@ -665,7 +666,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             validateWrites(txnId(), writes);
         }
 
-        private Executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, Result result)
+        private Executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, PersistableResult result)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
             validateWrites(txnId, writes);
@@ -701,7 +702,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             return writes;
         }
 
-        public Result result()
+        public PersistableResult result()
         {
             return result;
         }
@@ -1361,17 +1362,17 @@ public abstract class Command extends MinimalWithConcreteDeps
         return committed(command, SaveStatus.ReadyToExecute);
     }
 
-    static Command.Executed preapplied(Command command, Timestamp applyAt, Writes writes, Result result)
+    static Command.Executed preapplied(Command command, Timestamp applyAt, Writes writes, PersistableResult result)
     {
         return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), command.participants(), command.promised(), applyAt, command.partialTxn(), command.partialDeps(), command.acceptedOrCommitted(), command.waitingOn(), writes, result);
     }
 
-    static Command.Executed preapplied(Command command, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    static Command.Executed preapplied(Command command, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), participants, promised, executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }
 
-    static Command.Executed applying(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    static Command.Executed applying(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return executed(command.txnId(), SaveStatus.Applying, command.durability(), participants, command.promised(), executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }
@@ -1381,7 +1382,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         return executed(command, SaveStatus.Applying);
     }
 
-    static Command.Executed applied(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, Result result)
+    static Command.Executed applied(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return executed(command.txnId(), SaveStatus.Applied, command.durability(), participants, command.promised(), executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }

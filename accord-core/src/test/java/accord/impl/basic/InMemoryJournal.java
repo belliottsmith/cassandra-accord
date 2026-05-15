@@ -37,7 +37,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.Journal;
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.impl.CommandChange;
 import accord.impl.InMemoryCommandStore;
 import accord.local.Cleanup;
@@ -985,7 +985,7 @@ public class InMemoryJournal implements Journal
                     writes = Invariants.nonNull((Writes) diff.changes.get(WRITES));
                     break;
                 case RESULT:
-                    result = Invariants.nonNull((Result) diff.changes.get(RESULT));
+                    result = Invariants.nonNull((PersistableResult) diff.changes.get(RESULT));
                     break;
                 case CLEANUP:
                     Cleanup nextCleanup = Invariants.nonNull((Cleanup) diff.changes.get(CLEANUP));

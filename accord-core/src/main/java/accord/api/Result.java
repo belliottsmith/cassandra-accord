@@ -28,4 +28,15 @@ public interface Result extends Outcome
 {
     @Override
     default ProgressToken asProgressToken() { return ProgressToken.APPLIED; }
+
+    PersistableResult toPersistable();
+
+    interface PersistableResult extends Result
+    {
+        @Override
+        default PersistableResult toPersistable()
+        {
+            return this;
+        }
+    }
 }

@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.Data;
 import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.RoutingKey;
 import accord.api.ViolationHandler.ViolationHandlerHolder;
 import accord.local.Command.WaitingOn;
@@ -531,12 +532,12 @@ public class Commands
         RaceWithRecovery
     }
 
-    public static ApplyOutcome apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, Result result)
+    public static ApplyOutcome apply(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, PersistableResult result)
     {
         return apply(SaveStatus.PreApplied, safeStore, safeCommand, participants, ballot, txnId, route, executeAt, deps, txn, writes, result);
     }
 
-    public static ApplyOutcome apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, Result result)
+    public static ApplyOutcome apply(SaveStatus newSaveStatus, SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, Ballot ballot, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable Deps deps, @Nullable Txn txn, Writes writes, PersistableResult result)
     {
         Invariants.require(newSaveStatus == SaveStatus.PreApplied || newSaveStatus == Applying || newSaveStatus == SaveStatus.Applied);
         Command command = safeCommand.current();
@@ -721,10 +722,10 @@ public class Commands
         final Participants<?> participants;
         final Timestamp applyAt;
         final Writes writes;
-        final Result result;
+        final PersistableResult result;
         final boolean force;
 
-        protected PostFastApply(Head<?> head, CommandStore commandStore, TxnId txnId, Participants<?> participants, Timestamp applyAt, Writes writes, Result result, boolean force)
+        protected PostFastApply(Head<?> head, CommandStore commandStore, TxnId txnId, Participants<?> participants, Timestamp applyAt, Writes writes, PersistableResult result, boolean force)
         {
             super(head);
             this.commandStore = commandStore;
@@ -936,17 +937,21 @@ public class Commands
         Result result = txn.result(txnId, applyAt, null);
 
         safeStore.commandStore().node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
-        command = safeCommand.preapplied(safeStore, applyAt, writes, result);
+        command = safeCommand.preapplied(safeStore, applyAt, writes, result.toPersistable());
         return command;
     }
 
     private static void replicaExecuteFastApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, Participants<?> executes)
     {
         Writes writes = txn.execute(txnId, applyAt, data);
-        Result result = txn.result(txnId, applyAt, data);
-        unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+        PersistableResult persistResult;
+        {
+            Result result = txn.result(txnId, applyAt, data);
+            unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+            persistResult = result.toPersistable();
+        }
         writes.applyDirect(unsafeStore, executes, txn)
-              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, result, false))
+              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, persistResult, false))
               .begin(unsafeStore.agent);
     }
 
@@ -962,10 +967,14 @@ public class Commands
             else
             {
                 Writes writes = txn.execute(txnId, applyAt, data);
-                Result result = txn.result(txnId, applyAt, data);
-                unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+                PersistableResult persistResult;
+                {
+                    Result result = txn.result(txnId, applyAt, data);
+                    unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+                    persistResult = result.toPersistable();
+                }
                 if (command.saveStatus.compareTo(SaveStatus.PreApplied) <= 0)
-                    apply(Applying, safeStore, safeCommand, command.participants, command.acceptedOrCommitted(), txnId, command.route(), applyAt, command.partialDeps(), command.partialTxn(), writes, result);
+                    apply(Applying, safeStore, safeCommand, command.participants, command.acceptedOrCommitted(), txnId, command.route(), applyAt, command.partialDeps(), command.partialTxn(), writes, persistResult);
             }
         });
     }

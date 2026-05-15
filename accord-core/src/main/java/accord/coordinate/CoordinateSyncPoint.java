@@ -26,7 +26,7 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.Tracing;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.CoordinationAdapter.Adapters.SyncPointAdapter;
@@ -214,7 +214,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
         Txn txn = node.agent().emptySystemTxn(txnId.kind(), txnId.domain());
         Deps deps = syncPoint.waitFor;
         Route<?> route = syncPoint.route;
-        Result result = txn.result(txnId, executeAt, null);
+        PersistableResult result = txn.result(txnId, executeAt, null).toPersistable();
         Apply apply = Apply.FACTORY.create(Maximal, to, participates, txnId, ballot, route, txn, executeAt, deps, null, result, syncPoint.fullRoute, ExecuteFlags.none());
         node.send(to, apply, tracing);
     }

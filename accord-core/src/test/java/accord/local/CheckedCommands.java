@@ -20,7 +20,7 @@ package accord.local;
 
 import javax.annotation.Nullable;
 
-import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.messages.Accept;
 import accord.primitives.Ballot;
 import accord.primitives.FullRoute;
@@ -88,12 +88,12 @@ public class CheckedCommands
         consumer.accept(before, after);
     }
 
-    public static void apply(SafeCommandStore safeStore, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable PartialTxn partialTxn, Writes writes, Result result)
+    public static void apply(SafeCommandStore safeStore, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable PartialTxn partialTxn, Writes writes, PersistableResult result)
     {
         apply(safeStore, txnId, route, executeAt, partialDeps, partialTxn, writes, result, (l, r) -> {});
     }
 
-    public static void apply(SafeCommandStore safeStore, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable PartialTxn partialTxn, Writes writes, Result result, BiConsumer<Command, Command> consumer)
+    public static void apply(SafeCommandStore safeStore, TxnId txnId, Route<?> route, Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable PartialTxn partialTxn, Writes writes, PersistableResult result, BiConsumer<Command, Command> consumer)
     {
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId.epoch(), txnId, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);

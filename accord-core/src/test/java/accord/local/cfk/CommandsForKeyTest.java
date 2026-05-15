@@ -47,6 +47,7 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Query;
 import accord.api.Read;
 import accord.api.Result;
+import accord.api.Result.PersistableResult;
 import accord.api.RoutingKey;
 import accord.api.Update;
 import accord.impl.AbstractReplayer;
@@ -562,7 +563,7 @@ public class CommandsForKeyTest
                               .partialDeps(slice(txnId, deps))
                               .executeAt(executeAt)
                               .waitingOn(waitingOn)
-                              .result(new Result(){});
+                              .result(new PersistableResult(){});
 
             if (txnId.is(Write))
                 builder.writes(new Writes(txnId, executeAt, KEYS, null));
