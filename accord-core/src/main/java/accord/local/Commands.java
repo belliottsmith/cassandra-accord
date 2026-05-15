@@ -936,17 +936,21 @@ public class Commands
         Result result = txn.result(txnId, applyAt, null);
 
         safeStore.commandStore().node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
-        command = safeCommand.preapplied(safeStore, applyAt, writes, result);
+        command = safeCommand.preapplied(safeStore, applyAt, writes, result.toPersist());
         return command;
     }
 
     private static void replicaExecuteFastApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, Participants<?> executes)
     {
         Writes writes = txn.execute(txnId, applyAt, data);
-        Result result = txn.result(txnId, applyAt, data);
-        unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+        Result persistResult;
+        {
+            Result result = txn.result(txnId, applyAt, data);
+            unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+            persistResult = result.toPersist();
+        }
         writes.applyDirect(unsafeStore, executes, txn)
-              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, result, false))
+              .then(head -> new PostFastApply<>(head, unsafeStore, txnId, executes, applyAt, writes, persistResult, false))
               .begin(unsafeStore.agent);
     }
 
@@ -962,10 +966,14 @@ public class Commands
             else
             {
                 Writes writes = txn.execute(txnId, applyAt, data);
-                Result result = txn.result(txnId, applyAt, data);
-                unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+                Result persistResult;
+                {
+                    Result result = txn.result(txnId, applyAt, data);
+                    unsafeStore.node.reportLocalExecution(txnId, route, ballot, applyAt, writes, result);
+                    persistResult = result.toPersist();
+                }
                 if (command.saveStatus.compareTo(SaveStatus.PreApplied) <= 0)
-                    apply(Applying, safeStore, safeCommand, command.participants, command.acceptedOrCommitted(), txnId, command.route(), applyAt, command.partialDeps(), command.partialTxn(), writes, result);
+                    apply(Applying, safeStore, safeCommand, command.participants, command.acceptedOrCommitted(), txnId, command.route(), applyAt, command.partialDeps(), command.partialTxn(), writes, persistResult);
             }
         });
     }

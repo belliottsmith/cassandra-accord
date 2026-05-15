@@ -28,4 +28,6 @@ public interface Result extends Outcome
 {
     @Override
     default ProgressToken asProgressToken() { return ProgressToken.APPLIED; }
+
+    default Result toPersist() { return this; }
 }
