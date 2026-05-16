@@ -40,6 +40,7 @@ import accord.api.TopologyService;
 import accord.api.Tracing;
 import accord.coordinate.ExecuteTxn;
 import accord.impl.LocalDelivery;
+import accord.local.CommandStores.UnrestrictedStoreSelector;
 import accord.local.cfk.ExecuteTxnBacklog;
 import accord.messages.RemoteSuccess;
 import accord.messages.ReplyContext.NoReplyContext;
@@ -827,7 +828,7 @@ public class Node implements NodeCommandStoreService
     public AsyncChain<Void> updateMinHlc(long minHlc)
     {
         // TODO (required): command stores that are not ready due to bootstrap need to refresh their min HLC on bootstrap completion
-        StoreSelector selector = snapshot -> Stream.of(snapshot.shards).map(sh -> sh.store).iterator();
+        UnrestrictedStoreSelector selector = CommandStores.StoreSelection::allOf;
         return commandStores().mapReduce(selector, new MapReduceCommandStores<>(RoutingKeys.EMPTY)
         {
             @Override public Void reduce(Void o1, Void o2) { return null; }

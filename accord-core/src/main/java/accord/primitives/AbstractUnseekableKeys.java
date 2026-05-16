@@ -57,7 +57,12 @@ implements Iterable<RoutingKey>, Unseekables<RoutingKey>, Participants<RoutingKe
     @Override
     public final int find(RoutingKey key, SortedArrays.Search search)
     {
-        return SortedArrays.binarySearch(keys, 0, keys.length, key, RoutingKey::compareTo, search);
+        return find(key, 0, keys.length, search);
+    }
+
+    public final int find(RoutingKey key, int start, int end, SortedArrays.Search search)
+    {
+        return SortedArrays.binarySearch(keys, start, end, key, RoutingKey::compareTo, search);
     }
 
     @Override

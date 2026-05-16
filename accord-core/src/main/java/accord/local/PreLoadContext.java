@@ -19,9 +19,13 @@
 package accord.local;
 
 import accord.api.RoutingKey;
+import accord.api.VisibleForImplementation;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.AbstractUnseekableKeys;
+import accord.primitives.Ranges;
 import accord.primitives.Routable;
+import accord.primitives.Routables;
+import accord.primitives.Routables.Slice;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -92,6 +96,20 @@ public interface PreLoadContext
             consumer.accept(additionalTxnId);
     }
 
+    default PreLoadContext slice(Ranges ranges, Slice slice)
+    {
+        Unseekables<?> keys = keys();
+        int size = keys.size();
+        if (size == 0 || loadKeys() == NONE)
+            return this;
+
+        Unseekables<?> newKeys = keys.slice(ranges, slice);
+        if (newKeys == keys)
+            return this;
+
+        return new OverrideKeys(this, newKeys);
+    }
+
     /**
      * @return keys of the {@link CommandsForKey} objects that need to be loaded into memory before this operation is run
      */
@@ -157,6 +175,35 @@ public interface PreLoadContext
         List<TxnId> txnIds = txnIds();
         Unseekables<?> keys = keys();
         return reason() + (txnIds.isEmpty() ? "" : " for " + txnIds) + (keys.isEmpty() ? "" : (txnIds.isEmpty() ? " for " : " and ") + keys());
+    }
+
+    class Wrapped implements PreLoadContext
+    {
+        final PreLoadContext wrapped;
+        public Wrapped(PreLoadContext wrapped)
+        {
+            this.wrapped = wrapped;
+        }
+        @Nullable @Override public TxnId primaryTxnId() { return wrapped.primaryTxnId(); }
+        @Nullable @Override public TxnId additionalTxnId() { return wrapped.additionalTxnId(); }
+        @Override public Unseekables<?> keys() { return wrapped.keys(); }
+        @Override public LoadKeys loadKeys() { return wrapped.loadKeys(); }
+        @Override public LoadKeysFor loadKeysFor() { return wrapped.loadKeysFor(); }
+        @Override public Timestamp executeAt() { return wrapped.executeAt(); }
+        @Override public String reason() { return wrapped.reason(); }
+        @Override public String describe() { return wrapped.describe(); }
+    }
+
+    class OverrideKeys extends Wrapped
+    {
+        final Unseekables<?> keys;
+        public OverrideKeys(PreLoadContext wrapped, Unseekables<?> keys)
+        {
+            super(wrapped);
+            this.keys = keys;
+        }
+
+        @Override public Unseekables<?> keys() { return keys; }
     }
 
     static PreLoadContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)

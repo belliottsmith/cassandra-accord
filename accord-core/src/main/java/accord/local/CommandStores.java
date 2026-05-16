@@ -20,7 +20,6 @@ package accord.local;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
@@ -29,11 +28,9 @@ import java.util.Objects;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -45,6 +42,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.AsyncExecutorFactory;
 import accord.api.AsyncExecutor;
+import accord.api.VisibleForImplementation;
 import accord.topology.EpochReady;
 import accord.api.DataStore;
 import accord.api.Journal;
@@ -109,9 +107,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             @Override
             public StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
             {
-                return snapshot -> StoreFinder.find(snapshot, participants)
-                                              .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch())
-                                              .iterator(snapshot);
+                return new RestrictedStoreSelector(participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch());
             }
         }
 
@@ -124,10 +120,47 @@ public abstract class CommandStores implements AsyncExecutorFactory
     public interface StoreSelector extends LatentStoreSelector
     {
         default StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants) { return this; }
-        Iterator<CommandStore> select(Snapshot snapshot);
+        StoreSelection select(Snapshot snapshot);
+
+        /**
+         * Return the ranges we use to interact with this shard, restricted by epoch;
+         * return null if we do not intersect this shard on the specified epochs
+         */
+        Ranges ranges(ShardHolder shard);
     }
 
-    public static class IncludingSpecificStoreSelector implements StoreSelector
+    public interface UnrestrictedStoreSelector extends StoreSelector
+    {
+        default Ranges ranges(ShardHolder shard) { return shard.ranges().all(); }
+    }
+
+    public static class RestrictedStoreSelector implements StoreSelector
+    {
+        final Unseekables<?> keysOrRanges;
+        final long minEpoch, maxEpoch;
+
+        public RestrictedStoreSelector(Unseekables<?> keysOrRanges, long minEpoch, long maxEpoch)
+        {
+            this.keysOrRanges = keysOrRanges;
+            this.minEpoch = minEpoch;
+            this.maxEpoch = maxEpoch;
+        }
+
+        public StoreSelection select(Snapshot snapshot)
+        {
+            return StoreFinder.find(snapshot, keysOrRanges);
+        }
+
+        public @Nullable Ranges ranges(ShardHolder shard)
+        {
+            Ranges ranges = shard.ranges().allBetween(minEpoch, maxEpoch);
+            if (ranges != shard.ranges.all() && !ranges.intersects(keysOrRanges))
+                return null;
+            return ranges;
+        }
+    }
+
+    public static class IncludingSpecificStoreSelector implements LatentStoreSelector
     {
         final int storeId;
 
@@ -139,44 +172,92 @@ public abstract class CommandStores implements AsyncExecutorFactory
         @Override
         public StoreSelector refine(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
         {
-            return snapshot -> {
-                StoreFinder finder = StoreFinder.find(snapshot, participants)
-                                                .filter(snapshot, participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch());
-                finder.set(snapshot.byId.get(storeId));
-                return finder.iterator(snapshot);
-            };
-        }
+            return new RestrictedStoreSelector(participants, txnId.epoch(), (executeAt != null ? executeAt : txnId).epoch())
+            {
+                @Override
+                public StoreSelection select(Snapshot snapshot)
+                {
+                    StoreSelection selection = super.select(snapshot);
+                    int index = snapshot.byId.get(storeId);
+                    if (index >= 0)
+                        selection.set(index);
+                    return selection;
+                }
 
-        @Override
-        public Iterator<CommandStore> select(Snapshot snapshot)
-        {
-            return Collections.singletonList(snapshot.byId(storeId)).iterator();
+                @Nullable
+                @Override
+                public Ranges ranges(ShardHolder shard)
+                {
+                    // TODO (expected): accept minEpoch/maxEpoch for the store so we can safely slice here
+                    if (shard.store.id == storeId)
+                        return shard.ranges().all();
+                    return super.ranges(shard);
+                }
+            };
         }
     }
 
     // TODO (required): as we get more tables this will become expensive to allocate; we need to index first by prefix
-    public static class StoreFinder extends LargeBitSet implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
+    public static class StoreSelection extends LargeBitSet
+    {
+        public StoreSelection(Snapshot snapshot)
+        {
+            super(snapshot.shards.length);
+        }
+
+        public static StoreSelection ids(Snapshot snapshot, IntStream ids)
+        {
+            StoreSelection selection = new StoreFinder(snapshot);
+            ids.forEach(id -> {
+                int index = snapshot.byId.get(id);
+                if (index >= 0)
+                    selection.set(index);
+            });
+            return selection;
+        }
+
+        public static StoreSelection allOf(Snapshot snapshot)
+        {
+            StoreSelection selection = new StoreFinder(snapshot);
+            selection.setRange(0, snapshot.shards.length);
+            return selection;
+        }
+
+        public final Iterator<ShardHolder> iterator(Snapshot snapshot)
+        {
+            return new Iterator<>()
+            {
+                int i = firstSetBit();
+                @Override
+                public boolean hasNext()
+                {
+                    return i >= 0;
+                }
+
+                @Override
+                public ShardHolder next()
+                {
+                    ShardHolder next = snapshot.shards[i];
+                    i = nextSetBit(i + 1, -1);
+                    return next;
+                }
+            };
+        }
+    }
+
+    public static class StoreFinder extends StoreSelection implements IndexedQuadConsumer<Object, Object, Object, Object>, IndexedRangeQuadConsumer<Object, Object, Object, Object>
     {
         final int[] indexMap;
 
-        private StoreFinder(int size, int[] indexMap)
-        {
-            super(size);
-            this.indexMap = indexMap;
-        }
-
         public StoreFinder(Snapshot snapshot)
         {
-            this(snapshot.shards.length, snapshot.indexForRange);
+            super(snapshot);
+            this.indexMap = snapshot.indexForRange;
         }
 
         public static StoreSelector selector(Unseekables<?> unseekables, long minEpoch, long maxEpoch)
         {
-            return snapshot -> {
-                StoreFinder finder = StoreFinder.find(snapshot, unseekables);
-                finder.filter(snapshot, unseekables, minEpoch, maxEpoch);
-                return finder.iterator(snapshot);
-            };
+            return new RestrictedStoreSelector(unseekables, minEpoch, maxEpoch);
         }
 
         public static StoreFinder find(Snapshot snapshot, Unseekables<?> unseekables)
@@ -213,27 +294,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
                     unset(i);
             }
             return this;
-        }
-
-        public Iterator<CommandStore> iterator(Snapshot snapshot)
-        {
-            return new Iterator<>()
-            {
-                int i = firstSetBit();
-                @Override
-                public boolean hasNext()
-                {
-                    return i >= 0;
-                }
-
-                @Override
-                public CommandStore next()
-                {
-                    CommandStore next = snapshot.shards[i].store;
-                    i = nextSetBit(i + 1, -1);
-                    return next;
-                }
-            };
         }
 
         @Override
@@ -315,12 +375,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
         public RangesForEpoch ranges()
         {
             return ranges;
-        }
-
-        boolean filter(long minEpoch, long maxEpoch, Unseekables<?> unseekables)
-        {
-            Ranges shardRanges = ranges.allBetween(minEpoch, maxEpoch);
-            return shardRanges != ranges.all() && !shardRanges.intersects(unseekables);
         }
 
         public String toString()
@@ -647,6 +701,11 @@ public abstract class CommandStores implements AsyncExecutorFactory
             return shards[byId.get(id)].store;
         }
 
+        ShardHolder shardById(int id)
+        {
+            return shards[byId.get(id)];
+        }
+
         @Override
         public Iterator<ShardHolder> iterator()
         {
@@ -854,7 +913,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public AsyncChain<Void> forAll(String reason, Consumer<SafeCommandStore> forEach)
     {
-        return mapReduce(snapshot -> Stream.of(snapshot.shards).map(shard -> shard.store).iterator(), new MapReduceCommandStores<>(RoutingKeys.EMPTY)
+        return mapReduce((UnrestrictedStoreSelector) StoreSelection::allOf, new MapReduceCommandStores<>(RoutingKeys.EMPTY)
         {
             @Override public Void reduce(Void o1, Void o2) { return null; }
             @Override public TxnId primaryTxnId() { return null; }
@@ -923,30 +982,41 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
     public <O> AsyncChain<O> mapReduce(IntStream commandStoreIds, MapReduceCommandStores<?, O> mapReduce)
     {
-        return mapReduce(snapshot -> commandStoreIds.mapToObj(snapshot::byId).iterator(), mapReduce);
+        return mapReduce((UnrestrictedStoreSelector) snapshot -> StoreSelection.ids(snapshot, commandStoreIds), mapReduce);
     }
 
     public <O> AsyncChain<O> mapReduce(StoreSelector selector, MapReduceCommandStores<?, O> mapReduceConsume)
     {
         Snapshot snapshot = current;
-        Iterator<CommandStore> stores = selector.select(snapshot);
+        StoreSelection selection = selector.select(snapshot);
         AsyncChain<O> chain = null;
-        while (stores.hasNext())
+        for (int i = selection.firstSetBit(); i >= 0 ; i = selection.nextSetBit(i + 1, -1))
         {
-            AsyncChain<O> next = mapReduceConsume.applyAsync(stores.next());
+            ShardHolder shard = snapshot.shards[i];
+            Ranges ranges = selector.ranges(shard);
+            if (ranges == null)
+                continue;
+
+            AsyncChain<O> next = mapReduceConsume.applyAsync(ranges, shard.store);
             if (next != null)
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
         return chain == null ? AsyncChains.success(null) : chain;
     }
 
-    public <O> O mapReduceUnsafe(StoreSelector selector, Function<CommandStore, O> map, BiFunction<O, O, O> reduce, O accumulator)
+    @VisibleForImplementation
+    public <O> O mapReduceUnsafe(StoreSelector selector, BiFunction<Ranges, CommandStore, O> map, BiFunction<O, O, O> reduce, O accumulator)
     {
         Snapshot snapshot = current;
-        Iterator<CommandStore> stores = selector.select(snapshot);
-        while (stores.hasNext())
+        StoreSelection selection = selector.select(snapshot);
+        for (int i = selection.firstSetBit(); i >= 0 ; i = selection.nextSetBit(i + 1, -1))
         {
-            O next = map.apply(stores.next());
+            ShardHolder shard = snapshot.shards[i];
+            Ranges ranges = selector.ranges(shard);
+            if (ranges == null)
+                continue;
+
+            O next = map.apply(ranges, shard.store);
             accumulator = reduce.apply(accumulator, next);
         }
         return accumulator;
