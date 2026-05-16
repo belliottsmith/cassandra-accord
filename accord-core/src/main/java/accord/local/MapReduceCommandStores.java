@@ -22,9 +22,12 @@ import javax.annotation.Nullable;
 
 import accord.api.Tracing;
 import accord.primitives.Participants;
+import accord.primitives.Ranges;
 import accord.primitives.Unseekables;
 import accord.utils.MapReduce;
 import accord.utils.async.AsyncChain;
+
+import static accord.primitives.Routables.Slice.Minimal;
 
 public abstract class MapReduceCommandStores<P extends Participants<?>, O> implements PreLoadContext, MapReduce<SafeCommandStore, O>
 {
@@ -50,14 +53,14 @@ public abstract class MapReduceCommandStores<P extends Participants<?>, O> imple
         return applyInternal(safeStore);
     }
 
-    public final AsyncChain<O> applyAsync(CommandStore commandStore)
+    public final AsyncChain<O> applyAsync(Ranges ranges, CommandStore commandStore)
     {
-        return applyAsyncInternal(commandStore);
+        return applyAsyncInternal(ranges, commandStore);
     }
 
-    protected AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
+    protected AsyncChain<O> applyAsyncInternal(Ranges ranges, CommandStore commandStore)
     {
-        return commandStore.chain(this, this);
+        return commandStore.chain(slice(ranges, Minimal), this);
     }
 
     protected boolean supportsPartialRefusal()

@@ -22,6 +22,7 @@ import java.util.function.Function;
 import javax.annotation.Nullable;
 
 import accord.primitives.Participants;
+import accord.primitives.Ranges;
 import accord.primitives.TxnId;
 import accord.utils.MapReduceConsume;
 import accord.utils.async.AsyncChain;
@@ -38,7 +39,7 @@ public abstract class MapReduceConsumeCommandStores<P extends Participants<?>, O
         return new Delegate<>(this)
         {
             @Override
-            protected AsyncChain<O> applyAsyncInternal(CommandStore commandStore)
+            protected AsyncChain<O> applyAsyncInternal(Ranges ranges, CommandStore commandStore)
             {
                 return apply.apply(commandStore);
             }

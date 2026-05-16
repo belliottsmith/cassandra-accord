@@ -27,6 +27,7 @@ import accord.coordinate.Outcome;
 import accord.local.Command;
 import accord.local.CommandStores;
 import accord.local.CommandStores.IncludingSpecificStoreSelector;
+import accord.local.CommandStores.LatentStoreSelector;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.ProgressToken;
@@ -219,7 +220,7 @@ abstract class HomeState extends BaseTxnState
 
         ProgressToken maxProgressToken = owner.savedProgressToken(txnId).merge(command);
         CallbackInvoker<ProgressToken, Outcome> invoker = invokeHomeCallback(owner, txnId, maxProgressToken, HomeState::recoverCallback);
-        CommandStores.StoreSelector reportTo = new IncludingSpecificStoreSelector(safeStore.commandStore().id());
+        LatentStoreSelector reportTo = new IncludingSpecificStoreSelector(safeStore.commandStore().id());
 
         if (tracing != null)
             tracing.trace(safeStore.commandStore(), "Invoking MaybeRecover with progress token %s", maxProgressToken);
