@@ -228,7 +228,11 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         {
             if (failure != null)
             {
-                finishOnFailure(failure);
+                // we must be able to continue in the face of a local failure esp. in case of LogUnavailableException
+                if (txnId.hasPrivilegedCoordinator())
+                    fastPathEnabled = false;
+                contactNotSelf(null, false);
+                onFailure(node.id(), failure);
             }
             else
             {
@@ -237,7 +241,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                     PreAcceptOk ok = (PreAcceptOk) result;
                     // TODO (desired): we can probably still process and record fast path votes from peers, just with different quorum requirements
                     boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
-                    if (!hasCoordinatorVote) fastPathEnabled = false;
+                    if (!hasCoordinatorVote && txnId.hasPrivilegedCoordinator()) fastPathEnabled = false;
                     Deps deps = hasCoordinatorVote && txnId.is(PrivilegedCoordinatorWithDeps) ? ok.deps : null;
                     contactNotSelf(deps, hasCoordinatorVote);
                     onSuccess(node.id(), ok);
