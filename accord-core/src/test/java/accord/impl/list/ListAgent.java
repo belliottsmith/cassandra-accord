@@ -51,6 +51,7 @@ import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.PreLoadContext;
 import accord.local.LogUnavailableException;
+import accord.local.OverlappingCommandStoresException;
 import accord.local.SafeCommandStore;
 import accord.local.TimeService;
 import accord.messages.MessageType;
@@ -173,7 +174,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         ownershipEventListener.onFailedBootstrap(attempt, phase, ranges, retry, fail, failure);
     }
 
-    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyRetiredException.class, TopologyMismatch.class, Snapshotter.SnapshotAborted.class, TimeoutException.class, LogUnavailableException.class));
+    private static final Set<Class<?>> expectedExceptions = new HashSet<>(Arrays.asList(SimulatedFault.class, ExecuteSyncPoint.SyncPointErased.class, CancellationException.class, TopologyRetiredException.class, TopologyMismatch.class, Snapshotter.SnapshotAborted.class, TimeoutException.class, LogUnavailableException.class, OverlappingCommandStoresException.class));
     @Override
     public void onException(Throwable t)
     {
