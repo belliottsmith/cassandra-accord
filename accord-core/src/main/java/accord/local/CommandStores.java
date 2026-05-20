@@ -79,6 +79,7 @@ import org.agrona.collections.Hashing;
 import org.agrona.collections.Int2IntHashMap;
 import org.agrona.collections.Int2ObjectHashMap;
 
+import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
 import static accord.topology.EpochReady.done;
 import static accord.api.DataStore.FetchKind.Sync;
 import static accord.local.CommandStores.BootstrapRangeAction.BOOTSTRAP_NOT_NEEDED;
@@ -432,6 +433,20 @@ public abstract class CommandStores implements AsyncExecutorFactory
             return false;
         }
 
+        private boolean overlapsDeletedCommandStore(Ranges shardRanges, long epoch, Unseekables<?> test)
+        {
+            if (epoch > maxEpoch)
+                return false;
+
+            for (int i = 0 ; i < epochs.length && epoch <= epochs[i] ; ++i)
+            {
+                if (this.ranges[i].intersects(test) && !shardRanges.containsAll(this.ranges[i].overlapping(test)))
+                    return true;
+            }
+
+            return false;
+        }
+
         public Ranges regains(Ranges overlapping)
         {
             Ranges regains = Ranges.EMPTY;
@@ -719,6 +734,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         final Int2IntHashMap byId;
         private final int[] indexForRange;
         final SearchableRangeList lookupByRange;
+        final Ranges shardRanges;
 
         public Snapshot(ShardHolder[] shards, Topology local, Topology global, PreviouslyOwned previouslyOwned)
         {
@@ -728,6 +744,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             this.byId = new Int2IntHashMap(shards.length, Hashing.DEFAULT_LOAD_FACTOR, -1);
             int count = 0;
             int prevId = -1;
+            Ranges shardRanges = Ranges.EMPTY;
             for (int i = 0 ; i < shards.length ; ++i)
             {
                 ShardHolder shard = shards[i];
@@ -736,7 +753,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 byId.put(id, i);
                 count += shard.ranges.all().size();
                 prevId = id;
+                shardRanges = shardRanges.union(MERGE_ADJACENT, shard.ranges.all());
             }
+            this.shardRanges = shardRanges;
             class RangeAndIndex
             {
                 final Range range;
@@ -1089,6 +1108,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     {
         Snapshot snapshot = current;
         StoreSelection selection = selector.select(snapshot);
+        Long minEpoch = selector.minEpoch();
         AsyncChain<O> chain = null;
         for (int i = selection.firstSetBit(); i >= 0 ; i = selection.nextSetBit(i + 1, -1))
         {
@@ -1097,7 +1117,6 @@ public abstract class CommandStores implements AsyncExecutorFactory
             if (ranges == null)
                 continue;
 
-            Long minEpoch = selector.minEpoch();
             if (minEpoch != null && unsafelyTouchesRegainedRanges(snapshot, shard, mapReduceConsume.scope, minEpoch))
                 return AsyncChains.failure(new OverlappingCommandStoresException());
 
@@ -1105,6 +1124,9 @@ public abstract class CommandStores implements AsyncExecutorFactory
             if (next != null)
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
+
+        if (minEpoch != null && snapshot.previouslyOwned.overlapsDeletedCommandStore(snapshot.shardRanges, minEpoch, mapReduceConsume.scope))
+            return AsyncChains.failure(new DeletedCommandStoresException());
 
         return chain == null ? AsyncChains.success(null) : chain;
     }
