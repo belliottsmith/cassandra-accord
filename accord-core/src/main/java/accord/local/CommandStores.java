@@ -1322,6 +1322,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return all;
     }
 
+    @Nullable
     public CommandStore forId(int id)
     {
         Snapshot snapshot = current;

@@ -646,6 +646,10 @@ public class InMemoryJournal implements Journal
             Map<TxnId, List<Diff>> diffs = new TreeMap<>();
 
             InMemoryCommandStore commandStore = (InMemoryCommandStore) commandStores.forId(commandStoreId);
+
+            if (commandStore == null)
+                continue;
+
             Replayer replayer = commandStore.replayer(PART_NON_DURABLE);
 
             for (Map.Entry<TxnId, Diffs> e : diffEntry.getValue().entrySet())
