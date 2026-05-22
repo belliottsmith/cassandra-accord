@@ -761,7 +761,7 @@ public class Cluster
                     while (iter.hasNext())
                     {
                         Journal.TopologyUpdate update = iter.next();
-                        Invariants.require(lastUpdate == null || update.global.epoch() >= lastUpdate.global.epoch());
+                        Invariants.require(lastUpdate == null || update.global.epoch() > lastUpdate.global.epoch());
                         lastUpdate = update;
                     }
                 }
