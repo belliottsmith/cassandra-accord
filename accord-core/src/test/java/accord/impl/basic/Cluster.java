@@ -76,6 +76,7 @@ import accord.impl.basic.DelayedCommandStores.DelayedCommandStore;
 import accord.impl.basic.TestProgressLogs.TestProgressLog;
 import accord.impl.list.ListAgent;
 import accord.impl.list.ListStore;
+import accord.local.BootstrapReason;
 import accord.local.Catchup;
 import accord.local.Cleanup;
 import accord.local.Command;
@@ -88,7 +89,7 @@ import accord.local.RedundantBefore;
 import accord.local.ShardDistributor;
 import accord.local.StoreParticipants;
 import accord.local.TimeService;
-import accord.local.UniqueTimeService.AtomicUniqueTimeWithStaleReservation;
+import accord.local.UniqueTimeService.AtomicUniqueAutoStaleTimes;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.Serialize;
 import accord.local.durability.DurabilityService;
@@ -123,15 +124,18 @@ import static accord.impl.basic.Cluster.OverrideLinksKind.NONE;
 import static accord.impl.basic.Cluster.OverrideLinksKind.RANDOM_BIDIRECTIONAL;
 import static accord.impl.basic.NodeSink.Action.DELIVER;
 import static accord.impl.basic.NodeSink.Action.DROP;
+import static accord.local.BootstrapReason.GAIN_OWNERSHIP;
+import static accord.local.BootstrapReason.LOG_CORRUPTED;
+import static accord.local.BootstrapReason.LOG_INCOMPLETE;
 import static accord.local.Cleanup.EXPUNGE;
 import static accord.local.Cleanup.INVALIDATE;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.Command.NotDefined.uninitialised;
 import static accord.local.StoreParticipants.Filter.LOAD;
-import static accord.utils.Invariants.Paranoia.LINEAR;
-import static accord.utils.Invariants.ParanoiaCostFactor.HIGH;
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.singletonMap;
+import static java.util.concurrent.TimeUnit.DAYS;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -666,7 +670,7 @@ public class Cluster
                 journalMap.put(id, journal);
                 BurnTestTopologyService topologyService = new BurnTestTopologyService(id, nodeExecutor, agent, randomSupplier, topology, nodeMap::get, topologyUpdates);
                 DelayedCommandStores.CacheLoading cacheLoading = new RandomLoader(random).newLoader(journal);
-                Node node = new Node(id, messageSink, topologyService, timeService, new AtomicUniqueTimeWithStaleReservation(timeService),
+                Node node = new Node(id, messageSink, topologyService, timeService, new AtomicUniqueAutoStaleTimes(timeService, 100L, MICROSECONDS),
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      agent,
                                      randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, time -> new DefaultTimeouts(time, Runnable::run),
@@ -786,9 +790,10 @@ public class Cluster
                         node.commandStores().resetTopology(lastUpdate);
 
                     // TODO (expected): we seem to hit Log exceptions when rebootstrapping, suggesting we are handling them poorly
+                    BootstrapReason reason = random.nextBoolean() ? LOG_CORRUPTED : LOG_INCOMPLETE;
                     topologyRandomizer.markRebootstrapping(node);
-                    stores.rebootstrap(node).invoke(node.agent());
-                    Catchup.catchup(node);
+                    stores.rebootstrap(node, reason).invoke(node.agent());
+                    Catchup.catchup(node, 1L, DAYS);
 
                     while (sinks.drain(getPendingPredicate(id, stores.all())));
 
@@ -804,13 +809,13 @@ public class Cluster
                     for (CommandStore store : stores.all())
                         ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
                     journal.replay(stores, null);
-                    Catchup.catchup(node);
+                    Catchup.catchup(node, 1L, DAYS);
 
                     // Re-enable safety checks
                     while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
                     node.unsafeSetReplaying(false);
                     verifyConsistentRestore(beforeStores, stores.all());
-                    stores.forAllUnsafe(commandStore -> commandStore.resumeBootstrap(node));
+                    stores.forAllUnsafe(commandStore -> commandStore.resumeBootstrap(node, GAIN_OWNERSHIP));
                     // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
                     listStore.checkAtLeast(stores, prevData);
                 }

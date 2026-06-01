@@ -19,6 +19,7 @@
 package accord.coordinate;
 
 import java.util.Collection;
+import java.util.Set;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nonnull;
@@ -44,6 +45,7 @@ import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
+import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.Rethrowable;
 import accord.utils.async.AsyncResult;
@@ -95,6 +97,9 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
     final DurabilityTracker tracker;
     final int attempt;
     boolean reportedQuorum, reportedMinorityQuorum, knownToSelf;
+    final SortedListSet<Node.Id> including;
+    final SortedListSet<Node.Id> readable;
+    final SortedListSet<Node.Id> slow;
     long retryInFutureEpoch;
 
     protected ExecuteSyncPoint(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, PartialSyncPoint syncPoint, int attempt, DurabilityResults callback)
@@ -109,6 +114,9 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         this.partialResult = partialResult;
         this.attempt = attempt;
         this.tracker = new DurabilityTracker(topologies);
+        this.including = SortedListSet.noneOf(tracker.nodes());
+        this.readable = SortedListSet.noneOf(tracker.nodes());
+        this.slow = SortedListSet.noneOf(tracker.nodes());
         this.results = callback;
     }
 
@@ -132,7 +140,15 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
     public void onSuccessInternal(Node.Id from, int fromIndex, ReadReply reply)
     {
         if (reply instanceof ReadData.ReadOkWithFutureEpoch)
-            retryInFutureEpoch = Math.max(retryInFutureEpoch, ((ReadData.ReadOkWithFutureEpoch) reply).futureEpoch);
+        {
+            long futureEpoch = ((ReadData.ReadOkWithFutureEpoch) reply).futureEpoch;
+            retryInFutureEpoch = Math.max(retryInFutureEpoch, futureEpoch);
+        }
+        else if (tracker.topologies().size() <= 1 || tracker.topologies().current().contains(from))
+        {
+            readable.addIndex(fromIndex);
+        }
+        including.addIndex(fromIndex);
 
         if (!reply.isOk())
         {
@@ -162,6 +178,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         else
         {
             ReadData.ReadOk ok = (ReadData.ReadOk) reply;
+            slow.remove(from);
             // TODO (expected): handle partial successes to achieve durability quorums
             update(ok.unavailable != null && !ok.unavailable.isEmpty()
                    ? tracker.recordFailure(from)
@@ -183,8 +200,15 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
     @Override
     public void onFailureInternal(Node.Id from, int fromIndex, Throwable failure)
     {
+        slow.remove(from);
         recordFailure(failure);
         update(tracker.recordFailure(from));
+    }
+
+    @Override
+    void onSlowResponseInternal(Node.Id from)
+    {
+        slow.add(from);
     }
 
     private void maybeReportQuorums()
@@ -215,7 +239,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
             return;
         }
 
-        Collection<Node.Id> failedNodes = tracker.excluding();
+        Collection<Node.Id> failedNodes = excluding();
         if (status == RequestStatus.Failed)
             recordFailure(Exhausted.exhausted(node.agent(), txnId, syncPoint.route.homeKey(), scope.toRanges(), failedNodes));
 
@@ -258,9 +282,20 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         }
     }
 
+    private Set<Node.Id> excluding()
+    {
+        return tracker.nodes().without(including::contains);
+    }
+
     DurabilityResult current()
     {
-        DurabilityResult cur = new DurabilityResult(syncPoint, tracker.results(node.id(), knownToSelf), failure());
+
+        DurabilityResult cur = new DurabilityResult(syncPoint,
+                                                    tracker.results(node.id(), knownToSelf, inflightCount() > slow.size()),
+                                                    including.toSortedArrayList(Node.Id[]::new),
+                                                    readable.toSortedArrayList(Node.Id[]::new),
+                                                    failure()
+        );
         if (partialResult == null)
             return cur;
         return partialResult.min(cur);

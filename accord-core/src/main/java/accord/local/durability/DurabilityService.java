@@ -35,6 +35,7 @@ import accord.api.Timeouts.Timeout;
 import accord.local.DurableBefore.Entry;
 import accord.local.Node;
 import accord.primitives.Ranges;
+import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
@@ -54,7 +55,7 @@ public class DurabilityService implements TopologyListener
     private static final Logger logger = LoggerFactory.getLogger(DurabilityService.class);
 
     public enum SyncLocal  { NoLocal, KnownToSelf, Self }
-    public enum SyncRemote { NoRemote, MinorityQuorum, Quorum, All }
+    public enum SyncRemote { NoRemote, MinorityQuorum, Quorum, QuorumAndWaitedForAll, All }
 
     private boolean started;
     private final Node node;
@@ -120,52 +121,68 @@ public class DurabilityService implements TopologyListener
         global.stop();
     }
 
-    public AsyncResult<Void> close(String requestedBy, Txn.Kind kind, Ranges ranges, SyncLocal local, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<DurabilityResults> close(String requestedBy, Txn.Kind kind, Ranges ranges, SyncLocal local, long timeoutDelay, TimeUnit timeoutUnits)
     {
         return close(requestedBy, kind, TxnId.NONE, ranges, local, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> close(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, SyncLocal local, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<DurabilityResults> close(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, SyncLocal local, long timeoutDelay, TimeUnit timeoutUnits)
     {
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(local, SyncRemote.NoRemote, null, null), startedAt, timeoutAt)).result;
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(local, SyncRemote.NoRemote, null, null), startedAt, timeoutAt), true).result;
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<DurabilityResults> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
         return sync(requestedBy, kind, TxnId.NONE, ranges, local, remote, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<DurabilityResults> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
         if (ranges.isEmpty())
             return AsyncResults.success(null);
 
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
-        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(local, remote, null, null), startedAt, timeoutAt)).result;
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(local, remote, null, null), startedAt, timeoutAt), true).result;
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<DurabilityResults> sync(Object requestedBy, Txn.Kind kind, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
         return sync(requestedBy, kind, TxnId.NONE, ranges, include, local, remote, timeoutDelay, timeoutUnits);
     }
 
-    public AsyncResult<Void> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    public AsyncResult<DurabilityResults> sync(Object requestedBy, Txn.Kind kind, Timestamp minBound, Ranges ranges, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
     {
         if (ranges.isEmpty())
             return AsyncResults.success(null);
 
         long startedAt = node.elapsed(MICROSECONDS);
         long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
+        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, durabilityLevel(include, local, remote), startedAt, timeoutAt), true).result;
+    }
+
+    public AsyncResult<DurabilityResults> sync(Object requestedBy, SyncPoint syncPoint, @Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote, long timeoutDelay, TimeUnit timeoutUnits)
+    {
+        if (syncPoint.route.isEmpty())
+            return AsyncResults.success(null);
+
+        long startedAt = node.elapsed(MICROSECONDS);
+        long timeoutAt = startedAt + timeoutUnits.toMicros(timeoutDelay);
+        Ranges ranges = syncPoint.route.toRanges();
+        return submit(new DurabilityRequest(requestedBy, null, syncPoint.syncId, ranges, durabilityLevel(include, local, remote), startedAt, timeoutAt), false).result;
+    }
+
+    private DurabilityLevel durabilityLevel(@Nullable Collection<Node.Id> include, SyncLocal local, SyncRemote remote)
+    {
         SortedArrayList<Node.Id> sortedInclude = include == null || include instanceof SortedArrayList<?>
                                                  ? (SortedArrayList<Node.Id>) include
                                                  : SortedArrayList.copyUnsorted(include, Node.Id[]::new);
-        return submit(new DurabilityRequest(requestedBy, kind, minBound, ranges, new DurabilityLevel(local, remote, sortedInclude, null), startedAt, timeoutAt)).result;
+        return new DurabilityLevel(local, remote, sortedInclude, null);
     }
 
-    private DurabilityRequest submit(DurabilityRequest request)
+    private DurabilityRequest submit(DurabilityRequest request, boolean submitToShardHandler)
     {
         boolean canUseDurableBefore = request.kind != Txn.Kind.VisibilitySyncPoint
                                       && !request.min.equals(TxnId.NONE)
@@ -175,7 +192,7 @@ public class DurabilityService implements TopologyListener
         if (canUseDurableBefore)
         {
             boolean isAlreadyMet = node.durableBefore().foldlWithDefault(request.ranges, (e, b, min, remote) -> {
-                return b && min.compareTo(remote == SyncRemote.All ? e.universal : e.quorum) <= 0;
+                return (Boolean) (b && min.compareTo(remote == SyncRemote.All ? e.universal : e.quorum) <= 0);
             }, Entry.NONE, true, request.min, request.require.remote);
 
             if (isAlreadyMet)
@@ -186,7 +203,8 @@ public class DurabilityService implements TopologyListener
         }
         register(request);
         logger.info("Requesting durability {}", request);
-        shards.request(request);
+        if (submitToShardHandler)
+            shards.request(request);
         return request;
     }
 

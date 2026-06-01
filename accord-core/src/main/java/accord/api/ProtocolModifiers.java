@@ -108,6 +108,7 @@ public class ProtocolModifiers
     public enum InformOfDurability { NONE, HOME, ALL }
 
     public enum ReplicaExecution { NONE, BLIND_WRITE, ALL }
+    public enum SlowTimestamp { NEXT_STALE, NEXT_NOW }
 
     public static class Configure
     {
@@ -129,6 +130,9 @@ public class ProtocolModifiers
 
         private static AbandonFastPath abandonFastPath = AbandonFastPath.IF_ANY_DELAYED_OR_REJECTED;
         public static synchronized void setAbandonFastPath(AbandonFastPath newAbandonFastPath) { pre(); abandonFastPath = newAbandonFastPath; }
+
+        private static SlowTimestamp slowTimestamp = SlowTimestamp.NEXT_STALE;
+        public static synchronized void setSlowTimestamp(SlowTimestamp newSlowTimestamp) { pre(); slowTimestamp = newSlowTimestamp; }
 
         private static boolean recoveryAwaitsSupersedingSyncPoints = true;
         public static synchronized void setRecoveryAwaitsSupersedingSyncPoints(boolean newRecoveryAwaitsSupersedingSyncPoints) { pre(); recoveryAwaitsSupersedingSyncPoints = newRecoveryAwaitsSupersedingSyncPoints; }
@@ -247,6 +251,9 @@ public class ProtocolModifiers
 
     private static final AbandonFastPath abandonFastPath = Configure.abandonFastPath;
     public static AbandonFastPath abandonFastPath() { return abandonFastPath; }
+
+    private static final SlowTimestamp slowTimestamp = Configure.slowTimestamp;
+    public static SlowTimestamp slowTimestamp() { return slowTimestamp; }
 
     private static final boolean recoveryAwaitsSupersedingSyncPoints = Configure.recoveryAwaitsSupersedingSyncPoints;
     public static boolean recoveryAwaitsSupersedingSyncPoints() { return recoveryAwaitsSupersedingSyncPoints; }

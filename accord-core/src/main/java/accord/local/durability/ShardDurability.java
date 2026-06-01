@@ -369,7 +369,8 @@ public class ShardDurability
             Txn.Kind kind = ExclusiveSyncPoint;
             if (activeRequest != null)
             {
-                kind = activeRequest.kind;
+                if (activeRequest.kind != null)
+                    kind = activeRequest.kind;
                 if (activeRequest.min != null)
                 {
                     minEpoch = activeRequest.min.epoch();

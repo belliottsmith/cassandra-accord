@@ -771,6 +771,11 @@ public class Node implements NodeCommandStoreService
         return computeRoute(txnId.epoch(), keysOrRanges, topology.active());
     }
 
+    public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges) throws TopologyException
+    {
+        return computeRoute(epoch, keysOrRanges, topology.active());
+    }
+
     public FullRoute<?> computeRoute(long epoch, Routables<?> keysOrRanges, ActiveEpochs active) throws TopologyException
     {
         Invariants.requireArgument(!keysOrRanges.isEmpty(), "Attempted to compute a route from empty keys or ranges");

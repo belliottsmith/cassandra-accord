@@ -132,9 +132,6 @@ public class DurabilityLevel
         if (satisfies.local.compareTo(local) < 0 || satisfies.remote.compareTo(remote) < 0)
             return false;
 
-        if (including == null)
-            return true;
-
-        return satisfies.including != null && satisfies.including.containsAll(including);
+        return including == null || (satisfies.including != null && satisfies.including.containsAll(including));
     }
 }

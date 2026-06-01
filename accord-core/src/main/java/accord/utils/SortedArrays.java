@@ -54,11 +54,26 @@ public class SortedArrays
 
     public static class SortedArrayList<T extends Comparable<? super T>> extends AbstractList<T> implements SortedList<T>
     {
+        private static final SortedArrayList EMPTY = new SortedArrayList(new Comparable[0]);
+
         final T[] array;
         public SortedArrayList(T[] array)
         {
             // implicitly checks entries are non-null
             this.array = Invariants.requireArgument(array, SortedArrays::isSortedUnique);
+        }
+
+        public static <T extends Comparable<? super T>> SortedArrayList<T> of(SortedList<T> list, IntFunction<T[]> allocator)
+        {
+            if (list instanceof SortedArrayList<?>)
+                return (SortedArrayList<T>) list;
+
+            return copySorted(list, allocator);
+        }
+
+        public static <T extends Comparable<? super T>> SortedArrayList<T> empty()
+        {
+            return EMPTY;
         }
 
         public static <T extends Comparable<? super T>> SortedArrayList<T> ofSorted(T ... items)

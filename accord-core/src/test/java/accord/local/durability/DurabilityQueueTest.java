@@ -233,7 +233,7 @@ public class DurabilityQueueTest
                         }
                     }
 
-                    if (includingQuorum != null) quorum = new DurabilityResult(syncPoint, result(includingQuorum, topology, syncPoint), null);
+                    if (includingQuorum != null) quorum = new DurabilityResult(syncPoint, result(includingQuorum, topology, syncPoint), SortedArrayList.empty(), SortedArrayList.empty(), null);
                     else quorum = null;
                 }
 
@@ -249,7 +249,7 @@ public class DurabilityQueueTest
                         ((AsyncResults.SettableResult<DurabilityResult>)results.onQuorumOrDone()).trySuccess(quorum);
                     }, quorumLatencyMillis, TimeUnit.MILLISECONDS);
                 }
-                DurabilityResult result = new DurabilityResult(syncPoint, result(including, topology, syncPoint), null);
+                DurabilityResult result = new DurabilityResult(syncPoint, result(including, topology, syncPoint), SortedArrayList.empty(), SortedArrayList.empty(), null);
                 scheduler.once(() -> {
 
                     Ranges newQuorum = Ranges.EMPTY;

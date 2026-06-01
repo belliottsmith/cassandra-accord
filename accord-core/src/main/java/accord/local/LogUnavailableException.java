@@ -26,6 +26,11 @@ public class LogUnavailableException extends RuntimeException implements Rethrow
     {
     }
 
+    public LogUnavailableException(String description)
+    {
+        super(description);
+    }
+
     private LogUnavailableException(Throwable cause)
     {
         super(cause);

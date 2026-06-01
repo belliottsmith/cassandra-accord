@@ -39,14 +39,17 @@ import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_DURABLE_TO_DATA_STORE;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
+import static accord.local.RedundantStatus.Property.LOG_INCOMPLETE;
 import static accord.local.RedundantStatus.Property.NOT_OWNED;
 import static accord.local.RedundantStatus.Property.LOG_UNAVAILABLE;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
 import static accord.local.RedundantStatus.Property.TRUNCATE_BEFORE;
+import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.KnownRoute.CoveringRoute;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.Invalidated;
+import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.TruncatedApplyWithOutcome;
 import static accord.primitives.SaveStatus.Uninitialised;
@@ -182,8 +185,8 @@ public enum Cleanup
         RedundantStatus redundant = redundantBefore.status(txnId, input == FULL && saveStatus.known.is(ApplyAtKnown) ? executeAt : null, route);
         Invariants.require(redundant.none(NOT_OWNED), "Command %s that is being loaded is not owned by this shard on route %s", txnId, route);
 
-        if (redundant.all(LOG_UNAVAILABLE))
-            return logUnavailable(input);
+        if (isUnavailable(redundant, saveStatus))
+            return logUnavailable(input, txnId, participants);
 
         if (redundant.none(LOCALLY_REDUNDANT))
             return NO;
@@ -222,6 +225,13 @@ public enum Cleanup
         return truncate(txnId, min);
     }
 
+    private static boolean isUnavailable(RedundantStatus redundant, SaveStatus saveStatus)
+    {
+        return redundant.any(UNREADY)
+               && (redundant.any(LOG_UNAVAILABLE)
+                   || (redundant.any(LOG_INCOMPLETE) && saveStatus.compareTo(Stable) < 0));
+    }
+
     private static Cleanup cleanupWithoutFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         // TODO (expected): consider if we can truncate more aggressively partial records, although we cannot infer anything from the fact they're undecided
@@ -234,22 +244,22 @@ public enum Cleanup
         if (isCovering && txnId.isSyncPoint() && participants.owns().isEmpty())
         {
             RedundantStatus redundant = redundantBefore.status(txnId, null, participants.touches());
-            if (redundant.all(LOG_UNAVAILABLE))
-                return logUnavailable(input);
+            if (isUnavailable(redundant, saveStatus))
+                return logUnavailable(input, txnId, participants);
             if (redundant.all(SHARD_APPLIED, LOCALLY_REDUNDANT))
                 return vestigial(txnId);
         }
 
         RedundantStatus ownStatus = redundantBefore.status(txnId, null, participants.owns());
-        if (ownStatus.all(LOG_UNAVAILABLE))
-            return logUnavailable(input);
+        if (isUnavailable(ownStatus, saveStatus))
+            return logUnavailable(input, txnId, participants);
         return cleanupUndecided(txnId, ownStatus, isCovering);
     }
 
-    private static Cleanup logUnavailable(Input input)
+    private static Cleanup logUnavailable(Input input, TxnId txnId, StoreParticipants participants)
     {
         if (input == FULL)
-            throw new LogUnavailableException();
+            throw new LogUnavailableException(txnId + ": " + participants);
         return ERASE;
     }
 

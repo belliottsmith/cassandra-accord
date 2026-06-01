@@ -93,7 +93,9 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         readEphemeral(1),
         waitUntilApplied(2),
         applyThenWaitUntilApplied(3),
-        stableThenRead(4);
+        stableThenRead(4),
+        fetchRequest(5),
+        ;
 
         public final byte val;
 
@@ -474,6 +476,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
     public void accept(CommitOrReadNack reply, Throwable failure)
     {
         partialTxn = null;
+        cancel = null;
         if (!isPending() && reply == null && failure == null)
             return; // cancelled
 
@@ -705,8 +708,10 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
     @Nullable Cancellable clearUnsafe()
     {
         Invariants.require(state != State.PENDING);
+        Cancellable cancelSubmission = cancel;
         RegisteredTimeout cancelTimeout = timeout;
         Int2ObjectHashMap<LocalListeners.Registered> cancelListeners = listeners;
+        cancel = null;
         timeout = null;
         listeners = null;
         waitingOn.clear();
@@ -718,6 +723,8 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             return null;
 
         return () -> {
+            if (cancelSubmission != null)
+                cancelSubmission.cancel();
             if (cancelTimeout != null)
                 cancelTimeout.cancel();
             if (cancelListeners != null)

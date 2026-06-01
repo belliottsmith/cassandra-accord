@@ -18,8 +18,6 @@
 
 package accord.coordinate.tracking;
 
-import java.util.Set;
-
 import accord.local.Node;
 import accord.local.durability.DurabilityLevel;
 import accord.local.durability.DurabilityService.SyncLocal;
@@ -137,7 +135,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
             return including.size() + "/" + (shard.rf - exclude.size()) + '(' + shard.rf + ')';
         }
 
-        DurabilityLevel result(Node.Id self, boolean knownToSelf)
+        DurabilityLevel result(Node.Id self, boolean knownToSelf, boolean hasInFlight)
         {
             SyncLocal local;
             if (including.contains(self) || !shard.nodes.contains(self)) local = SyncLocal.Self;
@@ -146,7 +144,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
 
             SyncRemote remote;
             if (hasSucceeded()) remote = SyncRemote.All;
-            else if (hasQuorumSuccess()) remote = SyncRemote.Quorum;
+            else if (hasQuorumSuccess()) remote = hasInFlight ? SyncRemote.Quorum : SyncRemote.QuorumAndWaitedForAll;
             else if (hasMinorityQuorumSuccess()) remote = SyncRemote.MinorityQuorum;
             else remote = SyncRemote.NoRemote;
 
@@ -157,19 +155,16 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
         }
     }
 
-    final SortedListSet<Node.Id> successes;
     private int waitingOnQuorum;
 
     public DurabilityTracker(Topologies topologies)
     {
         super(topologies, DurabilityShardTracker[]::new, topologies.staleOrRemovedIds(), (p, i, s) -> new DurabilityShardTracker(p, s));
-        successes = SortedListSet.noneOf(topologies.nodes());
         waitingOnQuorum = waitingOnShards;
     }
 
     public RequestStatus recordSuccess(Node.Id node)
     {
-        successes.add(node);
         return recordResponse(this, node, DurabilityShardTracker::onSuccess, node);
     }
 
@@ -189,17 +184,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
         return all(DurabilityShardTracker::hasSucceeded);
     }
 
-    public Set<Node.Id> including()
-    {
-        return successes;
-    }
-
-    public Set<Node.Id> excluding()
-    {
-        return topologies.nodes().without(successes::contains);
-    }
-
-    public ReducingRangeMap<DurabilityLevel> results(Node.Id self, boolean knownToSelf)
+    public ReducingRangeMap<DurabilityLevel> results(Node.Id self, boolean knownToSelf, boolean hasInFlight)
     {
         ReducingRangeMap<DurabilityLevel> result = null;
         ReducingRangeMap.Builder<DurabilityLevel> builder = new ReducingRangeMap.Builder<>(trackers.length);
@@ -211,7 +196,7 @@ public class DurabilityTracker extends SimpleTracker<DurabilityTracker.Durabilit
                 if (tracker == null)
                     continue;
 
-                builder.appendNoOverlap(tracker.shard.range.start(), tracker.result(self, knownToSelf));
+                builder.appendNoOverlap(tracker.shard.range.start(), tracker.result(self, knownToSelf, hasInFlight));
                 builder.appendNoOverlap(tracker.shard.range.end(), null);
             }
 

@@ -19,20 +19,26 @@
 package accord.local;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nonnull;
 
 import accord.api.DataStore;
 import accord.api.DataStore.FetchResult;
+import accord.local.durability.DurabilityResults;
+import accord.local.durability.DurabilityResults.ByIdEntry;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
+import accord.primitives.TxnId;
 import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
 import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
+import accord.utils.async.AsyncResults.SettableWithDescription;
 
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalState;
@@ -53,7 +59,8 @@ abstract class FetchAttempt implements DataStore.FetchRanges, BiConsumer<Object,
     ReducingRangeMap<Timestamp> safeToReadAts;
 
     Runnable cancel;
-    FetchResult fetch;
+    Iterator<Map.Entry<TxnId, ByIdEntry>> toFetch;
+    FetchResult currentFetch;
 
     /**
      * valid: the ranges we are still meant to fetch - i.e. excluding those that have been invalidated or marked failed
@@ -81,7 +88,7 @@ abstract class FetchAttempt implements DataStore.FetchRanges, BiConsumer<Object,
                 return;
 
             valid = valid.without(invalidate);
-            abort = fetch;
+            abort = currentFetch;
             // only cancel the outer future if we have no more ranges to fetch
             cancel = valid.isEmpty() ? this.cancel : null;
             if (fetched.containsAll(valid))

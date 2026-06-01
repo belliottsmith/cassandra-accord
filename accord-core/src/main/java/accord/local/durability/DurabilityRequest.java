@@ -64,7 +64,7 @@ public class DurabilityRequest
         public long lastAttemptAt() { return lastAttemptAt; }
     }
 
-    final AsyncResults.SettableResult<Void> result = new AsyncResults.SettableResult<>();
+    final AsyncResults.SettableResult<DurabilityResults> result = new AsyncResults.SettableResult<>();
     final Object requestedBy;
     final Txn.Kind kind;
     final Timestamp min;
@@ -75,6 +75,7 @@ public class DurabilityRequest
 
     private Ranges agreed = Ranges.EMPTY;
     private Ranges achieved = Ranges.EMPTY;
+    private DurabilityResults success = DurabilityResults.EMPTY;
 
     private LinkedHashMap<TxnId, DurableEvents> events;
 
@@ -142,7 +143,7 @@ public class DurabilityRequest
 
     void reportSuccess()
     {
-        result.trySuccess(null);
+        result.trySuccess(success);
         Timeouts.RegisteredTimeout cancel = timeout;
         if (cancel != null) cancel.cancel();
     }
@@ -172,7 +173,7 @@ public class DurabilityRequest
         Ranges expect = waitingOn.slice(intersecting, Minimal);
         Ranges satisfies = expect.slice(durability.satisfies(require), Minimal);
         Ranges success = satisfies.slice(waitingOn, Minimal);
-        Ranges failed = expect.without(success);
+        Ranges failed = expect.without(satisfies);
 
         if (!failed.isEmpty())
             logFailure(success, failed, e, durability);
@@ -188,6 +189,7 @@ public class DurabilityRequest
             return false;
 
         this.achieved = newAchieved;
+        this.success = this.success.merge(DurabilityResults.of(achieved, durability.syncPoint.syncId, durability.readable));
         if (e != null) logger.info("{}: Successfully achieved durability for {} requested by {}. Remaining: {}.", syncPoint.syncId, ranges, this, ranges.without(this.achieved));
         else if (logger.isDebugEnabled()) logger.debug("{}: partially satisfies {}. Remaining: {}.", syncPoint.syncId, this, ranges.without(this.achieved));
         return this.achieved.containsAll(ranges);

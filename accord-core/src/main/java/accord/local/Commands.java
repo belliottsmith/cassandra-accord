@@ -783,6 +783,7 @@ public class Commands
         }
         else
         {
+            Invariants.require(command.hasBeen(PreApplied));
             return command.writes()
                           .apply(safeStore, executes, command.partialTxn())
                           .then(head -> new PostApply<>(head, unsafeStore, txnId, executes, false));

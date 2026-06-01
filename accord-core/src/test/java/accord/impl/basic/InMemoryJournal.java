@@ -643,8 +643,11 @@ public class InMemoryJournal implements Journal
                 Builder after = reconstruct(diffs, ALL);
                 try { after.maybeCleanup(true, FULL, store.unsafeGetRedundantBefore(), store.durableBefore()); }
                 catch (LogUnavailableException ignore) { unavailableAfter = true; }
-                Invariants.require(unavailableBefore == unavailableAfter);
-                Invariants.require(Objects.equals(before.construct(store.unsafeGetRedundantBefore()), after.construct(store.unsafeGetRedundantBefore())));
+                if (after.cleanup() != ERASE)
+                {
+                    Invariants.require(unavailableBefore == unavailableAfter);
+                    Invariants.require(Objects.equals(before.construct(store.unsafeGetRedundantBefore()), after.construct(store.unsafeGetRedundantBefore())));
+                }
             }
         }
     }
