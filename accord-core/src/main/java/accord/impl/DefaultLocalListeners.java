@@ -36,7 +36,6 @@ import accord.api.VisibleForImplementation;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
-import accord.local.ExecutionContext.ExecutionSequence;
 import accord.local.Node;
 import accord.local.ExecutionContext;
 import accord.local.SafeCommand;
@@ -100,7 +99,7 @@ public class DefaultLocalListeners implements LocalListeners
         @Override
         public void notify(SafeCommandStore safeStore, SafeCommand safeCommand, TxnId listenerId)
         {
-            SafeCommand listener = safeStore.ifLoadedAndInitialised(listenerId);
+            SafeCommand listener = safeStore.unsafeIfLoadedAndInitialisedNoCleanup(listenerId);
             if (listener != null && safeStore.tryRecurse())
             {
                 try { Commands.listenerUpdate(safeStore, listener, safeCommand); }
@@ -119,7 +118,7 @@ public class DefaultLocalListeners implements LocalListeners
 
         private static void notify(SafeCommandStore safeStore, TxnId listenerId, TxnId updatedId)
         {
-            Commands.listenerUpdate(safeStore, safeStore.unsafeGet(listenerId), safeStore.unsafeGet(updatedId));
+            Commands.listenerUpdate(safeStore, safeStore.unsafeTryGet(listenerId), safeStore.unsafeTryGet(updatedId));
         }
 
         @Override
@@ -561,7 +560,7 @@ public class DefaultLocalListeners implements LocalListeners
                 return;
 
             commandStore.execute(entry, safeStore -> {
-                SafeCommand safeCommand = safeStore.unsafeGet(entry);
+                SafeCommand safeCommand = safeStore.unsafeTryGet(entry);
                 Command command = safeCommand.current();
                 SaveStatus saveStatus = command.saveStatus();
                 Invariants.require(saveStatus.compareTo(entry.await) >= 0 || command.participants().stillOwns().isEmpty());
@@ -580,10 +579,8 @@ public class DefaultLocalListeners implements LocalListeners
             if (listeners != null)
             {
                 if (Invariants.isParanoid()) listeners.checkIntegrity();
-                // On removal listeners contains nulls, so skip
-                for (int i = 0 ; i < listeners.length ; i++)
+                for (RegisteredComplexListener l : listeners.listeners)
                 {
-                    RegisteredComplexListener l = listeners.listeners[i];
                     if (l != null)
                         l.index = -1;
                 }

@@ -791,7 +791,7 @@ abstract class WaitingState extends HomeState
         if ((callbackId & 1) != 1)
             return;
 
-        SafeCommand safeCommand = safeStore.unsafeGet(txnId);
+        SafeCommand safeCommand = safeStore.unsafeTryGet(txnId);
         Tracing tracing = owner.node.agent().trace(txnId, maxParticipants(safeCommand), WaitProgress);
 
         BlockedUntil querying = querying();

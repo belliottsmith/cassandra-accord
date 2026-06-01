@@ -49,7 +49,7 @@ public interface NotifySink
         @Override
         public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
         {
-            SafeCommand safeCommand = safeStore.ifLoadedAndInitialised(txnId);
+            SafeCommand safeCommand = safeStore.unsafeIfLoadedAndInitialisedNoCleanup(txnId);
             if (safeCommand != null && safeStore.tryRecurse())
             {
                 try { notWaiting(safeStore, safeCommand, key, uniqueHlc); }
@@ -58,7 +58,7 @@ public interface NotifySink
             else
             {
                 safeStore.commandStore().execute(ExecutionContext.unsequenced(txnId, "Notify"), safeStore0 -> {
-                    notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc);
+                    notWaiting(safeStore0, safeStore0.unsafeGetNoCleanup(txnId), key, uniqueHlc);
                 }, safeStore.agent());
             }
         }
@@ -129,7 +129,7 @@ public interface NotifySink
                 update = safeStore.ifLoadedAndInitialised(key);
             if (update != null && safeStore.tryRecurse())
             {
-                try { update.callback(safeStore, safeStore.unsafeGet(txnId).current(), false); }
+                try { update.callback(safeStore, safeStore.unsafeGetNoCleanup(txnId).current(), false); }
                 finally { safeStore.unrecurse(); }
             }
             else

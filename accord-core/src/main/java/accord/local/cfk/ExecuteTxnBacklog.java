@@ -65,7 +65,7 @@ public class ExecuteTxnBacklog implements NotifySink
     private void execute(CommandStore commandStore, TxnId txnId)
     {
         commandStore.execute(ExecutionContext.unsequenced(txnId, "Load for ExecuteBacklog"), safeStore -> {
-            SafeCommand safeCommand = safeStore.unsafeGet(txnId);
+            SafeCommand safeCommand = safeStore.unsafeTryGet(txnId);
             Command command = safeCommand.current();
             if (command.saveStatus() != ReadyToExecute || command.participants().stillExecutes().isEmpty())
                 return;

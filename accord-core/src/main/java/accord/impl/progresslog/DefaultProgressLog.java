@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Function;
+
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -133,7 +135,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private final Object2ObjectHashMap<TxnId, PendingTask> pendingHome = new Object2ObjectHashMap<>();
 
     private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
-    private final Map<TxnId, Boolean> debugDeleted = Invariants.debug() && Invariants.isParanoid() ? new Object2ObjectHashMap<>() : null;
+    private final Map<TxnId, TxnState> debugDeleted = Invariants.debug() && Invariants.isParanoid() && Invariants.isTesting() ? new Object2ObjectHashMap<>() : null;
 
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
     private static final RunInvoker[] EMPTY_AWAITING_EPOCH_BUFFER = new RunInvoker[0];
@@ -386,7 +388,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
                 // the command might be invalidated, which should be established on load, so simply load the command
                 TxnId txnId = state.txnId;
                 safeStore.commandStore().execute(ExecutionContext.unsequenced(txnId, "Clear Progress"), safeStore0 -> {
-                    safeStore0.unsafeGet(txnId);
+                    safeStore0.unsafeTryGet(txnId);
                 }, node.agent());
             }
 
@@ -444,17 +446,20 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
 
     private void clear(TxnState state)
     {
+        remove(state);
         state.clearHome(this);
         state.setWaitingDone(this);
         Invariants.require(!state.isScheduled());
-        remove(state.txnId);
     }
 
-    void remove(TxnId txnId)
+    void remove(TxnState state)
     {
-        stateMap = BTreeRemoval.<TxnId, TxnState>remove(stateMap, (id, s) -> id.compareTo(s.txnId), txnId);
+        stateMap = BTreeRemoval.<TxnId, TxnState>remove(stateMap, (id, s) -> id.compareTo(s.txnId), state.txnId);
         if (debugDeleted != null)
-            debugDeleted.put(txnId, Boolean.TRUE);
+        {
+            DeletedTxnState copy = new DeletedTxnState(state);
+            debugDeleted.put(copy.txnId, copy);
+        }
     }
 
     @Override
@@ -1181,5 +1186,22 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         for (TxnState state : BTree.<TxnState>iterable(stateMap))
             snapshot.add(state.snapshot());
         return snapshot;
+    }
+
+    private static class DeletedTxnState extends TxnState
+    {
+        final Object debug;
+        protected DeletedTxnState(TxnState copy)
+        {
+            super(copy.txnId);
+            this.encodedState = copy.encodedState;
+            this.debug = debugDeletion.apply(copy.txnId);
+        }
+    }
+
+    private static volatile Function<TxnId, ?> debugDeletion = id -> null;
+    public static void setDebugDeletion(Function<TxnId, ?> newDebugDeletion)
+    {
+        debugDeletion = newDebugDeletion;
     }
 }

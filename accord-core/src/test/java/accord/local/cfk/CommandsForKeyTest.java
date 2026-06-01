@@ -766,7 +766,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public SafeCommand get(TxnId txnId)
+        public SafeCommand unsafeTryGet(TxnId txnId)
         {
             return getInternal(txnId);
         }
