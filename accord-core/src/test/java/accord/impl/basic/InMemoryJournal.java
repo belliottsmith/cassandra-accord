@@ -262,6 +262,11 @@ public class InMemoryJournal implements Journal
     @Override
     public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)
     {
+        // Ensure that we only read the latest topologyUpdate as that is what happens in the
+        // C* implementation
+        int lastIndex = topologyUpdates.size() - 1;
+        if (!topologyUpdates.isEmpty() && topologyUpdates.get(lastIndex).global.equals(topologyUpdate.global))
+            topologyUpdates.remove(lastIndex);
         topologyUpdates.add(topologyUpdate);
         if (onFlush != null)
             onFlush.run();
