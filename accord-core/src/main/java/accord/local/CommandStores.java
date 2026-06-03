@@ -93,7 +93,6 @@ import static java.util.stream.Collectors.toList;
  */
 public abstract class CommandStores implements AsyncExecutorFactory
 {
-    @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(CommandStores.class);
 
     public interface LatentStoreSelector
@@ -128,7 +127,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
          */
         Ranges ranges(ShardHolder shard);
 
-        default @Nullable Long minEpoch() { return null; };
+        default @Nullable long minEpoch() { return -1L; };
     }
 
     public interface UnrestrictedStoreSelector extends StoreSelector
@@ -148,11 +147,13 @@ public abstract class CommandStores implements AsyncExecutorFactory
             this.maxEpoch = maxEpoch;
         }
 
+        @Override
         public StoreSelection select(Snapshot snapshot)
         {
             return StoreFinder.find(snapshot, keysOrRanges);
         }
 
+        @Override
         public @Nullable Ranges ranges(ShardHolder shard)
         {
             Ranges ranges = shard.ranges().allBetween(minEpoch, maxEpoch);
@@ -161,7 +162,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
             return ranges;
         }
 
-        public Long minEpoch()
+        @Override
+        public long minEpoch()
         {
             return minEpoch;
         }
@@ -1108,7 +1110,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
     {
         Snapshot snapshot = current;
         StoreSelection selection = selector.select(snapshot);
-        Long minEpoch = selector.minEpoch();
+        long minEpoch = selector.minEpoch();
         AsyncChain<O> chain = null;
         for (int i = selection.firstSetBit(); i >= 0 ; i = selection.nextSetBit(i + 1, -1))
         {
@@ -1117,7 +1119,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             if (ranges == null)
                 continue;
 
-            if (minEpoch != null && unsafelyTouchesRegainedRanges(snapshot, shard, mapReduceConsume.scope, minEpoch))
+            if (minEpoch >= 0 && unsafelyTouchesRegainedRanges(snapshot, shard, mapReduceConsume.scope, minEpoch))
                 return AsyncChains.failure(new OverlappingCommandStoresException());
 
             AsyncChain<O> next = mapReduceConsume.applyAsync(ranges, shard.store);
@@ -1125,7 +1127,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 chain = chain != null ? AsyncChains.reduce(chain, next, mapReduceConsume) : next;
         }
 
-        if (minEpoch != null && snapshot.previouslyOwned.overlapsDeletedCommandStore(snapshot.shardRanges, minEpoch, mapReduceConsume.scope))
+        if (minEpoch >= 0 && snapshot.previouslyOwned.overlapsDeletedCommandStore(snapshot.shardRanges, minEpoch, mapReduceConsume.scope))
             return AsyncChains.failure(new DeletedCommandStoresException());
 
         return chain == null ? AsyncChains.success(null) : chain;
