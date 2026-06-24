@@ -192,6 +192,7 @@ public interface PreLoadContext
         @Override public Timestamp executeAt() { return wrapped.executeAt(); }
         @Override public String reason() { return wrapped.reason(); }
         @Override public String describe() { return wrapped.describe(); }
+        @Override public String toString() { return wrapped.toString(); }
     }
 
     class OverrideKeys extends Wrapped

@@ -382,10 +382,12 @@ public abstract class ReadCoordinator<Result, Reply extends accord.messages.Repl
 
     public final void start()
     {
-        node.register(this);
-        if (tracing != null)
-            Coordination.traceStart(tracing, this);
-        if (initialise(tracing)) startOnceInitialised();
+        if (initialise(tracing)) executor.executeMaybeImmediately(() -> {
+            node.register(this);
+            if (tracing != null)
+                Coordination.traceStart(tracing, this);
+            startOnceInitialised();
+        });
         else finishOnExhaustion();
     }
 

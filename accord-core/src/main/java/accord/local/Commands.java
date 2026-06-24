@@ -838,7 +838,7 @@ public class Commands
         WaitingOn waitingOn = command.waitingOn();
         if (waitingOn.isWaiting())
         {
-            if (!removeRedundantDependencies(safeStore, safeCommand) || (waitingOn = safeCommand.current().waitingOn()).isWaiting())
+            if (!removeRedundantDependencies(safeStore, safeCommand) || (waitingOn = (command = safeCommand.current()).waitingOn()).isWaiting())
             {
                 if (alwaysNotifyListeners)
                     safeStore.notifyListeners(safeCommand, command);

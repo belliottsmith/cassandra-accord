@@ -148,7 +148,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
     transient int waitingOnCount;
     transient Ranges unavailable;
     transient Int2ObjectHashMap<LocalListeners.Registered> listeners = new Int2ObjectHashMap<>();
-    transient Cancellable cancel;
+    transient Cancellable cancel; // TODO (expected): we don't seem to clear this once we've finished processing and are waiting on a listener
     transient RegisteredTimeout timeout;
 
     public ReadData(Node.Id to, Topologies topologies, TxnId txnId, Participants<?> scope, @Nullable Txn txn, @Nullable Timestamp executeAt, long executeAtEpoch)

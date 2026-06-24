@@ -73,6 +73,7 @@ import accord.utils.UnhandledEnum;
 import org.agrona.collections.IntHashSet;
 
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
+import static accord.api.ProtocolModifiers.executeAtReplica;
 import static accord.api.ProtocolModifiers.replicaExecuteDistributedPersist;
 import static accord.api.ProtocolModifiers.recoverReads;
 import static accord.api.ProtocolModifiers.fastReadExecutionMayResendTxn;
@@ -253,6 +254,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, READ_REQ, MICROSECONDS));
             if (!isPrivilegedVoteCommitting)
                 start(Collections.emptyList(), Collections.singletonList(node.id()));
+            if (executeAtReplica(txnId, txn))
+                candidates.clear();
         }
         else if (path == FAST && txnId.hasPrivilegedCoordinator())
         {
@@ -513,6 +516,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private void onExternalSuccess(Result result)
     {
+        // TODO (expected): do we avoid executeMaybeImmediately here to avoid holding cross-executor locks?
+        //  Document if so, audit related calls and/or make tryExecuteImmediately safe (e.g. reject cross-executor calls).
         executor.execute(() -> {
             if (!trySetDone())
                 return;
@@ -538,7 +543,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
         if (replicaExecuteDistributedPersist())
         {
-            executor.executeMaybeImmediately(() -> {
+            executor.execute(() -> {
                 if (!trySetDone())
                     return;
 
@@ -620,6 +625,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                     else safeCfk.overrideSink(null);
                 }
             }
+
+            if (executeAtReplica(txnId, txn))
+                return Waiting;
 
             return super.applyInternal(safeStore, safeCommand, participants);
         }

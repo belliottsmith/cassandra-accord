@@ -130,7 +130,7 @@ public interface CoordinationAdapter<R>
             static final TxnAdapter MINIMAL = new TxnAdapter(Minimal);
             static final TxnAdapter MAXIMAL = new TxnAdapter(Maximal);
 
-            final Apply.Kind applyKind;
+            protected final Apply.Kind applyKind;
             public TxnAdapter(Apply.Kind applyKind)
             {
                 this.applyKind = applyKind;
