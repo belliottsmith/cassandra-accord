@@ -90,10 +90,8 @@ import static accord.local.Commands.Validated.UPDATE_TXN_IGNORE_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_KEEP_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_AND_DEPS;
 import static accord.local.Commands.Validated.UPDATE_TXN_MERGE_DEPS;
-import static accord.local.LoadKeys.INCR;
-import static accord.local.LoadKeys.SYNC;
-import static accord.local.LoadKeysFor.WRITE;
-import static accord.local.ExecutionContext.contextFor;
+import static accord.local.ExecutionContext.unsequencedIdempotentIncrementalWrite;
+import static accord.local.LoadKeys.ASYNC;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
@@ -309,7 +307,7 @@ public class Commands
         PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
-        Command accepted = safeCommand.accept(safeStore, newSaveStatus, participants, ballot, executeAt, partialTxn, partialDeps, ballot);
+        Command accepted = safeCommand.accept(safeStore, txnId, newSaveStatus, participants, ballot, executeAt, partialTxn, partialDeps, ballot);
         safeStore.agent().replicaEvents().onAccepted(safeStore, accepted);
         safeStore.notifyListeners(safeCommand, command);
 
@@ -700,7 +698,7 @@ public class Commands
         @Override
         public AsyncChain<Void> apply(V v)
         {
-            return commandStore.priorityChain(this, this);
+            return commandStore.continuationChain(this, this);
         }
 
         @Override
@@ -711,8 +709,9 @@ public class Commands
 
         @Override public TxnId primaryTxnId() { return txnId; }
         @Override public Unseekables<?> keys() { return participants; }
-        @Override public LoadKeys loadKeys() { return SYNC; }
+        @Override public LoadKeys loadKeys() { return ASYNC; }
         @Override public String reason() { return "Post Apply"; }
+        @Override public ExecutionKind executionKind() { return ExecutionKind.APPLY; }
     }
 
     private static class PostFastApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, ExecutionContext
@@ -740,7 +739,7 @@ public class Commands
         @Override
         public AsyncChain<Void> apply(V v)
         {
-            return commandStore.priorityChain(this, this);
+            return commandStore.continuationChain(this, this);
         }
 
         @Override
@@ -762,11 +761,12 @@ public class Commands
 
         @Override public TxnId primaryTxnId() { return txnId; }
         @Override public Unseekables<?> keys() { return participants; }
-        @Override public LoadKeys loadKeys() { return SYNC; }
+        @Override public LoadKeys loadKeys() { return ASYNC; }
         @Override public String reason() { return "Post Apply"; }
+        @Override public ExecutionKind executionKind() { return ExecutionKind.APPLY; }
     }
 
-    public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, Command command)
+    public static AsyncChain<Void> applyChain(SafeCommandStore safeStore, Command.Executed command)
     {
         // TODO (required): make sure we are correctly handling (esp. C* side with validation logic) executing a transaction
         //  that was pre-bootstrap for some range (so redundant and we may have gone ahead of), but had to be executed locally
@@ -857,7 +857,11 @@ public class Commands
         {
             default: throw UnhandledEnum.invalid(command.status());
             case Stable:
-                if (executeAtReplica(txnId, command.partialTxn()) && !command.participants().executes().isEmpty() && safeStore.safeToReadAt(command.executeAt()).containsAll(command.participants().executes()))
+                if (executeAtReplica(txnId, command.partialTxn())
+                    && !command.participants().executes().isEmpty()
+                    && safeStore.safeToReadAt(command.executeAt()).containsAll(command.participants().executes())
+                    && safeStore.commandStore().node().topology().epoch() >= command.executeAt.epoch()
+                )
                 {
                     if (null == (command = replicaExecute(safeStore, safeCommand, command, txnId)))
                         break;
@@ -959,7 +963,7 @@ public class Commands
 
     private static void replicaExecuteSlowApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, long stamp)
     {
-        unsafeStore.execute(ExecutionContext.contextFor(txnId, "Replica Apply"), safeStore -> {
+        unsafeStore.execute(ExecutionContext.unsequenced(txnId, "Replica Apply"), safeStore -> {
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
             Command command = safeCommand.current();
             if (stamp != unsafeStore.node.currentStamp() && !safeStore.safeToReadAt(applyAt).containsAll(command.route()))
@@ -983,7 +987,7 @@ public class Commands
 
     private static void notifyAfterFailedFastApply(CommandStore unsafeStore, TxnId txnId)
     {
-        unsafeStore.execute(ExecutionContext.contextFor(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore -> {
+        unsafeStore.execute(ExecutionContext.unsequenced(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore -> {
             notifyAfterFailedFastApply(safeStore, txnId);
         }, unsafeStore.agent());
     }
@@ -1017,14 +1021,14 @@ public class Commands
             // we don't want cleanup to transitively invoke a listener we've registered,
             // as we might still be initialising the WaitingOn collection
             SafeCommand dep = store.unsafeGetNoCleanup(upd.txnId(i));
-            if (dep == null || dep.isUnset() || !dep.current().hasBeen(PreCommitted))
+            if (dep == null || !dep.current().hasBeen(PreCommitted))
                 return;
             updateWaitingOn(store, w, exec, upd, dep);
         });
 
         initialise.forEachWaitingOnKey(safeStore, initialise, waiting, (store, upd, cmd, i) -> {
             SafeCommandsForKey safeCfk = store.ifLoadedAndInitialised(upd.keys.get(i));
-            if (safeCfk == null || safeCfk.isUnset())
+            if (safeCfk == null)
                 return;
 
             if (safeCfk.current().hasUniqueHlcAndIsReadyToExecute(cmd.txnId(), cmd.executeAt(), cmd.partialDeps()))
@@ -1342,7 +1346,7 @@ public class Commands
         if (updates.compareTo(dependencyElision()) >= 0 && CommandsForKey.manages(txnId))
         {
             AbstractUnseekableKeys keys = (AbstractUnseekableKeys)updated.participants().touches();
-            ExecutionContext context = ExecutionContext.contextFor(keys, INCR, WRITE, "Set Durable");
+            ExecutionContext context = unsequencedIdempotentIncrementalWrite(keys, "Set Durable");
             ExecutionContext execute = safeStore.canExecute(context);
             if (execute != null)
             {
@@ -1351,7 +1355,7 @@ public class Commands
             if (execute != context)
             {
                 if (execute != null)
-                    context = contextFor(keys.without(execute.keys()), INCR, WRITE, "Set Durable");
+                    context = unsequencedIdempotentIncrementalWrite(keys.without(execute.keys()), "Set Durable");
 
                 Invariants.require(!context.keys().isEmpty());
                 safeStore = safeStore; // prevent accidental usage inside lambda
@@ -1609,6 +1613,12 @@ public class Commands
         public TxnId additionalTxnId()
         {
             return loadDepId;
+        }
+
+        @Override
+        public ExecutionSequence executionSequence()
+        {
+            return ExecutionSequence.UNSEQUENCED;
         }
     }
 

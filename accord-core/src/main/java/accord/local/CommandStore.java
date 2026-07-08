@@ -35,7 +35,10 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
+import accord.api.ExclusiveAsyncExecutor;
 import accord.impl.AbstractReplayer;
+import accord.local.durability.DurabilityLevel;
+import accord.local.durability.DurabilityResult;
 import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedMap;
@@ -76,6 +79,9 @@ import static accord.api.DataStore.FetchKind.Sync;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.durability.DurabilityService.SyncLocal.KnownToSelf;
+import static accord.local.durability.DurabilityService.SyncLocal.Self;
+import static accord.local.durability.DurabilityService.SyncRemote.NoRemote;
+import static accord.messages.ReadData.unavailable;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
@@ -99,7 +105,7 @@ import static accord.utils.Invariants.nonNull;
 /**
  * Single threaded internal shard of accord transaction metadata
  */
-public abstract class CommandStore implements AbstractAsyncExecutor, SequentialAsyncExecutor
+public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAsyncExecutor
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandStore.class);
 
@@ -272,16 +278,17 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     }
 
     public abstract AsyncChain<Void> chain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer);
-    public abstract <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply);
-
-    public AsyncChain<Void> priorityChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
+    public abstract AsyncChain<Void> continuationChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer);
+    public Cancellable executeContinuation(ExecutionContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
-        return chain(context, consumer);
+        return continuationChain(context, consumer).begin(callback);
     }
 
-    public <T> AsyncChain<T> priorityChain(ExecutionContext context, Function<? super SafeCommandStore, T> function)
+    public abstract <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply);
+    public abstract <T> AsyncChain<T> continuationChain(ExecutionContext context, Function<? super SafeCommandStore, T> apply);
+    public <T> Cancellable executeContinuation(ExecutionContext context, Function<? super SafeCommandStore, T> consumer, BiConsumer<? super T, Throwable> callback)
     {
-        return chain(context, function);
+        return continuationChain(context, consumer).begin(callback);
     }
 
     public Cancellable execute(ExecutionContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
@@ -478,26 +485,28 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         unsafeSetMaxDecidedRX(maxDecidedRX.update(ranges, txnId));
     }
 
-    protected void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, Ranges ranges, SaveStatus prevStatus)
+    protected void markExclusiveSyncPointLocallyApplied(SafeCommandStore safeStore, TxnId txnId, TxnId txnIdWithFlags, RangeRoute route, Ranges ranges, SaveStatus prevStatus)
     {
         // TODO (desired): narrow ranges to those that are owned
         if (prevStatus.compareTo(SaveStatus.Applied) < 0)
         {
             String alreadyApplied = redundantBefore.foldl(ranges, (b, m) -> {
-                if (b.maxBound(LOCALLY_APPLIED).compareTo(txnId) > 0 && b.maxBound(UNREADY).compareTo(txnId) <= 0 && !b.isLocallyRetired())
+                if (b.maxBound(LOCALLY_APPLIED).compareTo(txnIdWithFlags) > 0 && b.maxBound(UNREADY).compareTo(txnIdWithFlags) <= 0 && !b.isLocallyRetired())
                     return m + (m.isEmpty() ? "" : ", ") + b.range + ": " + b;
                 return m;
             }, "");
-            Invariants.expect(alreadyApplied.isEmpty(), "%s should already have been applied: %s", txnId, alreadyApplied);
+            Invariants.expect(alreadyApplied.isEmpty(), "%s should already have been applied: %s", txnIdWithFlags, alreadyApplied);
         }
 
-        Invariants.requireArgument(txnId.isSyncPoint());
-        RedundantBefore addNow = RedundantBefore.create(ranges, txnId, LOCALLY_APPLIED_ONLY);
+        Invariants.requireArgument(txnIdWithFlags.isSyncPoint());
+        RedundantBefore addNow = RedundantBefore.create(ranges, txnIdWithFlags, LOCALLY_APPLIED_ONLY);
         safeStore.upsertRedundantBefore(addNow);
-        RedundantBefore addOnDataStoreDurable = RedundantBefore.create(ranges, txnId, LOCALLY_DURABLE_TO_DATA_STORE_ONLY);
-        RedundantBefore addOnCommandStoreDurable = RedundantBefore.create(ranges, txnId, LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY);
+        RedundantBefore addOnDataStoreDurable = RedundantBefore.create(ranges, txnIdWithFlags, LOCALLY_DURABLE_TO_DATA_STORE_ONLY);
+        RedundantBefore addOnCommandStoreDurable = RedundantBefore.create(ranges, txnIdWithFlags, LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY);
         dataStore.ensureDurable(this, ranges, addOnDataStoreDurable, 0);
         ensureDurable(ranges, addOnCommandStoreDurable);
+        Ranges unavailable = unavailable(txnId, txnIdWithFlags, ranges, safeStore.ranges(), safeStore.safeToReadAt());
+        node.durability().report(new DurabilityResult(new MinimalSyncPoint(txnId, txnIdWithFlags, route.without(unavailable)), new DurabilityLevel(Self, NoRemote, null), null));
     }
 
     /**
@@ -1096,7 +1105,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         try
         {
             TxnId waitingOn = iterator.next();
-            ExecutionContext context = ExecutionContext.contextFor(waitingOn, "Try Execute Listening");
+            ExecutionContext context = ExecutionContext.unsequenced(waitingOn, "Try Execute Listening");
             if (!safeStore.canExecuteWith(context) || !safeStore.tryRecurse())
             {
                 //noinspection DataFlowIssue

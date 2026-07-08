@@ -23,7 +23,6 @@ import java.util.List;
 import java.util.NavigableMap;
 
 import accord.api.RoutingKey;
-import accord.local.CommandStore;
 import accord.local.LoadKeys;
 import accord.local.ExecutionContext;
 import accord.local.RedundantBefore;
@@ -46,20 +45,11 @@ public abstract class AbstractSafeCommandStore<C extends SafeCommand,
 extends SafeCommandStore
 {
     protected final ExecutionContext context;
-
-    private final CommandStore commandStore;
     private FieldUpdates fieldUpdates;
 
-    protected AbstractSafeCommandStore(ExecutionContext context, CommandStore commandStore)
+    protected AbstractSafeCommandStore(ExecutionContext context)
     {
         this.context = context;
-        this.commandStore = commandStore;
-    }
-
-    @Override
-    public CommandStore commandStore()
-    {
-        return commandStore;
     }
 
     public interface CommandStoreCaches<C, CFK> extends AutoCloseable
@@ -265,10 +255,12 @@ extends SafeCommandStore
     @Override
     public RangesForEpoch ranges()
     {
+        // TODO (expected): do we even need this? We should probably reflect this immediately in CommandStore, and revert if we fail
+        // if we remove it
         if (fieldUpdates != null && fieldUpdates.newRangesForEpoch != null)
             return fieldUpdates.newRangesForEpoch;
 
-        return commandStore.unsafeGetRangesForEpoch();
+        return commandStore().unsafeGetRangesForEpoch();
     }
 
     @Override

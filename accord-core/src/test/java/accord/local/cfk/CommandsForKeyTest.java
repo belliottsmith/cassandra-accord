@@ -90,6 +90,7 @@ import accord.primitives.Writes;
 import accord.utils.DefaultRandom;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
+import accord.utils.async.AsyncCallbacks;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResults;
@@ -678,7 +679,7 @@ public class CommandsForKeyTest
                     result = prev.update(safeStore, update.next);
                     safeCfk.set(result.cfk());
                     if (rnd.decide(pruneChance))
-                        safeCfk.set(safeCfk.current.maybePrune(pruneInterval, pruneHlcDelta));
+                        safeCfk.set(safeCfk.current().maybePrune(pruneInterval, pruneHlcDelta));
                     result.postProcess(safeStore, prev, update.next, canon, false);
                 }
 
@@ -697,51 +698,24 @@ public class CommandsForKeyTest
         }
     }
 
-
     static class TestSafeCommand extends SafeCommand
     {
         final Canon canon;
-        Command current;
+        Command prev;
         public TestSafeCommand(TxnId txnId, Canon canon, Command command)
         {
             super(txnId);
             this.canon = canon;
-            current = command;
-        }
-
-        @Override
-        public Command current() { return current; }
-
-        @Override
-        public void markUnsafe() {}
-
-        @Override
-        public boolean isUnsafe() { return false; }
-
-        @Override
-        protected void set(Command command)
-        {
-            canon.set(current, command);
-            current = command;
+            current = prev = command;
         }
     }
 
     static class TestSafeCommandsForKey extends SafeCommandsForKey
     {
-        CommandsForKey current;
         public TestSafeCommandsForKey(CommandsForKey cfk)
         {
             super(cfk.key());
             current = cfk;
-        }
-
-        @Override
-        public CommandsForKey current() { return current; }
-
-        @Override
-        protected void set(CommandsForKey command)
-        {
-            current = command;
         }
 
         @Override
@@ -818,7 +792,7 @@ public class CommandsForKeyTest
         @Override
         public SafeCommand ifLoadedAndInitialised(TxnId txnId)
         {
-            if (txnId.compareTo(cfk.current.prunedBefore()) < 0)
+            if (txnId.compareTo(cfk.current().prunedBefore()) < 0)
                 return null;
 
             return getInternal(txnId);
@@ -1025,6 +999,12 @@ public class CommandsForKeyTest
         }
 
         @Override
+        public AsyncChain<Void> continuationChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
+        {
+            return chain(context, consumer);
+        }
+
+        @Override
         public void execute(Runnable run)
         {
             queue.add(new Task(ignore -> run.run()));
@@ -1034,6 +1014,12 @@ public class CommandsForKeyTest
         public <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply)
         {
             throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public <T> AsyncChain<T> continuationChain(ExecutionContext context, Function<? super SafeCommandStore, T> apply)
+        {
+            return chain(context, apply);
         }
 
         @Override

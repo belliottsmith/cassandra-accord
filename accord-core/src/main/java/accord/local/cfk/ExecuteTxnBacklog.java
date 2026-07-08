@@ -64,7 +64,7 @@ public class ExecuteTxnBacklog implements NotifySink
 
     private void execute(CommandStore commandStore, TxnId txnId)
     {
-        commandStore.execute(ExecutionContext.contextFor(txnId, "Load for ExecuteBacklog"), safeStore -> {
+        commandStore.execute(ExecutionContext.unsequenced(txnId, "Load for ExecuteBacklog"), safeStore -> {
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
             Command command = safeCommand.current();
             if (command.saveStatus() != ReadyToExecute || command.participants().stillExecutes().isEmpty())
@@ -82,7 +82,7 @@ public class ExecuteTxnBacklog implements NotifySink
 
             node.withEpochAtLeast(executeAt.epoch(), null, node.agent(), () -> {
                 node.agent().coordinatorEvents().onRecoveryStarted(txnId, ballot);
-                Adapters.standard().execute(node, node.someSequentialExecutor(), null, route, command.acceptedOrCommitted(), path, CoordinationFlags.none(), txnId, txn, executeAt, deps, deps, (result, fail) -> {
+                Adapters.standard().execute(node, node.someExclusiveExecutor(), null, route, command.acceptedOrCommitted(), path, CoordinationFlags.none(), txnId, txn, executeAt, deps, deps, (result, fail) -> {
                     if (fail == null) node.reportLocalExecution(txnId, route, ballot, null, null, result);
                     else node.agent().onException(fail);
                 });

@@ -65,7 +65,10 @@ import accord.primitives.Unseekables;
 import accord.utils.AccordGens;
 import accord.utils.RandomSource;
 import accord.utils.RandomTestRunner;
+import accord.utils.async.AsyncCallbacks;
 import accord.utils.async.AsyncChain;
+import accord.utils.async.Cancellable;
+
 import org.agrona.collections.IntHashSet;
 import org.agrona.collections.ObjectHashSet;
 
@@ -413,6 +416,8 @@ public class RemoteListenersTest
         @Override public boolean inStore() { return true; }
         @Override public AsyncChain<Void> chain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
         @Override public <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply) { return null; }
+        @Override public AsyncChain<Void> continuationChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer) { return null; }
+        @Override public <T> AsyncChain<T> continuationChain(ExecutionContext context, Function<? super SafeCommandStore, T> apply) { return null; }
         @Override public void shutdown() {}
         @Override public <T> AsyncChain<T> chain(Callable<T> call) { return null; }
         @Override public void execute(Runnable run) { throw new UnsupportedOperationException(); }
