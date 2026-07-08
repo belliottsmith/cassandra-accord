@@ -28,7 +28,7 @@ import accord.coordinate.tracking.AbstractTracker;
 import accord.impl.AbstractFetchCoordinator;
 import accord.local.CommandStore;
 import accord.local.Node;
-import accord.local.PreLoadContext;
+import accord.local.ExecutionContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.SyncPoint;
 import accord.primitives.PartialDeps;
@@ -64,7 +64,7 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
             return;
 
         ListData listData = (ListData) data;
-        persisting.add(commandStore.chain((PreLoadContext.Empty) () -> "List Fetch", safeStore -> {
+        persisting.add(commandStore.chain((ExecutionContext.Empty) () -> "List Fetch", safeStore -> {
             listData.forEach((key, value) -> listStore.writeUnsafe(key, value));
         }).flatMapResult(ignore -> listStore.snapshot(true)).invoke((success, fail) -> {
             if (fail == null) success(from, received);

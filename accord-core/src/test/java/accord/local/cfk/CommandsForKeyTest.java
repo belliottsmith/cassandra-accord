@@ -58,11 +58,10 @@ import accord.impl.IntKey;
 import accord.local.CommandBuilder;
 import accord.local.Command;
 import accord.local.CommandStore;
-import accord.local.CommandStores;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.Node;
 import accord.local.NodeCommandStoreService;
-import accord.local.PreLoadContext;
+import accord.local.ExecutionContext;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -846,13 +845,13 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public PreLoadContext canExecute(PreLoadContext context)
+        public ExecutionContext canExecute(ExecutionContext context)
         {
             return context;
         }
 
         @Override
-        public PreLoadContext context()
+        public ExecutionContext context()
         {
             return null;
         }
@@ -1011,7 +1010,7 @@ public class CommandsForKeyTest
         @Override protected void ensureDurable(Ranges ranges, RedundantBefore onDataStoreDurable) {}
 
         @Override
-        public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> chain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
         {
             return new AsyncChains.Head<>()
             {
@@ -1032,7 +1031,7 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
+        public <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply)
         {
             throw new UnsupportedOperationException();
         }

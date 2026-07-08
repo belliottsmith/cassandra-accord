@@ -19,12 +19,10 @@
 package accord.local;
 
 import accord.api.RoutingKey;
-import accord.api.VisibleForImplementation;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
-import accord.primitives.Routables;
 import accord.primitives.Routables.Slice;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
@@ -49,7 +47,7 @@ import static accord.local.LoadKeysFor.WRITE;
  *
  * TODO (desired): rename to simply Context, or LoadContext
  */
-public interface PreLoadContext
+public interface ExecutionContext
 {
     @Nullable TxnId primaryTxnId();
     String reason();
@@ -96,7 +94,7 @@ public interface PreLoadContext
             consumer.accept(additionalTxnId);
     }
 
-    default PreLoadContext slice(Ranges ranges, Slice slice)
+    default ExecutionContext slice(Ranges ranges, Slice slice)
     {
         Unseekables<?> keys = keys();
         int size = keys.size();
@@ -134,7 +132,7 @@ public interface PreLoadContext
      * not whether a subset has been requested - that is, a superset with INCR or ASYNC key information
      * cannot be relied upon for serving INCR or ASYNC subsets in this calculation.
      */
-    default boolean isSubsetOf(PreLoadContext superset)
+    default boolean isSubsetOf(ExecutionContext superset)
     {
         Unseekables<?> keys = keys();
         if (!keys.isEmpty())
@@ -177,10 +175,10 @@ public interface PreLoadContext
         return reason() + (txnIds.isEmpty() ? "" : " for " + txnIds) + (keys.isEmpty() ? "" : (txnIds.isEmpty() ? " for " : " and ") + keys());
     }
 
-    class Wrapped implements PreLoadContext
+    class Wrapped implements ExecutionContext
     {
-        final PreLoadContext wrapped;
-        public Wrapped(PreLoadContext wrapped)
+        final ExecutionContext wrapped;
+        public Wrapped(ExecutionContext wrapped)
         {
             this.wrapped = wrapped;
         }
@@ -197,7 +195,7 @@ public interface PreLoadContext
     class OverrideKeys extends Wrapped
     {
         final Unseekables<?> keys;
-        public OverrideKeys(PreLoadContext wrapped, Unseekables<?> keys)
+        public OverrideKeys(ExecutionContext wrapped, Unseekables<?> keys)
         {
             super(wrapped);
             this.keys = keys;
@@ -206,10 +204,10 @@ public interface PreLoadContext
         @Override public Unseekables<?> keys() { return keys; }
     }
 
-    static PreLoadContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
+    static ExecutionContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
     {
         Invariants.require(primary == null ? additional == null : !primary.equals(additional));
-        return new PreLoadContext()
+        return new ExecutionContext()
         {
             @Override public @Nullable TxnId primaryTxnId() { return primary; }
             @Override public @Nullable TxnId additionalTxnId() { return additional; }
@@ -227,9 +225,9 @@ public interface PreLoadContext
         return primaryTxnId != null && (txnId.equals(primaryTxnId) || txnId.equals(additionalTxnId()));
     }
 
-    static PreLoadContext contextFor(TxnId primary, TxnId additional, String reason)
+    static ExecutionContext contextFor(TxnId primary, TxnId additional, String reason)
     {
-        return new PreLoadContext()
+        return new ExecutionContext()
         {
             @Override public @Nullable TxnId primaryTxnId() { return primary; }
             @Override public @Nullable TxnId additionalTxnId() { return additional; }
@@ -238,9 +236,9 @@ public interface PreLoadContext
         };
     }
 
-    static PreLoadContext contextFor(TxnId primary, String reason)
+    static ExecutionContext contextFor(TxnId primary, String reason)
     {
-        return new PreLoadContext()
+        return new ExecutionContext()
         {
             @Override public @Nullable TxnId primaryTxnId() { return primary; }
             @Override public String reason() { return reason; }
@@ -248,9 +246,9 @@ public interface PreLoadContext
         };
     }
 
-    static PreLoadContext contextFor(TxnId txnId, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
+    static ExecutionContext contextFor(TxnId txnId, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
     {
-        return new PreLoadContext()
+        return new ExecutionContext()
         {
             @Override public @Nullable TxnId primaryTxnId() { return txnId; }
             @Override public Unseekables<?> keys() { return keys; }
@@ -261,16 +259,16 @@ public interface PreLoadContext
         };
     }
 
-    static PreLoadContext contextFor(RoutingKey key, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String describe)
+    static ExecutionContext contextFor(RoutingKey key, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String describe)
     {
         return contextFor(RoutingKeys.of(key), loadKeys, loadKeysFor, describe);
     }
 
     // we don't currently permit range queries without an associated TxnId
-    static PreLoadContext contextFor(AbstractUnseekableKeys keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
+    static ExecutionContext contextFor(AbstractUnseekableKeys keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
     {
         Invariants.require(keys.domain() == Routable.Domain.Key);
-        return new PreLoadContext()
+        return new ExecutionContext()
         {
             @Override public @Nullable TxnId primaryTxnId() { return null; }
             @Override public Unseekables<?> keys() { return keys; }
@@ -281,7 +279,7 @@ public interface PreLoadContext
         };
     }
 
-    interface Empty extends PreLoadContext
+    interface Empty extends ExecutionContext
     {
         @Override default @Nullable TxnId primaryTxnId() { return null; }
     }

@@ -54,7 +54,7 @@ import accord.coordinate.CoordinateMaxConflict;
 import accord.local.CommandStores.BootstrapRangeAction;
 import accord.local.CommandStores.RangesForEpoch;
 import accord.local.Commands.NotifyWaitingOnPlus;
-import accord.local.PreLoadContext.Empty;
+import accord.local.ExecutionContext.Empty;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.primitives.Status.Durability.HasOutcome;
@@ -271,35 +271,35 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         return true;
     }
 
-    public abstract AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer);
-    public abstract <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> apply);
+    public abstract AsyncChain<Void> chain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer);
+    public abstract <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply);
 
-    public AsyncChain<Void> priorityChain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+    public AsyncChain<Void> priorityChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
     {
         return chain(context, consumer);
     }
 
-    public <T> AsyncChain<T> priorityChain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+    public <T> AsyncChain<T> priorityChain(ExecutionContext context, Function<? super SafeCommandStore, T> function)
     {
         return chain(context, function);
     }
 
-    public Cancellable execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
+    public Cancellable execute(ExecutionContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
         return chain(context, consumer).begin(callback);
     }
 
-    public AsyncResult<Void> execute(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+    public AsyncResult<Void> execute(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
     {
         return chain(context, consumer).beginAsResult();
     }
 
-    public <T> Cancellable execute(PreLoadContext context, Function<? super SafeCommandStore, T> apply, BiConsumer<? super T, Throwable> callback)
+    public <T> Cancellable execute(ExecutionContext context, Function<? super SafeCommandStore, T> apply, BiConsumer<? super T, Throwable> callback)
     {
         return chain(context, apply).begin(callback);
     }
 
-    public <T> AsyncResult<T> submit(PreLoadContext context, Function<? super SafeCommandStore, T> apply)
+    public <T> AsyncResult<T> submit(ExecutionContext context, Function<? super SafeCommandStore, T> apply)
     {
         return chain(context, apply).beginAsResult();
     }
@@ -1096,7 +1096,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         try
         {
             TxnId waitingOn = iterator.next();
-            PreLoadContext context = PreLoadContext.contextFor(waitingOn, "Try Execute Listening");
+            ExecutionContext context = ExecutionContext.contextFor(waitingOn, "Try Execute Listening");
             if (!safeStore.canExecuteWith(context) || !safeStore.tryRecurse())
             {
                 //noinspection DataFlowIssue

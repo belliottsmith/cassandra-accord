@@ -32,7 +32,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.CommandStore;
-import accord.local.PreLoadContext;
+import accord.local.ExecutionContext;
 import accord.local.RedundantBefore.QuickBounds;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -872,7 +872,7 @@ class Updating
 
     static void updateUnmanagedAsync(CommandStore commandStore, TxnId txnId, RoutingKey key, NotifySink notifySink)
     {
-        PreLoadContext context = PreLoadContext.contextFor(txnId, RoutingKeys.of(key), SYNC, WRITE, "Update unmanaged CommandsForKey");
+        ExecutionContext context = ExecutionContext.contextFor(txnId, RoutingKeys.of(key), SYNC, WRITE, "Update unmanaged CommandsForKey");
         commandStore.execute(context, safeStore -> {
             SafeCommandsForKey safeCommandsForKey = safeStore.get(key);
             CommandsForKey cur = safeCommandsForKey.current();

@@ -46,7 +46,7 @@ import accord.utils.btree.BTree;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.LoadKeys.SYNC;
 import static accord.local.LoadKeysFor.WRITE;
-import static accord.local.PreLoadContext.contextFor;
+import static accord.local.ExecutionContext.contextFor;
 import static accord.local.cfk.CommandsForKey.InternalStatus.INVALIDATED;
 import static accord.local.cfk.CommandsForKey.InternalStatus.STABLE;
 import static accord.local.cfk.CommandsForKey.Unmanaged.Pending.APPLY;

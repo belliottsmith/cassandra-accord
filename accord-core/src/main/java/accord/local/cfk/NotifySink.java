@@ -22,7 +22,7 @@ import accord.api.ProgressLog.BlockedUntil;
 import accord.api.RoutingKey;
 import accord.local.Command;
 import accord.local.Commands;
-import accord.local.PreLoadContext;
+import accord.local.ExecutionContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
@@ -59,7 +59,7 @@ public interface NotifySink
             }
             else
             {
-                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, "Notify"), safeStore0 -> {
+                safeStore.commandStore().execute(ExecutionContext.contextFor(txnId, "Notify"), safeStore0 -> {
                     notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc);
                 }, safeStore.agent());
             }
@@ -75,7 +75,7 @@ public interface NotifySink
         {
             TxnId txnId = notify.plainTxnId();
 
-            PreLoadContext context = PreLoadContext.contextFor(txnId, "Key Waiting On");
+            ExecutionContext context = ExecutionContext.contextFor(txnId, "Key Waiting On");
             if (safeStore.canExecuteWith(context) && safeStore.tryRecurse())
             {
                 try { doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk); }
@@ -139,7 +139,7 @@ public interface NotifySink
                 RoutingKeys keys = RoutingKeys.of(key);
                 //noinspection ConstantConditions,SillyAssignment
                 safeStore = safeStore; // prevent use in lambda
-                safeStore.commandStore().execute(PreLoadContext.contextFor(txnId, keys, SYNC, WRITE, "Notify"), safeStore0 -> {
+                safeStore.commandStore().execute(ExecutionContext.contextFor(txnId, keys, SYNC, WRITE, "Notify"), safeStore0 -> {
                     doNotifyAlreadyReady(safeStore0, txnId, key);
                 }, safeStore.agent());
             }

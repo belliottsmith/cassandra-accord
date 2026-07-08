@@ -967,7 +967,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 RangesForEpoch rangesForEpoch = new RangesForEpoch(epoch, addRanges);
                 ShardHolder shard = new ShardHolder(supplier.create(nextId++, rangesForEpoch), previouslyOwned.regains(addRanges));
                 shard.ranges = rangesForEpoch;
-                bootstrapUpdates.add(() -> EpochReady.all(epoch, shard.store.execute((PreLoadContext.Empty)() -> "Saving RangesForEpoch to journal for " + shard.store, safeStore -> {
+                bootstrapUpdates.add(() -> EpochReady.all(epoch, shard.store.execute((ExecutionContext.Empty)() -> "Saving RangesForEpoch to journal for " + shard.store, safeStore -> {
                     safeStore.setRangesForEpoch(rangesForEpoch); // to persist it
                 })));
 

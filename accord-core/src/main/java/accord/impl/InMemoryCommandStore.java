@@ -70,8 +70,8 @@ import accord.local.Commands;
 import accord.local.LoadKeysFor;
 import accord.local.MaxDecidedRX;
 import accord.local.NodeCommandStoreService;
-import accord.local.PreLoadContext;
-import accord.local.PreLoadContext.Empty;
+import accord.local.ExecutionContext;
+import accord.local.ExecutionContext.Empty;
 import accord.local.RedundantBefore;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -426,7 +426,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         commandsForRanges.prune(syncId, ranges, safeStore.redundantBefore());
     }
 
-    protected InMemorySafeStore createSafeStore(PreLoadContext context, CommandsForRangeLoad cfrLoad,
+    protected InMemorySafeStore createSafeStore(ExecutionContext context, CommandsForRangeLoad cfrLoad,
                                                 Map<TxnId, InMemorySafeCommand> commands,
                                                 Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
     {
@@ -437,7 +437,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     protected void onWrite(Command current) {}
     protected void onRead(CommandsForKey current) {}
 
-    protected final InMemorySafeStore createSafeStore(PreLoadContext context, CommandsForRangeLoad cfrLoad)
+    protected final InMemorySafeStore createSafeStore(ExecutionContext context, CommandsForRangeLoad cfrLoad)
     {
         Map<TxnId, InMemorySafeCommand> commands = new HashMap<>();
         Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey = new HashMap<>();
@@ -472,7 +472,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         return createSafeStore(context, cfrLoad, commands, commandsForKey);
     }
 
-    public SafeCommandStore beginOperation(PreLoadContext context, @Nullable CommandsForRangeLoad cfrLoad)
+    public SafeCommandStore beginOperation(ExecutionContext context, @Nullable CommandsForRangeLoad cfrLoad)
     {
         if (current != null)
             throw illegalState("Another operation is in progress or it's store was not cleared");
@@ -499,9 +499,9 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
-    protected <T> T executeInContext(InMemoryCommandStore commandStore, PreLoadContext preLoadContext, @Nullable CommandsForRangeLoad cfrLoad, Function<? super SafeCommandStore, T> function)
+    protected <T> T executeInContext(InMemoryCommandStore commandStore, ExecutionContext executionContext, @Nullable CommandsForRangeLoad cfrLoad, Function<? super SafeCommandStore, T> function)
     {
-        SafeCommandStore safeStore = commandStore.beginOperation(preLoadContext, cfrLoad);
+        SafeCommandStore safeStore = commandStore.beginOperation(executionContext, cfrLoad);
         try
         {
             return function.apply(safeStore);
@@ -513,7 +513,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
-    protected <T> void executeInContext(InMemoryCommandStore commandStore, PreLoadContext context, @Nullable CommandsForRangeLoad cfrLoad, Function<? super SafeCommandStore, T> function, BiConsumer<? super T, Throwable> callback)
+    protected <T> void executeInContext(InMemoryCommandStore commandStore, ExecutionContext context, @Nullable CommandsForRangeLoad cfrLoad, Function<? super SafeCommandStore, T> function, BiConsumer<? super T, Throwable> callback)
     {
         try
         {
@@ -660,7 +660,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         private ByTxnIdSnapshot commandsForRanges;
 
         public InMemorySafeStore(InMemoryCommandStore commandStore,
-                                 PreLoadContext context,
+                                 ExecutionContext context,
                                  CommandsForRangeLoad cfrLoad,
                                  Map<TxnId, InMemorySafeCommand> commands,
                                  Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey)
@@ -925,7 +925,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
     }
 
-    protected CommandsForRangeLoad cfrLoad(PreLoadContext context)
+    protected CommandsForRangeLoad cfrLoad(ExecutionContext context)
     {
         if (context.loadKeysFor() != LoadKeysFor.RECOVERY)
             return null;
@@ -991,13 +991,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> chain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
         {
             return chain(context, i -> { consumer.accept(i); return null; });
         }
 
         @Override
-        public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> function)
         {
             return new AsyncChains.Head<T>()
             {
@@ -1055,13 +1055,13 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        public AsyncChain<Void> chain(PreLoadContext context, Consumer<? super SafeCommandStore> consumer)
+        public AsyncChain<Void> chain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
         {
             return chain(context, i -> { consumer.accept(i); return null; });
         }
 
         @Override
-        public <T> AsyncChain<T> chain(PreLoadContext context, Function<? super SafeCommandStore, T> function)
+        public <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> function)
         {
             // TODO (expected): must unregister if chain is cancelled; should also only register when start() called
             CommandsForRangeLoad cfrLoad = cfrLoad(context);
@@ -1086,7 +1086,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         class DebugSafeStore extends InMemorySafeStore
         {
             public DebugSafeStore(InMemoryCommandStore commandStore,
-                                  PreLoadContext context,
+                                  ExecutionContext context,
                                   CommandsForRangeLoad cfrLoad,
                                   Map<TxnId, InMemorySafeCommand> commands,
                                   Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKey)
@@ -1115,7 +1115,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected InMemorySafeStore createSafeStore(PreLoadContext context, CommandsForRangeLoad cfrLoad, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
+        protected InMemorySafeStore createSafeStore(ExecutionContext context, CommandsForRangeLoad cfrLoad, Map<TxnId, InMemorySafeCommand> commands, Map<RoutableKey, InMemorySafeCommandsForKey> commandsForKeys)
         {
             return new DebugSafeStore(this, context, cfrLoad, commands, commandsForKeys);
         }
@@ -1252,7 +1252,7 @@ public abstract class InMemoryCommandStore extends CommandStore
         private AsyncChain<Void> apply(Command command, Replay replay)
         {
             return AsyncChains.success(commandStore.executeInContext(commandStore,
-                                                                     PreLoadContext.contextFor(command.txnId(), "Replay"),
+                                                                     ExecutionContext.contextFor(command.txnId(), "Replay"),
                                                                      null,
                                                                      (SafeCommandStore safeStore) -> {
                                                                          super.replay(safeStore, command.txnId(), replay);

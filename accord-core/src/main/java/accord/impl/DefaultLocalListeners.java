@@ -37,7 +37,7 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
 import accord.local.Node;
-import accord.local.PreLoadContext;
+import accord.local.ExecutionContext;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
@@ -110,7 +110,7 @@ public class DefaultLocalListeners implements LocalListeners
                 //noinspection SillyAssignment,ConstantConditions
                 safeStore = safeStore; // prevent use in lambda
                 TxnId updatedId = safeCommand.txnId();
-                PreLoadContext context = PreLoadContext.contextFor(listenerId, updatedId, "Notify");
+                ExecutionContext context = ExecutionContext.contextFor(listenerId, updatedId, "Notify");
                 safeStore.commandStore().execute(context, safeStore0 -> { notify(safeStore0, listenerId, updatedId); }, safeStore.agent());
             }
         }
@@ -133,7 +133,7 @@ public class DefaultLocalListeners implements LocalListeners
      *      - encoding SaveStatus as byte
      *      - encoding listeners as any of: single TxnId, array of TxnId (for small size), btree for a large collection
      */
-    static class TxnListeners extends TxnId implements PreLoadContext
+    static class TxnListeners extends TxnId implements ExecutionContext
     {
         final SaveStatus await;
         TxnId[] listeners = NO_TXNIDS;

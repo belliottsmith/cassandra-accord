@@ -93,7 +93,7 @@ import static accord.local.Commands.Validated.UPDATE_TXN_MERGE_DEPS;
 import static accord.local.LoadKeys.INCR;
 import static accord.local.LoadKeys.SYNC;
 import static accord.local.LoadKeysFor.WRITE;
-import static accord.local.PreLoadContext.contextFor;
+import static accord.local.ExecutionContext.contextFor;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_DEFUNCT;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
@@ -681,7 +681,7 @@ public class Commands
         safeStore.notifyListeners(safeCommand, command);
     }
 
-    private static class PostApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, PreLoadContext
+    private static class PostApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, ExecutionContext
     {
         final CommandStore commandStore;
         final TxnId txnId;
@@ -715,7 +715,7 @@ public class Commands
         @Override public String reason() { return "Post Apply"; }
     }
 
-    private static class PostFastApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, PreLoadContext
+    private static class PostFastApply<V> extends AsyncChains.FlatMapLink<V, Void> implements Consumer<SafeCommandStore>, ExecutionContext
     {
         final CommandStore commandStore;
         final TxnId txnId;
@@ -959,7 +959,7 @@ public class Commands
 
     private static void replicaExecuteSlowApply(CommandStore unsafeStore, Ballot ballot, TxnId txnId, Route<?> route, PartialTxn txn, Data data, Timestamp applyAt, long stamp)
     {
-        unsafeStore.execute(PreLoadContext.contextFor(txnId, "Replica Apply"), safeStore -> {
+        unsafeStore.execute(ExecutionContext.contextFor(txnId, "Replica Apply"), safeStore -> {
             SafeCommand safeCommand = safeStore.unsafeGet(txnId);
             Command command = safeCommand.current();
             if (stamp != unsafeStore.node.currentStamp() && !safeStore.safeToReadAt(applyAt).containsAll(command.route()))
@@ -983,7 +983,7 @@ public class Commands
 
     private static void notifyAfterFailedFastApply(CommandStore unsafeStore, TxnId txnId)
     {
-        unsafeStore.execute(PreLoadContext.contextFor(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore -> {
+        unsafeStore.execute(ExecutionContext.contextFor(txnId, "Mark ReadyToExecute after failure to fast apply"), safeStore -> {
             notifyAfterFailedFastApply(safeStore, txnId);
         }, unsafeStore.agent());
     }
@@ -1342,8 +1342,8 @@ public class Commands
         if (updates.compareTo(dependencyElision()) >= 0 && CommandsForKey.manages(txnId))
         {
             AbstractUnseekableKeys keys = (AbstractUnseekableKeys)updated.participants().touches();
-            PreLoadContext context = PreLoadContext.contextFor(keys, INCR, WRITE, "Set Durable");
-            PreLoadContext execute = safeStore.canExecute(context);
+            ExecutionContext context = ExecutionContext.contextFor(keys, INCR, WRITE, "Set Durable");
+            ExecutionContext execute = safeStore.canExecute(context);
             if (execute != null)
             {
                 setDurable(safeStore, execute, txnId, newDurability);
@@ -1368,13 +1368,13 @@ public class Commands
         return updated;
     }
 
-    private static void setDurable(SafeCommandStore safeStore, PreLoadContext context, TxnId txnId, Durability durability)
+    private static void setDurable(SafeCommandStore safeStore, ExecutionContext context, TxnId txnId, Durability durability)
     {
         for (RoutingKey key : (AbstractUnseekableKeys)context.keys())
             safeStore.get(key).setDurable(txnId, durability);
     }
 
-    static class NotifyWaitingOn implements PreLoadContext, Consumer<SafeCommandStore>
+    static class NotifyWaitingOn implements ExecutionContext, Consumer<SafeCommandStore>
     {
         final TxnId waitingId;
         TxnId loadDepId;
