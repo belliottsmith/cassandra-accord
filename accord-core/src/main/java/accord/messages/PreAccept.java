@@ -28,6 +28,7 @@ import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.DepsCalculator;
+import accord.local.ExecutionContext;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
 import accord.local.Node.Id;
@@ -105,6 +106,12 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     public LoadKeysFor loadKeysFor()
     {
         return LoadKeysFor.READ_WRITE;
+    }
+
+    @Override
+    public ExecutionKind executionKind()
+    {
+        return ExecutionKind.PREACCEPT;
     }
 
     @Override

@@ -59,7 +59,7 @@ public interface NotifySink
             }
             else
             {
-                safeStore.commandStore().execute(ExecutionContext.contextFor(txnId, "Notify"), safeStore0 -> {
+                safeStore.commandStore().execute(ExecutionContext.unsequenced(txnId, "Notify"), safeStore0 -> {
                     notWaiting(safeStore0, safeStore0.unsafeGet(txnId), key, uniqueHlc);
                 }, safeStore.agent());
             }
@@ -75,7 +75,7 @@ public interface NotifySink
         {
             TxnId txnId = notify.plainTxnId();
 
-            ExecutionContext context = ExecutionContext.contextFor(txnId, "Key Waiting On");
+            ExecutionContext context = ExecutionContext.unsequenced(txnId, "Key Waiting On");
             if (safeStore.canExecuteWith(context) && safeStore.tryRecurse())
             {
                 try { doNotifyWaitingOn(safeStore, txnId, key, waitingOnStatus, blockedUntil, notifyCfk); }
@@ -139,7 +139,7 @@ public interface NotifySink
                 RoutingKeys keys = RoutingKeys.of(key);
                 //noinspection ConstantConditions,SillyAssignment
                 safeStore = safeStore; // prevent use in lambda
-                safeStore.commandStore().execute(ExecutionContext.contextFor(txnId, keys, SYNC, WRITE, "Notify"), safeStore0 -> {
+                safeStore.commandStore().execute(ExecutionContext.unsequencedWrite(txnId, keys, "Notify"), safeStore0 -> {
                     doNotifyAlreadyReady(safeStore0, txnId, key);
                 }, safeStore.agent());
             }

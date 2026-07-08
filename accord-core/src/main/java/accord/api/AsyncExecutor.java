@@ -20,8 +20,12 @@ package accord.api;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
+import java.util.function.BiConsumer;
 
 import accord.utils.async.AsyncCallbacks;
+import accord.utils.async.AsyncCallbacks.CallAndCallback;
+import accord.utils.async.AsyncCallbacks.FlatCallAndCallback;
+import accord.utils.async.AsyncCallbacks.RunAndCallback;
 import accord.utils.async.AsyncCallbacks.RunOrFail;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.Cancellable;
@@ -29,10 +33,23 @@ import accord.utils.async.Cancellable;
 // TODO (required): consistent RejectedExecutionException handling
 public interface AsyncExecutor extends Executor
 {
-    // unlike execute, throws no exceptions, nor will not wrap the runnable
-    default Cancellable execute(RunOrFail run)
+    Cancellable execute(Runnable run, BiConsumer<? super Void, Throwable> callback);
+    <V> Cancellable execute(Callable<V> call, BiConsumer<? super V, Throwable> callback);
+    <V> Cancellable flatExecute(Callable<? extends AsyncChain<V>> call, BiConsumer<? super V, Throwable> callback);
+
+    default Cancellable executeContinuation(Runnable run, BiConsumer<? super Void, Throwable> callback)
     {
-        return AsyncCallbacks.execute(this, run);
+        return execute(run, callback);
+    }
+
+    default <V> Cancellable executeContinuation(Callable<V> call, BiConsumer<? super V, Throwable> callback)
+    {
+        return execute(call, callback);
+    }
+
+    default <V> Cancellable flatExecuteContinuation(Callable<? extends AsyncChain<V>> call, BiConsumer<? super V, Throwable> callback)
+    {
+        return flatExecute(call, callback);
     }
 
     default boolean tryExecuteImmediately(Runnable run) { return false; }
@@ -50,6 +67,11 @@ public interface AsyncExecutor extends Executor
     }
 
     AsyncChain<Void> chain(Runnable run);
+    /**
+     * As {@link #chain(Runnable)}, but if the submitting task fails while running this should be cancelled,
+     * failing the chain. See {@link #executeContinuation}.
+     */
+    AsyncChain<Void> continuationChain(Runnable run);
     <V> AsyncChain<V> chain(Callable<V> call);
     <V> AsyncChain<V> flatChain(Callable<? extends AsyncChain<V>> call);
 }

@@ -41,6 +41,7 @@ import org.slf4j.LoggerFactory;
 import accord.api.Agent;
 import accord.api.AsyncExecutorFactory;
 import accord.api.AsyncExecutor;
+import accord.api.ExclusiveAsyncExecutor;
 import accord.api.VisibleForImplementation;
 import accord.topology.EpochReady;
 import accord.api.DataStore;
@@ -1278,11 +1279,11 @@ public abstract class CommandStores implements AsyncExecutorFactory
     @Override
     public AsyncExecutor someExecutor()
     {
-        return someSequentialExecutor();
+        return someExclusiveExecutor();
     }
 
     @Override
-    public SequentialAsyncExecutor someSequentialExecutor()
+    public ExclusiveAsyncExecutor someExclusiveExecutor()
     {
         return any();
     }

@@ -20,6 +20,7 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.api.Result.PersistableResult;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
@@ -37,6 +38,7 @@ import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
+import accord.primitives.Routable;
 import accord.primitives.Route;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
@@ -57,6 +59,7 @@ import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
 import static accord.messages.Apply.ApplyReply.Kind.InsufficientEpochs;
 import static accord.messages.MessageType.StandardMessage.APPLY_REQ;
 import static accord.messages.MessageType.StandardMessage.APPLY_RSP;
+import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.PreApplied;
@@ -172,7 +175,7 @@ public class Apply extends RouteRequest<ApplyReply>
         @Override
         public AsyncChain<ApplyReply> apply(Void o)
         {
-            return commandStore.chain(Apply.this, safeStore -> {
+            return commandStore.continuationChain(Apply.this, safeStore -> {
                 return Apply.apply(Applied, safeStore, participants, ballot, txn, txnId, executeAt, deps, participants.route(), writes, result);
             });
         }
@@ -247,14 +250,6 @@ public class Apply extends RouteRequest<ApplyReply>
     }
 
     @Override
-    public Unseekables<?> keys()
-    {
-        if (flags.contains(READY_TO_EXECUTE) && fastWritesMayBypassCommandsForKey())
-            return RoutingKeys.EMPTY;
-        return super.keys();
-    }
-
-    @Override
     public ApplyReply reduce(ApplyReply a, ApplyReply b)
     {
         return ApplyReply.reduce(a, b);
@@ -263,8 +258,13 @@ public class Apply extends RouteRequest<ApplyReply>
     @Override
     public LoadKeys loadKeys()
     {
-        // TODO (expected): need to guarantee execution order then can make this ASYNC
-        return LoadKeys.SYNC;
+        return ProtocolModifiers.loadKeysAsyncIfPermitted(txnId);
+    }
+
+    @Override
+    public ExecutionKind executionKind()
+    {
+        return ExecutionKind.APPLY;
     }
 
     @Override

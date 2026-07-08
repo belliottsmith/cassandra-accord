@@ -872,7 +872,7 @@ class Updating
 
     static void updateUnmanagedAsync(CommandStore commandStore, TxnId txnId, RoutingKey key, NotifySink notifySink)
     {
-        ExecutionContext context = ExecutionContext.contextFor(txnId, RoutingKeys.of(key), SYNC, WRITE, "Update unmanaged CommandsForKey");
+        ExecutionContext context = ExecutionContext.unsequencedWrite(txnId, RoutingKeys.of(key), "Update unmanaged CommandsForKey");
         commandStore.execute(context, safeStore -> {
             SafeCommandsForKey safeCommandsForKey = safeStore.get(key);
             CommandsForKey cur = safeCommandsForKey.current();

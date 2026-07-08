@@ -327,7 +327,19 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         }
 
         @Override
+        public AsyncChain<Void> continuationChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
+        {
+            return chain(context, i -> { consumer.accept(i); return null; });
+        }
+
+        @Override
         public <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> function)
+        {
+            return submit(newTask(context, cfrLoad(context), function));
+        }
+
+        @Override
+        public <T> AsyncChain<T> continuationChain(ExecutionContext context, Function<? super SafeCommandStore, T> function)
         {
             return submit(newTask(context, cfrLoad(context), function));
         }

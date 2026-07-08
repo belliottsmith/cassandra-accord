@@ -106,7 +106,7 @@ public class PreAcceptTest
             clock.increment(10);
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
-            commandStore.chain(ExecutionContext.contextFor(txnId, txn.keys().toParticipants(), SYNC, WRITE, "Test"), safeStore -> {
+            commandStore.chain(ExecutionContext.unsequencedWrite(txnId, txn.keys().toParticipants(), "Test"), safeStore -> {
                 CommandsForKey cfk = safeStore.get(key.toUnseekable()).current();
                 TxnId commandId = cfk.get(0).plainTxnId();
                 Command command = safeStore.ifInitialised(commandId).current();
@@ -275,7 +275,7 @@ public class PreAcceptTest
             clock.increment(10);
             preAccept.process(node, ID2, REPLY_CONTEXT);
 
-            commandStore.chain(ExecutionContext.contextFor(txnId, txn.keys().toParticipants(), SYNC, WRITE, "Test"), safeStore -> {
+            commandStore.chain(ExecutionContext.unsequencedWrite(txnId, txn.keys().toParticipants(), "Test"), safeStore -> {
                 CommandsForKey cfk = safeStore.get(key.toUnseekable()).current();
                 TxnId commandId = cfk.get(0).plainTxnId();
                 Command command = safeStore.ifInitialised(commandId).current();

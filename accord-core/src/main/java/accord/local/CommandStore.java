@@ -35,6 +35,7 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.annotation.Nullable;
 
+import accord.api.ExclusiveAsyncExecutor;
 import accord.impl.AbstractReplayer;
 import accord.primitives.*;
 import com.google.common.annotations.VisibleForTesting;
@@ -99,7 +100,7 @@ import static accord.utils.Invariants.nonNull;
 /**
  * Single threaded internal shard of accord transaction metadata
  */
-public abstract class CommandStore implements AbstractAsyncExecutor, SequentialAsyncExecutor
+public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAsyncExecutor
 {
     private static final Logger logger = LoggerFactory.getLogger(CommandStore.class);
 
@@ -272,16 +273,17 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
     }
 
     public abstract AsyncChain<Void> chain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer);
-    public abstract <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply);
-
-    public AsyncChain<Void> priorityChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer)
+    public abstract AsyncChain<Void> continuationChain(ExecutionContext context, Consumer<? super SafeCommandStore> consumer);
+    public Cancellable executeContinuation(ExecutionContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
     {
-        return chain(context, consumer);
+        return continuationChain(context, consumer).begin(callback);
     }
 
-    public <T> AsyncChain<T> priorityChain(ExecutionContext context, Function<? super SafeCommandStore, T> function)
+    public abstract <T> AsyncChain<T> chain(ExecutionContext context, Function<? super SafeCommandStore, T> apply);
+    public abstract <T> AsyncChain<T> continuationChain(ExecutionContext context, Function<? super SafeCommandStore, T> apply);
+    public <T> Cancellable executeContinuation(ExecutionContext context, Function<? super SafeCommandStore, T> consumer, BiConsumer<? super T, Throwable> callback)
     {
-        return chain(context, function);
+        return continuationChain(context, consumer).begin(callback);
     }
 
     public Cancellable execute(ExecutionContext context, Consumer<? super SafeCommandStore> consumer, BiConsumer<? super Void, Throwable> callback)
@@ -1096,7 +1098,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, SequentialA
         try
         {
             TxnId waitingOn = iterator.next();
-            ExecutionContext context = ExecutionContext.contextFor(waitingOn, "Try Execute Listening");
+            ExecutionContext context = ExecutionContext.unsequenced(waitingOn, "Try Execute Listening");
             if (!safeStore.canExecuteWith(context) || !safeStore.tryRecurse())
             {
                 //noinspection DataFlowIssue

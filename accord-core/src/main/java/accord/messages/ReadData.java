@@ -211,6 +211,11 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         return executeAtEpoch;
     }
 
+    public ExecutionKind executionKind()
+    {
+        return ExecutionKind.STABLE;
+    }
+
     @Override
     public final Cancellable process(Node on, Node.Id replyTo, ReplyContext replyContext)
     {

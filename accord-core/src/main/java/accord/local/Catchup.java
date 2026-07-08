@@ -99,7 +99,7 @@ public class Catchup
         {
             //noinspection DataFlowIssue
             safeStore = safeStore;
-            ExecutionContext ctx = ExecutionContext.contextFor(txnId, "Catchup");
+            ExecutionContext ctx = ExecutionContext.unsequenced(txnId, "Catchup");
             if (safeStore.canExecuteWith(ctx)) markWaiting(safeStore, safeStore.get(txnId), range);
             else safeStore.commandStore().execute(ctx, (Consumer<? super SafeCommandStore>) safeStore0 -> markWaiting(safeStore0, safeStore0.get(txnId), range), safeStore.agent());
         }

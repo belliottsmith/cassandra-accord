@@ -385,7 +385,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
             {
                 // the command might be invalidated, which should be established on load, so simply load the command
                 TxnId txnId = state.txnId;
-                safeStore.commandStore().execute(ExecutionContext.contextFor(txnId, "Clear Progress"), safeStore0 -> {
+                safeStore.commandStore().execute(ExecutionContext.unsequenced(txnId, "Clear Progress"), safeStore0 -> {
                     safeStore0.unsafeGet(txnId);
                 }, node.agent());
             }
