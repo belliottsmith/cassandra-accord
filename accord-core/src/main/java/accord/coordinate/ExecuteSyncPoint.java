@@ -144,11 +144,6 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
             long futureEpoch = ((ReadData.ReadOkWithFutureEpoch) reply).futureEpoch;
             retryInFutureEpoch = Math.max(retryInFutureEpoch, futureEpoch);
         }
-        else if (tracker.topologies().size() <= 1 || tracker.topologies().current().contains(from))
-        {
-            readable.addIndex(fromIndex);
-        }
-        including.addIndex(fromIndex);
 
         if (!reply.isOk())
         {
@@ -178,6 +173,14 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         else
         {
             ReadData.ReadOk ok = (ReadData.ReadOk) reply;
+
+            if (!(ok instanceof ReadData.ReadOkWithFutureEpoch))
+            {
+                if (tracker.topologies().size() <= 1 || tracker.topologies().current().contains(from))
+                    readable.addIndex(fromIndex);
+                including.addIndex(fromIndex);
+            }
+
             slow.remove(from);
             // TODO (expected): handle partial successes to achieve durability quorums
             update(ok.unavailable != null && !ok.unavailable.isEmpty()

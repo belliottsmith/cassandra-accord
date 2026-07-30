@@ -32,6 +32,7 @@ import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
+import accord.local.StoreParticipants;
 import accord.messages.Callback.ConcreteCallbackExclusive;
 import accord.messages.MessageType;
 import accord.messages.ReadData;
@@ -233,13 +234,14 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         @Override
         protected CommitOrReadNack applyInternal(SafeCommandStore safeStore)
         {
-            return super.applyInternal(safeStore);
+            StoreParticipants participants = StoreParticipants.execute(safeStore, scope, txnId, minEpoch(), executeAtEpoch);
+            return forceApply(safeStore, partialTxn, participants.executes());
         }
 
-        @Override
-        protected AsyncChain<Data> forceApply(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
+        protected CommitOrReadNack forceApply(SafeCommandStore safeStore, PartialTxn partialTxn, Participants<?> executes)
         {
-            return read.read(safeStore, executeAt, executes);
+            readStarted(safeStore);
+            return super.forceApply(safeStore, partialTxn, executes);
         }
 
         // must be invoked by implementations some time after the read has started OR must override safeToReadAt()

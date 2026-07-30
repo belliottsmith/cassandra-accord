@@ -19,7 +19,6 @@
 package accord.impl.list;
 
 import java.util.function.Function;
-
 import javax.annotation.Nullable;
 
 import accord.api.Data;
@@ -29,16 +28,12 @@ import accord.impl.AbstractFetchCoordinator;
 import accord.local.CommandStore;
 import accord.local.ExecutionContext.Empty;
 import accord.local.Node;
-import accord.local.SafeCommandStore;
 import accord.primitives.PartialTxn;
-import accord.primitives.Participants;
 import accord.primitives.Ranges;
-import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.TopologyException;
 import accord.utils.SortedArrays;
-import accord.utils.async.AsyncChain;
 
 public class ListFetchCoordinator extends AbstractFetchCoordinator
 {
@@ -88,13 +83,6 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
         public ListFetchRequest(long sourceEpoch, TxnId syncId, Ranges ranges, PartialTxn partialTxn)
         {
             super(sourceEpoch, syncId, ranges, partialTxn);
-        }
-
-        @Override
-        protected AsyncChain<Data> forceApply(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
-        {
-            readStarted(safeStore);
-            return super.forceApply(safeStore, executeAt, txn, executes);
         }
     }
 }

@@ -27,6 +27,7 @@ import java.util.function.Consumer;
 
 import accord.api.Agent;
 import accord.api.DataStore.FetchKind;
+import accord.api.DataStore.FetchResult;
 import accord.coordinate.CoordinateMaxConflict;
 import accord.local.ExecutionContext.Empty;
 import accord.local.durability.DurabilityResults;
@@ -40,6 +41,8 @@ import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
 import accord.utils.Reduce;
 import accord.utils.UnhandledEnum;
+import accord.utils.async.AsyncChain;
+import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
@@ -112,7 +115,7 @@ class Bootstrap
             safeStore = safeStore;
             CommandStore commandStore = safeStore.commandStore();
             commandStore.prepareToBootstrap(node, description, commitRanges, reason)
-                        .flatMap(success -> commandStore.submit((Empty) () -> "Mark Bootstrapping", safeStore0 -> {
+                        .flatMap(success -> commandStore.chain((Empty) () -> "Mark Bootstrapping", safeStore0 -> {
                             synchronized (this)
                             {
                                 // we submit a separate execution so that we know markBootstrapping is durable before we initiate the fetch
@@ -122,47 +125,41 @@ class Bootstrap
                                 return success;
                             }
                         }))
-                        .flatMap(success -> node.withEpochAtLeast(epoch, null, () -> commandStore.chain((Empty) () -> "Start Bootstrap Fetch", safeStore0 -> {
-                            synchronized (this)
-                            {
-                                if (valid.isEmpty())
-                                    return;
-
-                                toFetch = success.byTxnId().entrySet().iterator();
-                                nextFetch(safeStore0, toFetch.next());
-                            }
-                        })).beginAsResult());
+                        .flatMap(success -> node.withEpochAtLeast(epoch, null, () -> fetch(success.byTxnId())))
+                        .begin(this);
         }
 
-        private synchronized Map.Entry<TxnId, ByIdEntry> nextToFetch()
+        private AsyncChain<?> fetch(Map<TxnId, ByIdEntry> entries)
         {
-            while (toFetch.hasNext())
+            AsyncChain<?> chain = null;
+            for (Map.Entry<TxnId, ByIdEntry> e : entries.entrySet())
             {
-                Map.Entry<TxnId, ByIdEntry> e = toFetch.next();
-                if (e.getValue().ranges.intersects(valid))
-                    return e;
+                if (chain == null) chain = fetch(e.getKey(), e.getValue());
+                else chain = chain.flatMap(ranges -> fetch(e.getKey(), e.getValue()));
             }
-            return null;
+            return chain != null ? chain : AsyncChains.success(null);
         }
 
         // TODO (expected): we should allow the implementation to define the split boundaries,
         //  so that e.g. Cassandra can prefer ranges that minimise anticompaction
-        private synchronized void nextFetch(SafeCommandStore safeStore, Map.Entry<TxnId, ByIdEntry> e)
+        private AsyncChain<?> fetch(TxnId txnId, ByIdEntry e)
         {
-            Ranges ranges = e.getValue().ranges.slice(valid, Minimal);
-            if (ranges.isEmpty())
+            Ranges ranges;
+            synchronized (this)
             {
-                e = nextToFetch();
-                if (e == null)
-                    return;
-
-                ranges = e.getValue().ranges.slice(valid, Minimal);
+                ranges = e.ranges.slice(valid, Minimal);
             }
+            if (ranges.isEmpty())
+                return AsyncChains.success(Ranges.EMPTY);
 
-            currentFetch = safeStore.dataStore().fetch(node, safeStore, ranges, e.getKey(), e.getValue().readable, this, kind);
-            Map.Entry<TxnId, ByIdEntry> next = nextToFetch();
-            if (next != null)
-                currentFetch.invoke(() -> commandStore.execute((Empty) () -> "Submit fetch for " + next.getValue().ranges + " in " + commandStore, safeStore0 -> nextFetch(safeStore0, next)));
+            return commandStore.chain((Empty)() -> "Submit Fetch of " + e, safeStore -> {
+                FetchResult fetch = safeStore.dataStore().fetch(node, safeStore, ranges, txnId, e.readable, this, kind);
+                synchronized (this)
+                {
+                    currentFetch = fetch;
+                }
+                return fetch;
+            }).flatMapResult(i -> i);
         }
 
         @Override

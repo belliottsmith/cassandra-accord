@@ -347,7 +347,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         return null;
     }
 
-    protected final CommitOrReadNack forceApply(SafeCommandStore safeStore, PartialTxn partialTxn, Participants<?> executes)
+    protected CommitOrReadNack forceApply(SafeCommandStore safeStore, PartialTxn partialTxn, Participants<?> executes)
     {
         synchronized (this)
         {
@@ -368,7 +368,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         executes = executes.without(unavailable);
 
         if (executes.isEmpty()) readComplete(unsafeStore, null, unavailable);
-        else forceApply(safeStore, executeAt, partialTxn, executes)
+        else partialTxn.read(safeStore, executeAt, executes)
              .begin(readCallback(unsafeStore, unavailable));
         return null;
     }
@@ -493,7 +493,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         }
     }
 
-    protected AsyncChain<Data> forceApply(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> execute)
+    protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> execute)
     {
         return txn.read(safeStore, executeAt, execute);
     }
@@ -573,7 +573,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
 
         node.agent().replicaEvents().onReadStarted(safeStore, command);
         if (executes.isEmpty()) readComplete(unsafeStore, null, unavailable);
-        else forceApply(safeStore, executeAt, command.partialTxn(), executes)
+        else beginRead(safeStore, executeAt, command.partialTxn(), executes)
              .begin(readCallback(unsafeStore, unavailable));
     }
 

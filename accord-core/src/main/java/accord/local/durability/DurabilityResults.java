@@ -90,7 +90,7 @@ public class DurabilityResults extends ReducingRangeMap<DurabilityResults.Entry>
     }
 
     static final DurabilityResults EMPTY = new DurabilityResults();
-    private NavigableMap<TxnId, ByIdEntry> byTxnId;
+    private volatile NavigableMap<TxnId, ByIdEntry> byTxnId;
 
     private DurabilityResults()
     {

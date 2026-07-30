@@ -122,7 +122,8 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         if (refuses == null)
             return Refuse.MinMax.NONE_NONE;
 
-        return refuses.foldlWithDefault(participants, (r, a) -> a == null ? r.asMinMax() : a.merge(r.asMinMax()), Refuse.NONE, null);
+        Unseekables<?> notRetired = redundantBefore().removeLocallyRetired(participants);
+        return refuses.foldlWithDefault(notRetired, (r, a) -> a == null ? r.asMinMax() : a.merge(r.asMinMax()), Refuse.NONE, null);
     }
 
     /**
@@ -612,13 +613,9 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                     Ranges tmp = rangeDeps.ranges(txnId).slice(waitingOn, Minimal);
                     tmp = tmp.slice(safeStore.ranges().allSince(txnId.epoch()), Minimal); // never coordinated, no need to replicate for dependency or recovery calculations
                     if (checkLog.compareTo(txnId) >= 0)
-                    {
-                        Ranges tmp2 = redundantBefore.removeLogUnavailableOrIncomplete(txnId, tmp);
-                        if (tmp != tmp2 && !tmp2.isEmpty())
-                            System.out.println();
-                        tmp = tmp2;
-                    }
-                    // TODO (required): if we only part-filter we're still going to have problems, as we won't be able to upate the transaction
+                        tmp = redundantBefore.removeLogUnavailableOrIncomplete(txnId, tmp);
+
+                    // TODO (required): if we only part-filter we're still going to have problems, as we won't be able to update the transaction
                     ranges = tmp;
                 }
 

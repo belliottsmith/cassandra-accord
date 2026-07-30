@@ -148,18 +148,13 @@ public abstract class FetchCoordinator extends AbstractSimpleCoordination<Route<
 
     protected FetchCoordinator(Node node, ExclusiveAsyncExecutor executor, Ranges ranges, TxnId atLeast, SortedArrayList<Node.Id> readable, FetchRanges fetchRanges) throws TopologyException
     {
-        this(node, executor, Math.max(node.epoch(), atLeast.epoch()), ranges, atLeast, readable, fetchRanges);
-    }
-
-    protected FetchCoordinator(Node node, ExclusiveAsyncExecutor executor, long epoch, Ranges ranges, TxnId atLeast, SortedArrayList<Node.Id> readable, FetchRanges fetchRanges) throws TopologyException
-    {
         super(node, executor, TxnId.NONE, node.computeRoute(atLeast.epoch(), ranges));
         this.atLeast = atLeast;
         this.ranges = remaining = ranges;
         this.fetchRanges = fetchRanges;
         // TODO (expected): prioritise nodes that were members in the "prior" epoch also
         //  (by prior, we mean the prior epoch affecting ownership of this shard, not the prior numerical epoch)
-        Topology topology = node.topology().active().forEpoch(ranges, epoch, ALL).get(0);
+        Topology topology = node.topology().active().forEpoch(ranges, atLeast.epoch(), ALL).get(0);
         this.stateMap = new SortedListMap<>(readable, State[]::new);
         for (int i = 0 ; i < stateMap.domainSize() ; ++i)
         {

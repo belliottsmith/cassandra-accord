@@ -360,14 +360,14 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
     protected void unsafeAcceptNonDepsRequests(SafeCommandStore safeStore, Ranges accept)
     {
         logger.info("{}: Accepting non-DEPS requests for {}", this, accept);
-        Invariants.require(refuses != null && refuses.foldl(accept, (v, a) -> v, null, v -> ALL != v) == ALL, "Not refusing %s", accept);
+        Invariants.require(refuses != null && refuses.foldlWithDefault(accept, (v, a) -> v, null, null, v -> ALL != v) == ALL, "Not refusing %s", accept);
         refuses = ReducingRangeMap.merge(refuses, ReducingRangeMap.create(accept, Refuse.DEPS), Refuse::min);
     }
 
     protected void unsafeAcceptRequests(SafeCommandStore safeStore, Ranges accept)
     {
         logger.info("{}: Accepting ALL requests for {}", this, accept);
-        Invariants.require(refuses != null && refuses.foldl(accept, (v, a) -> v, null, Objects::isNull) != null, "Not refusing %s", accept);
+        Invariants.require(refuses != null && refuses.foldlWithDefault(accept, (v, a) -> v, null, null, Objects::isNull) != null, "Not refusing %s", accept);
         refuses = ReducingRangeMap.merge(refuses, ReducingRangeMap.create(accept, NONE), (a, b) -> a == NONE || b == NONE || a == null || b == null ? null : a.max(b));
         if (refuses.isEmpty())
             refuses = null;
@@ -530,22 +530,22 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
         boolean isExpired = maxConflict.is(REJECTED) || (safeStore.agent().rejectPreAccept(safeStore.node(), txnId) && !txnId.isSyncPoint());
 
         if (isExpired)
-            return conflictTimestamp(txnId).asRejected();
+            return uniqueTimestampOnConflict(txnId).asRejected();
 
         Timestamp min = TxnId.mergeMax(txnId, maxConflict);
         if (permitFastPath && txnId == min && txnId.epoch() >= node.epoch())
             return txnId;
 
-        return conflictTimestamp(min);
+        return uniqueTimestampOnConflict(min);
     }
 
-    private Timestamp conflictTimestamp(Timestamp min)
+    private Timestamp uniqueTimestampOnConflict(Timestamp min)
     {
-        switch (ProtocolModifiers.slowTimestamp())
+        switch (ProtocolModifiers.uniqueTimestampOnConflict())
         {
-            default: throw UnhandledEnum.unknown(ProtocolModifiers.slowTimestamp());
-            case NEXT_NOW: return node.uniqueTimestamp(min);
-            case NEXT_STALE: return node.uniqueStaleTimestamp(min);
+            default: throw UnhandledEnum.unknown(ProtocolModifiers.uniqueTimestampOnConflict());
+            case NOW: return node.uniqueTimestamp(min);
+            case STALE: return node.uniqueStaleTimestamp(min);
         }
     }
 
@@ -654,6 +654,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
 
     protected AsyncResult<EpochReady> startBootstrap(Node node, Ranges newRanges, long epoch, FetchKind fetchKind, BootstrapReason reason)
     {
+        if (newRanges.isEmpty())
+            return AsyncResults.success(EpochReady.done(epoch));
+
         return node.withEpochAtLeast(epoch, null, () -> chain((Empty) () -> "New Epoch", safeStore -> {
             return startBootstrapInternal(node, safeStore, newRanges, epoch, fetchKind, reason);
         })).beginAsResult();
@@ -673,7 +676,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
                               bootstrap.reads);
     }
 
-    protected AsyncResult<DurabilityResults> prepareToBootstrap(Node node, Object requestedBy, Ranges ranges, BootstrapReason reason)
+    protected AsyncChain<DurabilityResults> prepareToBootstrap(Node node, Object requestedBy, Ranges ranges, BootstrapReason reason)
     {
         // TODO (expected): configurable timeout
         switch (reason)
@@ -681,11 +684,10 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
             default: throw new UnhandledEnum(reason);
             case GAIN_OWNERSHIP:
                 return CoordinateMaxConflict.maxConflict(node, ranges)
-                       .flatMapResult(atLeast -> node.durability().sync(requestedBy, null, atLeast, ranges, null, NoLocal, QuorumAndWaitedForAll, 1L, TimeUnit.HOURS))
-                       .beginAsResult();
+                       .flatMapResult(atLeast -> node.durability().sync(requestedBy, null, atLeast, ranges, null, NoLocal, QuorumAndWaitedForAll, 1L, TimeUnit.HOURS));
             case LOG_CORRUPTED:
             case LOG_INCOMPLETE:
-                return node.durability().sync(requestedBy, null, ranges, NoLocal, QuorumAndWaitedForAll, 1L, TimeUnit.HOURS);
+                return node.durability().sync(requestedBy, null, ranges, NoLocal, QuorumAndWaitedForAll, 1L, TimeUnit.HOURS).chain();
         }
     }
 
@@ -808,7 +810,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
         for (Map.Entry<TxnId, Ranges> e : rangesByBound.entrySet())
         {
             newBootstrapBeganAt = bootstrap(e.getKey(), e.getValue(), newBootstrapBeganAt);
-            newSafeToReadAt = purgeHistory(safeToRead, e.getValue());
+            newSafeToReadAt = purgeHistory(newSafeToReadAt, e.getValue());
             newMaxConflicts = newMaxConflicts.update(e.getValue(), e.getKey(), e.getKey());
             addRedundantBefore = RedundantBefore.merge(addRedundantBefore, RedundantBefore.create(e.getValue(), Long.MIN_VALUE, Long.MAX_VALUE, e.getKey(), UNREADY_ONLY));
         }

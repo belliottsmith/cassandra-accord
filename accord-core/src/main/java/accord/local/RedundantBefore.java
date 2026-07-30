@@ -704,12 +704,20 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return withoutRetired(bounds, notRetired, b -> b.maxBound(LOCALLY_APPLIED));
         }
 
-        static Ranges withoutQuorumAndLocallyRetired(Bounds bounds, @Nonnull Ranges notRetired)
+        static Unseekables<?> withoutLocallyRetired(Bounds bounds, @Nonnull Unseekables<?> notRetired)
         {
-            return withoutRetired(bounds, notRetired, b -> b.maxBoundBoth(QUORUM_APPLIED, LOCALLY_APPLIED));
+            return withoutRetiredUnseekables(bounds, notRetired, b -> b.maxBound(LOCALLY_APPLIED));
         }
 
         private static Ranges withoutRetired(Bounds bounds, @Nonnull Ranges notRetired, Function<Bounds, TxnId> getBound)
+        {
+            if (bounds == null || bounds.endEpoch > getBound.apply(bounds).epoch())
+                return notRetired;
+
+            return notRetired.without(Ranges.of(bounds.range));
+        }
+
+        private static Unseekables<?> withoutRetiredUnseekables(Bounds bounds, @Nonnull Unseekables<?> notRetired, Function<Bounds, TxnId> getBound)
         {
             if (bounds == null || bounds.endEpoch > getBound.apply(bounds).epoch())
                 return notRetired;
@@ -1095,9 +1103,9 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         return removeRetired(ranges, Bounds::withoutLocallyRetired);
     }
 
-    public Ranges removeQuorumAndLocallyRetired(Ranges ranges)
+    public Unseekables<?> removeLocallyRetired(Unseekables<?> unseekables)
     {
-        return removeRetired(ranges, Bounds::withoutQuorumAndLocallyRetired);
+        return removeRetiredUnseekables(unseekables, Bounds::withoutLocallyRetired);
     }
 
     private Ranges removeRetired(Ranges ranges, BiFunction<Bounds, Ranges, Ranges> fold)
@@ -1106,6 +1114,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return ranges;
 
         return foldl(ranges, fold, ranges, alwaysFalse());
+    }
+
+    private Unseekables<?> removeRetiredUnseekables(Unseekables<?> unseekables, BiFunction<Bounds, Unseekables<?>, Unseekables<?>> fold)
+    {
+        if (!lostRanges.intersects(unseekables))
+            return unseekables;
+
+        return foldl(unseekables, fold, unseekables, alwaysFalse());
     }
 
     public Ranges removeLostOrStale(Ranges ranges)

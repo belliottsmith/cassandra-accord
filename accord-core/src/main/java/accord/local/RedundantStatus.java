@@ -153,6 +153,9 @@ public class RedundantStatus
         static final Property[] REVERSE_PROPERTIES = values();
         static
         {
+            // we now have room for 32 property ordinals, but the integration serializer assumes up to 16;
+            // for now we verify that no more than 16 unique PERSISTENT properties exist. WAS_OWNED and NOT_OWNED are derived.
+            Invariants.require(WAS_OWNED.ordinal() <= 16);
             for (int i = 0 ; i < REVERSE_PROPERTIES.length / 2 ; ++i)
             {
                 REVERSE_PROPERTIES[i] = REVERSE_PROPERTIES[REVERSE_PROPERTIES.length - (1 + i)];

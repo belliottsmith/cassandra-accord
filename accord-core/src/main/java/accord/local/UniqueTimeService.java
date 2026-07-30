@@ -262,7 +262,7 @@ public interface UniqueTimeService
 
         public AtomicUniqueAutoStaleTimes(TimeService time, long range, TimeUnit units)
         {
-            this(time, (64 - NODE_BITS) - Long.numberOfLeadingZeros(units.toMicros(range)));
+            this(time, Math.max(0, (64 - NODE_BITS) - Long.numberOfLeadingZeros(units.toMicros(range))));
         }
 
         public AtomicUniqueAutoStaleTimes(TimeService time, int granularityShift)

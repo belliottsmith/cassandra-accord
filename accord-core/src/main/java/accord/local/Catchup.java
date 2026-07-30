@@ -57,7 +57,7 @@ public class Catchup
     private static final Logger logger = LoggerFactory.getLogger(Catchup.class);
     static class CommandStoreListener extends SettableResult<Unsuccessful> implements SyncPointListener, Timeouts.Timeout
     {
-        final int id;
+        final CommandStore commandStore;
         final long deadline;
         final TimeUnit deadlineUnits;
         final DurableBefore durableBefore;
@@ -66,7 +66,7 @@ public class Catchup
 
         CommandStoreListener(SafeCommandStore safeStore, long deadline, TimeUnit deadlineUnits, DurableBefore durableBefore)
         {
-            this.id = safeStore.commandStore().id;
+            this.commandStore = safeStore.commandStore();
             this.deadline = deadline;
             this.deadlineUnits = deadlineUnits;
             this.durableBefore = durableBefore;
@@ -158,12 +158,14 @@ public class Catchup
             if (!command.participants().touches().intersects(waitingOn))
                 return;
 
-            updateWaitingOn(safeStore);
-            if (waitingOn.isEmpty())
+            synchronized (this)
             {
-                done(safeStore);
-                safeStore.unregister(this);
+                updateWaitingOn(safeStore);
+                if (!waitingOn.isEmpty())
+                    return;
             }
+            done(safeStore);
+            safeStore.unregister(this);
         }
 
         @Override
@@ -175,13 +177,15 @@ public class Catchup
                 if (!waitingOn.isEmpty())
                     unsuccessful = new Unsuccessful(waitingOn);
             }
+            commandStore.chain((Empty)() -> "Timeout Catchup", safeStore -> { safeStore.unregister(this); })
+                        .begin(commandStore.agent);
             trySuccess(unsuccessful);
         }
 
         @Override
         public int stripe()
         {
-            return id;
+            return commandStore.id;
         }
     }
 
@@ -222,12 +226,12 @@ public class Catchup
         }
     }
 
-    public static AsyncChain<Unsuccessful> catchup(Node node, long deadline, TimeUnit units)
+    public static AsyncResult<Unsuccessful> catchup(Node node, long deadline, TimeUnit units)
     {
         return catchup(node, deadline, units, Arrays.asList(node.commandStores().all()));
     }
 
-    public static AsyncChain<Unsuccessful> catchup(Node node, long deadline, TimeUnit units, List<CommandStore> commandStores)
+    public static AsyncResult<Unsuccessful> catchup(Node node, long deadline, TimeUnit units, List<CommandStore> commandStores)
     {
         return FetchDurableBefore.catchup(node).flatMap(durableBefore -> {
             List<AsyncChain<CommandStoreListener>> chains = new ArrayList<>();
@@ -251,7 +255,7 @@ public class Catchup
                     return AsyncChains.success((Unsuccessful)null);
                 return AsyncResults.reduce(registered, Unsuccessful::merge).chain();
             });
-        });
+        }).beginAsResult();
     }
 
     private static AsyncResult<?> rebootstrapIfBehind(Node node, SafeCommandStore safeStore, DurableBefore durableBefore)

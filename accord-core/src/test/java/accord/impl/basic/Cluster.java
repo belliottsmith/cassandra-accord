@@ -793,7 +793,7 @@ public class Cluster
                     BootstrapReason reason = random.nextBoolean() ? LOG_CORRUPTED : LOG_INCOMPLETE;
                     topologyRandomizer.markRebootstrapping(node);
                     stores.rebootstrap(node, reason).invoke(node.agent());
-                    Catchup.catchup(node, 1L, DAYS);
+                    Catchup.catchup(node, node.elapsed(SECONDS) + DAYS.toSeconds(1L), SECONDS);
 
                     while (sinks.drain(getPendingPredicate(id, stores.all())));
 
@@ -809,7 +809,7 @@ public class Cluster
                     for (CommandStore store : stores.all())
                         ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
                     journal.replay(stores, null);
-                    Catchup.catchup(node, 1L, DAYS);
+                    Catchup.catchup(node, node.elapsed(SECONDS) + DAYS.toSeconds(1L), SECONDS);
 
                     // Re-enable safety checks
                     while (sinks.drain(getPendingPredicate(id, stores.all()))) ;

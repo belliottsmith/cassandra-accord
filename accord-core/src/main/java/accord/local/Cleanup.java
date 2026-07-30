@@ -227,9 +227,10 @@ public enum Cleanup
 
     private static boolean isUnavailable(RedundantStatus redundant, SaveStatus saveStatus)
     {
+        // TODO (required): how does this interact with lost ownership?
         return redundant.any(UNREADY)
                && (redundant.any(LOG_UNAVAILABLE)
-                   || (redundant.any(LOG_INCOMPLETE) && saveStatus.compareTo(Stable) < 0));
+                   || (redundant.all(LOG_INCOMPLETE) && saveStatus.compareTo(Stable) < 0));
     }
 
     private static Cleanup cleanupWithoutFullRoute(Input input, TxnId txnId, SaveStatus saveStatus, StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
