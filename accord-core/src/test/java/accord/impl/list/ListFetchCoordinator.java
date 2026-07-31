@@ -29,7 +29,6 @@ import accord.impl.AbstractFetchCoordinator;
 import accord.local.CommandStore;
 import accord.local.ExecutionContext.Empty;
 import accord.local.Node;
-import accord.local.ExecutionContext;
 import accord.local.SafeCommandStore;
 import accord.primitives.SyncPoint;
 import accord.primitives.PartialDeps;
@@ -94,10 +93,10 @@ public class ListFetchCoordinator extends AbstractFetchCoordinator
         }
 
         @Override
-        protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
+        protected AsyncChain<Data> forceApply(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
         {
             readStarted(safeStore);
-            return super.beginRead(safeStore, executeAt, txn, executes);
+            return super.forceApply(safeStore, executeAt, txn, executes);
         }
     }
 }

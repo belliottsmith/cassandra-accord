@@ -345,6 +345,32 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         return null;
     }
 
+    protected final CommitOrReadNack forceApply(SafeCommandStore safeStore, PartialTxn partialTxn, Participants<?> executes)
+    {
+        synchronized (this)
+        {
+            if (!isPending())
+                return null;
+
+            int storeId = safeStore.commandStore().id();
+
+            if (requiresListenersDuringExecution)
+                listeners.put(storeId, safeStore.register(txnId, this));
+            waitingOn.add(storeId);
+            ++waitingOnCount;
+            reading.add(storeId);
+        }
+
+        CommandStore unsafeStore = safeStore.commandStore();
+        Ranges unavailable = unavailable(unsafeStore);
+        executes = executes.without(unavailable);
+
+        if (executes.isEmpty()) readComplete(unsafeStore, null, unavailable);
+        else forceApply(safeStore, executeAt, partialTxn, executes)
+             .begin(readCallback(unsafeStore, unavailable));
+        return null;
+    }
+
     private AsyncChain<CommitOrReadNack> applyFastRead(CommandStore unsafeStore)
     {
         Invariants.require(partialTxn != null);
@@ -464,7 +490,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         }
     }
 
-    protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> execute)
+    protected AsyncChain<Data> forceApply(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> execute)
     {
         return txn.read(safeStore, executeAt, execute);
     }
@@ -474,7 +500,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         return unavailable(command.txnId(), command.executeAtIfKnown(), command.route(), safeStore.ranges(), safeStore.safeToReadAt());
     }
 
-    Ranges unavailable(CommandStore unsafeStore)
+    protected final Ranges unavailable(CommandStore unsafeStore)
     {
         Invariants.require(executeAt != null);
         return unavailable(txnId, executeAt, scope, unsafeStore.unsafeGetRangesForEpoch(), unsafeStore.unsafeGetSafeToRead());
@@ -544,11 +570,11 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
 
         node.agent().replicaEvents().onReadStarted(safeStore, command);
         if (executes.isEmpty()) readComplete(unsafeStore, null, unavailable);
-        else beginRead(safeStore, executeAt, command.partialTxn(), executes)
+        else forceApply(safeStore, executeAt, command.partialTxn(), executes)
              .begin(readCallback(unsafeStore, unavailable));
     }
 
-    private BiConsumer<Data, Throwable> readCallback(CommandStore unsafeStore, @Nullable Ranges unavailable)
+    protected final BiConsumer<Data, Throwable> readCallback(CommandStore unsafeStore, @Nullable Ranges unavailable)
     {
         return (success, fail) -> {
             if (fail != null)

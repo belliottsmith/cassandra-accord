@@ -22,48 +22,46 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import accord.local.Command;
-import accord.local.SafeCommandStore;
-import accord.api.ExclusiveAsyncExecutor;
-import accord.messages.Callback.ConcreteCallbackExclusive;
-import accord.messages.ReadData;
-import accord.primitives.SyncPoint;
-import accord.primitives.Participants;
-import accord.topology.TopologyException;
-import accord.utils.UnhandledEnum;
-import accord.utils.async.AsyncChain;
+import javax.annotation.Nullable;
 
 import accord.api.Data;
 import accord.api.DataStore;
+import accord.api.ExclusiveAsyncExecutor;
 import accord.coordinate.CoordinateSyncPoint;
 import accord.coordinate.FetchCoordinator;
+import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Node;
+import accord.local.SafeCommandStore;
+import accord.messages.Callback.ConcreteCallbackExclusive;
 import accord.messages.MessageType;
+import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
+import accord.primitives.Participants;
 import accord.primitives.Ranges;
+import accord.primitives.SyncPoint;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.topology.TopologyException;
 import accord.utils.Invariants;
+import accord.utils.UnhandledEnum;
+import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import javax.annotation.Nullable;
-
 import static accord.messages.MessageType.StandardMessage.FETCH_DATA_REQ;
 import static accord.messages.MessageType.StandardMessage.FETCH_DATA_RSP;
+import static accord.messages.ReadData.CommitOrReadNack.InsufficientAndWaiting;
 import static accord.messages.ReadData.CommitOrReadNack.Redundant;
 import static accord.messages.ReadData.CommitOrReadNack.Waiting;
 import static accord.messages.ReadEphemeralTxnData.retryInLaterEpoch;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.Applied;
 import static accord.primitives.SaveStatus.TruncatedApply;
-import static accord.messages.ReadData.CommitOrReadNack.InsufficientAndWaiting;
-import static accord.primitives.Routables.Slice.Minimal;
 
 public abstract class AbstractFetchCoordinator extends FetchCoordinator
 {
@@ -258,7 +256,7 @@ public abstract class AbstractFetchCoordinator extends FetchCoordinator
         }
 
         @Override
-        protected AsyncChain<Data> beginRead(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
+        protected AsyncChain<Data> forceApply(SafeCommandStore safeStore, Timestamp executeAt, PartialTxn txn, Participants<?> executes)
         {
             return read.read(safeStore, executeAt, executes);
         }
