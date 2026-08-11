@@ -480,6 +480,8 @@ public class SortedArrays
      */
     public static int[] linearIntersection(int[] left, int leftStart, int leftEnd, int[] right, int rightStart, int rightEnd, ArrayBuffers.IntBuffers buffers)
     {
+        Invariants.require(leftStart <= leftEnd && rightStart <= rightEnd);
+
         if (leftEnd - leftStart > rightEnd - rightStart)
         {
             int[] tmp = left;
@@ -515,9 +517,10 @@ public class SortedArrays
                 }
                 else
                 {
-                    resultSize = leftIdx++;
+                    resultSize = leftIdx - leftStart;
+                    leftIdx++;
                     result = buffers.getInts(resultSize + Math.min(leftEnd - leftIdx, rightEnd - rightIdx));
-                    System.arraycopy(left, 0, result, 0, resultSize);
+                    System.arraycopy(left, leftStart, result, 0, resultSize);
                     break;
                 }
             }
@@ -526,9 +529,9 @@ public class SortedArrays
             {
                 if (!hasMatch)
                     return left.length == 0 ? left : NO_INTS;
-                if (leftStart == 0 && leftEnd == left.length)
+                if (leftStart == 0 && leftIdx == left.length)
                     return left;
-                return Arrays.copyOfRange(left, leftStart, leftEnd);
+                return Arrays.copyOfRange(left, leftStart, leftIdx);
             }
         }
 
