@@ -196,10 +196,11 @@ public class KeyDepsTest
     }
 
     @Test
-    public void testForEachOnUniqueEndInclusive()
+    public void testForEachOnUnique()
     {
         qt().forAll(Gen.of(Deps::generate).filter(d -> d.test.keys().size() >= 2)).check(deps -> {
             RoutingKeys keys = deps.test.keys();
+            // By default, all ranges are start exclusive and end inclusive (start, end]
             RoutingKey start = keys.get(0);
             RoutingKey end = keys.get(keys.size() - 1);
             if (start.equals(end))
@@ -222,36 +223,13 @@ public class KeyDepsTest
     }
 
     @Test
-    public void testForEachOnUniqueStartInclusive()
-    {
-        qt().forAll(Gen.of(Deps::generate).filter(d -> d.test.keys().size() >= 2)).check(deps -> {
-            RoutingKeys keys = deps.test.keys();
-            RoutingKey start = keys.get(0);
-            RoutingKey end = keys.get(keys.size() - 1);
-
-            TreeSet<TxnId> seen = new TreeSet<>();
-            deps.test.forEachUniqueTxnId(Ranges.of(Range.of(start.toUnseekable(), end.toUnseekable())), txnId -> {
-                if (!seen.add(txnId))
-                    throw new AssertionError("Seen " + txnId + " multiple times");
-            });
-            Set<TxnId> notExpected = deps.canonical.get(end);
-            for (int i = 0; i < keys.size() - 1; i++)
-            {
-                Set<TxnId> ids = deps.canonical.get(keys.get(i));
-                notExpected = Sets.difference(notExpected, ids);
-            }
-            TreeSet<TxnId> expected = new TreeSet<>(Sets.difference(deps.invertCanonical().keySet(), notExpected));
-            Assertions.assertEquals(expected, seen);
-        });
-    }
-
-    @Test
     public void testForEachOnUniqueNoMatch()
     {
         qt().forAll(Gen.of(Deps::generate).filter(d -> d.test.keys().size() >= 2)).check(deps -> {
             RoutingKeys keys = deps.test.keys();
+            // By default, all ranges are start exclusive and end inclusive (start, end]
             Hash start = IntHashKey.forHash(Integer.MIN_VALUE);
-            RoutingKey end = keys.get(0);
+            Hash end = IntHashKey.forHash(((IntHashKey) keys.get(0)).hash - 1);
 
             TreeSet<TxnId> seen = new TreeSet<>();
             deps.test.forEachUniqueTxnId(Ranges.of(Range.of(start.toUnseekable(), end.toUnseekable())), txnId -> {
