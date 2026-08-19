@@ -430,6 +430,11 @@ public class TopologyRandomizer
 
     private boolean previousEpochForRegainedRangeRetired(Topology current, Ranges regainingRanges)
     {
+        // When nodeLookup isn't defined we are unable to get node state, so
+        // assume that the calling test doesn't care about retired ranges
+        if (this.nodeLookup == null)
+            return true;
+
         for (Id id : current.nodes())
         {
             Node node = this.nodeLookup.apply(id);
