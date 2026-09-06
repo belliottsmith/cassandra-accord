@@ -64,6 +64,12 @@ public class GetMaxConflict extends RouteRequest.WithUnsynced<GetMaxConflict.Get
     }
 
     @Override
+    protected void acceptInternal(GetMaxConflictOk reply, Throwable failure)
+    {
+        acceptReply(reply, failure);
+    }
+
+    @Override
     public GetMaxConflictOk applyInternal(SafeCommandStore safeStore)
     {
         Timestamp maxConflict = safeStore.commandStore().maxConflict(txnId, scope);

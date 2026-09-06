@@ -18,11 +18,13 @@
 
 package accord.messages;
 
+import java.util.function.Function;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.local.Command;
 import accord.local.DepsCalculator;
+import accord.local.DepsCalculator.AbstractDepsReply;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
 import accord.local.Node.Id;
@@ -31,6 +33,7 @@ import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
+import accord.primitives.Known.KnownDeps;
 import accord.primitives.LatestDeps;
 import accord.primitives.PartialDeps;
 import accord.primitives.Route;
@@ -44,7 +47,7 @@ import accord.utils.async.Cancellable;
 import static accord.messages.MessageType.StandardMessage.GET_LATEST_DEPS_REQ;
 import static accord.messages.MessageType.StandardMessage.GET_LATEST_DEPS_RSP;
 
-public class GetLatestDeps extends RouteRequest.WithUnsynced<GetLatestDeps.GetLatestDepsReply>
+public class GetLatestDeps extends RouteRequest.WithUnsynced<ReplyList<GetLatestDeps.GetLatestDepsReply>>
 {
     public static final class SerializationSupport
     {
@@ -78,7 +81,14 @@ public class GetLatestDeps extends RouteRequest.WithUnsynced<GetLatestDeps.GetLa
     }
 
     @Override
-    public GetLatestDepsReply applyInternal(SafeCommandStore safeStore)
+    protected void acceptInternal(ReplyList<GetLatestDepsReply> replies, Throwable failure)
+    {
+        if (failure != null) acceptReply(null, failure);
+        else ReplyList.invoke(replies, GetLatestDepsReply::reduce, this::acceptReply);
+    }
+
+    @Override
+    public ReplyList<GetLatestDepsReply> applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.read(safeStore, scope, txnId, minEpoch, executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
@@ -86,26 +96,38 @@ public class GetLatestDeps extends RouteRequest.WithUnsynced<GetLatestDeps.GetLa
         if (ballot != null)
         {
             if (command.promised().compareTo(ballot) > 0)
-                return GetLatestDepsNack.INSTANCE;
+                return GetLatestDepsReply.NACK;
             command = safeCommand.updatePromised(ballot);
         }
+
         PartialDeps coordinatedDeps = command.partialDeps();
-        Deps localDeps = null;
-        if (!command.known().deps().hasCommittedOrDecidedDeps() && !command.hasBeen(Status.Truncated))
+        KnownDeps knownDeps = command.known().deps();
+        Ballot acceptedOrCommitted = command.acceptedOrCommitted();
+        if (knownDeps.hasCommittedOrDecidedDeps() || command.hasBeen(Status.Truncated))
         {
-            localDeps = DepsCalculator.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, false);
+            LatestDeps deps = LatestDeps.create(participants.owns(), knownDeps, acceptedOrCommitted, coordinatedDeps, null);
+            return new GetLatestDepsReply(deps);
         }
 
-        LatestDeps deps = LatestDeps.create(participants.owns(), command.known().deps(), command.acceptedOrCommitted(), coordinatedDeps, localDeps);
-        return new GetLatestDepsOk(deps);
+        GetLatestDepsCalculator calculator = new GetLatestDepsCalculator(txnId, participants, knownDeps, acceptedOrCommitted, coordinatedDeps);
+        try
+        {
+            calculator.initialise(safeStore, minEpoch, false);
+            GetLatestDepsCalculator calc = calculator;
+            calculator = null;
+            return calc.calculate(safeStore);
+        }
+        finally
+        {
+            if (calculator != null)
+                calculator.close();
+        }
     }
 
     @Override
-    public GetLatestDepsReply reduce(GetLatestDepsReply r1, GetLatestDepsReply r2)
+    public ReplyList<GetLatestDepsReply> reduce(ReplyList<GetLatestDepsReply> r1, ReplyList<GetLatestDepsReply> r2)
     {
-        if (!r1.isOk()) return r1;
-        if (!r2.isOk()) return r2;
-        return new GetLatestDepsOk(LatestDeps.merge(((GetLatestDepsOk)r1).deps, ((GetLatestDepsOk)r2).deps));
+        return ReplyList.merge(r1, r2);
     }
 
     @Override
@@ -136,42 +158,56 @@ public class GetLatestDeps extends RouteRequest.WithUnsynced<GetLatestDeps.GetLa
         return LoadKeysFor.READ_WRITE;
     }
 
-    public interface GetLatestDepsReply extends Reply
+    static class GetLatestDepsCalculator extends DepsCalculator.DepsReplyCalculator<GetLatestDepsReply> implements Function<Void, GetLatestDepsReply>
     {
-        boolean isOk();
-    }
+        final StoreParticipants participants;
+        final KnownDeps known;
+        final Ballot acceptedOrCommitted;
+        final Deps coordinatedDeps;
 
-    public static final class GetLatestDepsNack implements GetLatestDepsReply
-    {
-        public static final GetLatestDepsNack INSTANCE = new GetLatestDepsNack();
-        private GetLatestDepsNack(){}
-
-        @Override
-        public boolean isOk()
+        public GetLatestDepsCalculator(TxnId txnId, StoreParticipants participants, KnownDeps known, Ballot acceptedOrCommitted, Deps coordinatedDeps)
         {
-            return false;
+            super(txnId, txnId, participants);
+            this.participants = participants;
+            this.known = known;
+            this.acceptedOrCommitted = acceptedOrCommitted;
+            this.coordinatedDeps = coordinatedDeps;
         }
 
-        @Override
-        public MessageType type()
+        public GetLatestDepsReply apply(Void ignore)
         {
-            return GET_LATEST_DEPS_RSP;
+            try
+            {
+                Deps localDeps = deps();
+                LatestDeps deps = LatestDeps.create(participants.owns(), known, acceptedOrCommitted, coordinatedDeps, localDeps);
+                return new GetLatestDepsReply(deps);
+            }
+            finally
+            {
+                close();
+            }
         }
     }
 
-    public static class GetLatestDepsOk implements GetLatestDepsReply
+    public static class GetLatestDepsReply extends AbstractDepsReply<GetLatestDepsReply>
     {
+        public static final GetLatestDepsReply NACK = new GetLatestDepsReply();
         public final LatestDeps deps;
 
-        public GetLatestDepsOk(@Nonnull LatestDeps deps)
+        public GetLatestDepsReply(@Nonnull LatestDeps deps)
         {
             this.deps = Invariants.nonNull(deps);
+        }
+
+        private GetLatestDepsReply()
+        {
+            this.deps = null;
         }
 
         @Override
         public String toString()
         {
-            return "GetLatestDepsOk{" + deps + '}' ;
+            return "GetLatestDepsReply{" + deps + '}' ;
         }
 
         @Override
@@ -180,11 +216,16 @@ public class GetLatestDeps extends RouteRequest.WithUnsynced<GetLatestDeps.GetLa
             return GET_LATEST_DEPS_RSP;
         }
 
-        @Override
         public boolean isOk()
         {
-            return true;
+            return deps != null;
+        }
+
+        private static GetLatestDepsReply reduce(GetLatestDepsReply r1, GetLatestDepsReply r2)
+        {
+            if (!r1.isOk()) return r1;
+            if (!r2.isOk()) return r2;
+            return new GetLatestDepsReply(LatestDeps.merge(r1.deps, r2.deps));
         }
     }
-
 }

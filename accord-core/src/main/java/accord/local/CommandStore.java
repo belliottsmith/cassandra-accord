@@ -64,6 +64,8 @@ import accord.primitives.Status.Durability.HasOutcome;
 import accord.utils.DeterministicIdentitySet;
 import accord.utils.Invariants;
 import accord.utils.Reduce;
+import accord.utils.SortedArrays;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -525,7 +527,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
         dataStore.ensureDurable(this, ranges, addOnDataStoreDurable, 0);
         ensureDurable(ranges, addOnCommandStoreDurable);
         Ranges unavailable = unavailable(txnId, txnIdWithFlags, ranges, safeStore.ranges(), safeStore.safeToReadAt());
-        node.durability().report(new DurabilityResult(new MinimalSyncPoint(txnId, txnIdWithFlags, route.without(unavailable)), new DurabilityLevel(Self, NoRemote, null), null));
+        node.durability().report(new DurabilityResult(new MinimalSyncPoint(txnId, txnIdWithFlags, route.without(unavailable)), new DurabilityLevel(Self, NoRemote, SortedArrayList.ofSorted(node.id())), null));
     }
 
     /**

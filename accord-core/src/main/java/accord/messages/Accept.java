@@ -18,6 +18,7 @@
 
 package accord.messages;
 
+import java.util.function.Function;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -25,7 +26,8 @@ import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
 import accord.local.Commands.AcceptOutcome;
-import accord.local.DepsCalculator;
+import accord.local.DepsCalculator.AbstractDepsReply;
+import accord.local.DepsCalculator.DepsReplyCalculator;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
 import accord.local.Node.Id;
@@ -49,11 +51,11 @@ import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
 import static accord.api.ProtocolModifiers.filterDuplicateDependenciesFromAcceptReply;
+import static accord.api.ProtocolModifiers.loadKeysAsyncIfPermitted;
 import static accord.api.ProtocolModifiers.syncPointsTrackUnstableMediumPathDependencies;
 import static accord.local.Commands.AcceptOutcome.Redundant;
 import static accord.local.Commands.AcceptOutcome.RejectedBallot;
 import static accord.local.Commands.AcceptOutcome.Success;
-import static accord.local.LoadKeys.SYNC;
 import static accord.messages.MessageType.StandardMessage.ACCEPT_REQ;
 import static accord.messages.MessageType.StandardMessage.ACCEPT_RSP;
 import static accord.messages.MessageType.StandardMessage.NOT_ACCEPT_REQ;
@@ -61,7 +63,7 @@ import static accord.primitives.Known.KnownDeps.DepsKnown;
 
 // TODO (low priority, efficiency): use different objects for send and receive, so can be more efficient
 //                                  (e.g. serialize without slicing, and without unnecessary fields)
-public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
+public class Accept extends RouteRequest.WithUnsynced<ReplyList<Accept.AcceptReply>>
 {
     public static class SerializerSupport
     {
@@ -140,69 +142,93 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
     }
 
     @Override
-    public AcceptReply applyInternal(SafeCommandStore safeStore)
+    public ReplyList<AcceptReply> applyInternal(SafeCommandStore safeStore)
     {
-        PartialDeps partialDeps = this.partialDeps;
+        PartialDeps inputDeps = this.partialDeps;
         if (ifDoneExpectCancelled()) // check cancellation after reading nullable fields
             return null; // we can't throw an exception here else we override any non-exceptional reply informing the reason
 
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch(), executeAt.epoch());
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        AcceptOutcome outcome = Commands.accept(safeStore, safeCommand, participants, txnId, kind, ballot, scope, executeAt, partialDeps);
+        AcceptOutcome outcome = Commands.accept(safeStore, safeCommand, participants, txnId, kind, ballot, scope, executeAt, inputDeps);
         switch (outcome)
         {
             default: throw new UnhandledEnum(outcome);
             case Redundant:
             case Truncated:
             {
-                Command command = safeCommand.current();
-
-                boolean notOwner = participants.owns().isEmpty();
-                Participants<?> hasDeps = null;
-                Deps deps = null;
-
-                if (command.known().is(DepsKnown) && (isPartialAccept() || notOwner))
+                TruncatedAcceptDepsCalculator calculator = null;
+                try
                 {
-                    deps = command.partialDeps().asFullUnsafe();
-                    hasDeps = command.participants().stillTouches();
-                }
+                    Command command = safeCommand.current();
 
-                Ballot superseding = command.promised();
-                if (superseding.compareTo(ballot) <= 0)
-                    superseding = null;
+                    boolean notOwner = participants.owns().isEmpty();
+                    Participants<?> hasDeps = null;
+                    Deps foundDeps;
 
-                boolean calculateDeps = isPartialAccept() && calculateDeps();
-                if (command.saveStatus() == SaveStatus.Vestigial)
-                {
-                    superseding = null;
-                    outcome = Success;
-                    calculateDeps = calculateDeps();
-                }
-
-                if (calculateDeps)
-                {
-                    Participants<?> calculate = participants.touches();
-                    if (hasDeps != null)
-                        calculate = calculate.without(hasDeps);
-
-                    if (!calculate.isEmpty())
+                    if (command.known().is(DepsKnown) && (isPartialAccept() || notOwner))
                     {
-                        Deps calculatedDeps = DepsCalculator.calculateDeps(safeStore, txnId, calculate, minEpoch, executeAt, true);
-                        if (calculatedDeps == null)
-                            return AcceptReply.inThePast(ballot, participants, command);
-
-                        deps = deps == null ? calculatedDeps : calculatedDeps.with(deps);
+                        foundDeps = command.partialDeps().asFullUnsafe();
+                        hasDeps = command.participants().stillTouches();
                     }
-                    hasDeps = participants.touches();
+                    else foundDeps = null;
+
+                    Ballot superseding = command.promised();
+                    if (superseding.compareTo(ballot) <= 0)
+                        superseding = null;
+
+                    boolean calculateDeps = isPartialAccept() && calculateDeps();
+                    if (command.saveStatus() == SaveStatus.Vestigial)
+                    {
+                        superseding = null;
+                        outcome = Success;
+                        calculateDeps = calculateDeps();
+                    }
+
+                    final Deps removeDeps = filterDeps() ? inputDeps : null;
+                    final Timestamp executeAtIfKnown = command.executeAtIfKnown();
+
+                    if (calculateDeps)
+                    {
+                        Participants<?> calculate = participants.touches();
+                        if (hasDeps != null)
+                            calculate = calculate.without(hasDeps);
+
+                        if (!calculate.isEmpty())
+                        {
+                            calculator = new TruncatedAcceptDepsCalculator(txnId, executeAt, calculate, foundDeps, removeDeps, superseding, executeAtIfKnown);
+                            if (!calculator.initialise(safeStore, minEpoch, true))
+                                return AcceptReply.inThePast(ballot, participants, command);
+                        }
+                        hasDeps = participants.touches();
+                    }
+
+                    Participants<?> successful = isPartialAccept() ? hasDeps : null;
+                    if (notOwner && (outcome == Redundant || (hasDeps != null && hasDeps.containsAll(participants.touches()))))
+                        outcome = Success;
+
+                    if (calculator == null)
+                    {
+                        Deps deps = foundDeps;
+                        if (deps != null && removeDeps != null)
+                            deps = deps.without(removeDeps);
+
+                        return new AcceptReply(outcome, superseding, successful, deps, executeAtIfKnown);
+                    }
+                    else
+                    {
+                        TruncatedAcceptDepsCalculator calc = calculator;
+                        calc.successful = successful;
+                        calc.outcome = outcome;
+                        calculator = null;
+                        return calc.calculate(safeStore);
+                    }
                 }
-
-                Participants<?> successful = isPartialAccept() ? hasDeps : null;
-                if (notOwner && (outcome == Redundant || (hasDeps != null && hasDeps.containsAll(participants.touches()))))
-                    outcome = Success;
-
-                if (deps != null && filterDeps())
-                    deps = deps.without(partialDeps);
-                return new AcceptReply(outcome, superseding, successful, deps, command.executeAtIfKnown());
+                finally
+                {
+                    if (calculator != null)
+                        calculator.close();
+                }
             }
 
             case RejectedBallot:
@@ -212,30 +238,29 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
                 // if we're Retired, participants.owns() is empty, so we're just fetching deps
                 // TODO (desired): optimise deps calculation; for some keys we only need to return the last RX
             case Success:
-                ExecuteFlags flags;
-                Deps deps;
-                if (calculateDeps())
+            {
+                NormalAcceptDepsCalculator calculator = null;
+                try
                 {
-                    try (DepsCalculator calculator = new DepsCalculator(executeAt))
-                    {
-                        deps = calculator.calculate(safeStore, txnId, participants, minEpoch, executeAt, true);
-                        if (deps == null)
-                            return AcceptReply.inThePast(ballot, participants, safeCommand.current());
-                        flags = calculator.executeFlags(txnId);
-                    }
+                    Participants<?> successful = isPartialAccept() ? participants.touches() : null;
 
-                    Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
-                    if (filterDeps())
-                        deps = deps.without(partialDeps);
+                    if (!calculateDeps())
+                        return new AcceptReply(successful, Deps.NONE, ExecuteFlags.none());
+
+                    calculator = new NormalAcceptDepsCalculator(txnId, executeAt, participants, filterDeps() ? inputDeps : null, successful);
+                    if (!calculator.initialise(safeStore, minEpoch, true))
+                        return AcceptReply.inThePast(ballot, participants, safeCommand.current());
+
+                    NormalAcceptDepsCalculator calc = calculator;
+                    calculator = null;
+                    return calc.calculate(safeStore);
                 }
-                else
+                finally
                 {
-                    flags = ExecuteFlags.none();
-                    deps = Deps.NONE;
+                    if (calculator != null)
+                        calculator.close();
                 }
-
-                Participants<?> successful = isPartialAccept() ? participants.touches() : null;
-                return new AcceptReply(successful, deps, flags);
+            }
         }
     }
 
@@ -255,9 +280,9 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
     }
 
     @Override
-    public AcceptReply reduce(AcceptReply r1, AcceptReply r2)
+    public ReplyList<AcceptReply> reduce(ReplyList<AcceptReply> r1, ReplyList<AcceptReply> r2)
     {
-        return AcceptReply.reduce(r1, r2);
+        return ReplyList.merge(r1, r2);
     }
 
     @Override
@@ -267,17 +292,18 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
     }
 
     @Override
-    protected void acceptInternal(AcceptReply reply, Throwable failure)
+    protected void acceptInternal(ReplyList<AcceptReply> replies, Throwable fail)
     {
         // finished processing, null out large objects
         partialDeps = null;
-        super.acceptInternal(reply, failure);
+        if (fail != null || replies == null) acceptReply(null, fail);
+        else ReplyList.invoke(replies, AcceptReply::reduce, this::acceptReply);
     }
 
     @Override
     public LoadKeys loadKeys()
     {
-        return SYNC;
+        return loadKeysAsyncIfPermitted(txnId);
     }
 
     @Override
@@ -307,7 +333,75 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
                 '}';
     }
 
-    public static final class AcceptReply implements Reply
+    static class TruncatedAcceptDepsCalculator extends DepsReplyCalculator<AcceptReply> implements Function<Void, AcceptReply>
+    {
+        final Deps foundDeps;
+        final @Nullable Deps removeDeps;
+        AcceptOutcome outcome;
+        final Ballot superseding;
+        Participants<?> successful;
+        final Timestamp executeAtIfKnown;
+
+        public TruncatedAcceptDepsCalculator(TxnId txnId, Timestamp executeAt, Participants<?> touches, Deps foundDeps, @Nullable Deps removeDeps, Ballot superseding, Timestamp executeAtIfKnown)
+        {
+            super(txnId, executeAt, touches);
+            this.foundDeps = foundDeps;
+            this.removeDeps = removeDeps;
+            this.superseding = superseding;
+            this.executeAtIfKnown = executeAtIfKnown;
+        }
+
+        public AcceptReply apply(Void ignore)
+        {
+            return finish();
+        }
+
+        AcceptReply finish()
+        {
+            try
+            {
+                Deps deps = deps();
+                if (foundDeps != null)
+                    deps = deps.with(foundDeps);
+
+                if (deps != null && removeDeps != null)
+                    deps = deps.without(removeDeps);
+                return new AcceptReply(outcome, superseding, successful, deps, executeAtIfKnown);
+            }
+            finally { close(); }
+        }
+    }
+
+    static class NormalAcceptDepsCalculator extends DepsReplyCalculator<AcceptReply> implements Function<Void, AcceptReply>
+    {
+        final @Nullable Deps removeDeps;
+        final @Nullable Participants<?> successful;
+
+        public NormalAcceptDepsCalculator(TxnId txnId, Timestamp executeAt, StoreParticipants participants, @Nullable Deps removeDeps, @Nullable Participants<?> successful)
+        {
+            super(txnId, executeAt, participants);
+            this.removeDeps = removeDeps;
+            this.successful = successful;
+        }
+
+        public AcceptReply apply(Void ignore)
+        {
+            return finish();
+        }
+
+        AcceptReply finish()
+        {
+            Deps deps = deps();
+            Invariants.require(deps.maxTxnId(txnId).epoch() <= executeAt.epoch());
+            if (removeDeps != null)
+                deps = deps.without(removeDeps);
+            ExecuteFlags flags = executeFlags();
+            return new AcceptReply(successful, deps, flags);
+        }
+    }
+
+
+    public static final class AcceptReply extends AbstractDepsReply<AcceptReply>
     {
         public static final AcceptReply SUCCESS = new AcceptReply(Success);
 
@@ -466,6 +560,12 @@ public class Accept extends RouteRequest.WithUnsynced<Accept.AcceptReply>
         public Cancellable submit()
         {
             return node.commandStores().mapReduceConsume(txnId.epoch(), txnId.epoch(), this);
+        }
+
+        @Override
+        protected void acceptInternal(AcceptReply reply, Throwable failure)
+        {
+            acceptReply(reply, failure);
         }
 
         @Override

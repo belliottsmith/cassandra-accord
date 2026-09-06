@@ -20,33 +20,33 @@ package accord.coordinate;
 
 import java.util.List;
 import java.util.function.BiConsumer;
-
 import javax.annotation.Nullable;
 
+import accord.api.ExclusiveAsyncExecutor;
 import accord.api.ProtocolModifiers;
 import accord.api.Result;
 import accord.coordinate.CoordinationAdapter.Adapters;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Commands;
-import accord.local.DepsCalculator;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
+import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.api.ExclusiveAsyncExecutor;
 import accord.local.StoreParticipants;
+import accord.messages.PreAccept.PreAcceptDepsCalculator;
 import accord.messages.PreAccept.PreAcceptNack;
-import accord.messages.PreAccept.PreAcceptReply;
-import accord.topology.Topologies;
-import accord.local.Node;
 import accord.messages.PreAccept.PreAcceptOk;
+import accord.messages.PreAccept.PreAcceptReply;
+import accord.messages.ReplyList;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.Topologies;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -60,8 +60,8 @@ import static accord.messages.Accept.Kind.MEDIUM;
 import static accord.messages.Accept.Kind.SLOW;
 import static accord.messages.MessageType.StandardMessage.PRE_ACCEPT_REQ;
 import static accord.primitives.Timestamp.Flag.REJECTED;
-import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.Timestamp.Flag.SOFT_REJECT;
+import static accord.primitives.Timestamp.mergeMaxAndFlags;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.topology.SelectShards.LIVE;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
@@ -209,7 +209,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         return node.coordinationAdapter(txnId, Standard);
     }
 
-    class LocalExecute extends AbstractLocalExecute
+    class LocalExecute extends AbstractLocalExecute<ReplyList<PreAcceptReply>>
     {
         @Override
         long expiresAt()
@@ -224,7 +224,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
         }
 
         @Override
-        public void acceptInternal(PreAcceptReply result, Throwable failure)
+        public void acceptInternal(ReplyList<PreAcceptReply> replies, Throwable failure)
         {
             if (failure != null)
             {
@@ -236,56 +236,58 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
             }
             else
             {
-                if (result.isOk())
-                {
-                    PreAcceptOk ok = (PreAcceptOk) result;
-                    // TODO (desired): we can probably still process and record fast path votes from peers, just with different quorum requirements
-                    boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
-                    if (!hasCoordinatorVote && txnId.hasPrivilegedCoordinator()) fastPathEnabled = false;
-                    Deps deps = hasCoordinatorVote && txnId.is(PrivilegedCoordinatorWithDeps) ? ok.deps : null;
-                    contactNotSelf(deps, hasCoordinatorVote);
-                    onSuccess(node.id(), ok);
-                }
-                else
-                {
-                    finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
-                }
+                ReplyList.invoke(replies, PreAcceptReply::reduce, (success, fail) -> {
+                    if (success.isOk())
+                    {
+                        PreAcceptOk ok = (PreAcceptOk) success;
+                        boolean hasCoordinatorVote = txnId.equals(ok.witnessedAt);
+                        if (!hasCoordinatorVote && txnId.hasPrivilegedCoordinator()) fastPathEnabled = false;
+                        Deps deps = hasCoordinatorVote && txnId.is(PrivilegedCoordinatorWithDeps) ? ok.deps : null;
+                        contactNotSelf(deps, hasCoordinatorVote);
+                        onSuccess(node.id(), ok);
+                    }
+                    else
+                    {
+                        finishOnFailure(Preempted.preempted(node.agent(), txnId, scope.homeKey()));
+                    }
+                });
             }
         }
 
         @Override
-        public PreAcceptReply applyInternal(SafeCommandStore safeStore)
+        public ReplyList<PreAcceptReply> applyInternal(SafeCommandStore safeStore)
         {
             long minEpoch = topologies.oldestEpoch();
             StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, txnId.epoch());
             SafeCommand safeCommand = safeStore.get(txnId, participants);
 
-            Timestamp executeAt;
-            Deps deps;
-            ExecuteFlags flags;
-            try (DepsCalculator calculator = new DepsCalculator(txnId))
+            boolean hasCoordinatorVote = txnId.hasPrivilegedCoordinator();
+            Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, null, hasCoordinatorVote);
+            if (outcome != Success)
+                return PreAcceptNack.INSTANCE;
+
+            Timestamp witnessedAt = safeCommand.current().executeAt;
+            PreAcceptDepsCalculator calculator = new PreAcceptDepsCalculator(txnId, witnessedAt, participants, node);
+            try
             {
-                deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
-                if (deps == null)
+                if (!calculator.initialise(safeStore, minEpoch, true))
                     return PreAcceptNack.INSTANCE;
 
-                boolean hasCoordinatorVote = txnId.hasPrivilegedCoordinator();
-                Deps coordinatorDeps = txnId.is(PrivilegedCoordinatorWithDeps) ? deps : null;
-                Commands.AcceptOutcome outcome = Commands.preaccept(safeStore, safeCommand, participants, txnId, txn, coordinatorDeps, hasCoordinatorVote);
-                if (outcome != Success)
-                    return PreAcceptNack.INSTANCE;
-
-                executeAt = calculator.executeAt(safeCommand, node);
-                flags = calculator.executeFlags(txnId);
+                PreAcceptDepsCalculator calc = calculator;
+                calculator = null;
+                return calc.calculate(safeStore);
             }
-
-            return new PreAcceptOk(txnId, executeAt, deps, flags);
+            finally
+            {
+                if (calculator != null)
+                    calculator.close();
+            }
         }
 
         @Override
-        public PreAcceptReply reduce(PreAcceptReply r1, PreAcceptReply r2)
+        public ReplyList<PreAcceptReply> reduce(ReplyList<PreAcceptReply> r1, ReplyList<PreAcceptReply> r2)
         {
-            return PreAcceptReply.reduce(r1, r2);
+            return ReplyList.merge(r1, r2);
         }
 
         @Override

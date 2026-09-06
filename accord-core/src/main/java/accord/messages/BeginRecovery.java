@@ -134,6 +134,12 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
     }
 
     @Override
+    protected void acceptInternal(RecoverReply reply, Throwable failure)
+    {
+        acceptReply(reply, failure);
+    }
+
+    @Override
     public RecoverReply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAtOrTxnIdEpoch);

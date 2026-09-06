@@ -37,7 +37,7 @@ import accord.utils.async.Cancellable;
 import static accord.utils.Invariants.illegalState;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> extends AbstractRequest<P, R> implements Timeouts.Timeout
+public abstract class NoWaitRequest<P extends Participants<?>, R> extends AbstractRequest<P, R> implements Timeouts.Timeout
 {
     public static final CancellationException CANCELLATION_EXCEPTION = new CancellationException();
 
@@ -127,27 +127,31 @@ public abstract class NoWaitRequest<P extends Participants<?>, R extends Reply> 
         acceptInternal(reply, failure);
     }
 
-    protected void acceptInternal(R reply, Throwable failure)
+    protected abstract void acceptInternal(R reply, Throwable failure);
+
+    protected void acceptReply(Reply reply, Throwable failure)
     {
-        if (reply == null && failure == null)
         {
-            Invariants.require(isCancelled());
-            if (!(replyContext instanceof LocalDelivery<?>))
+            if (reply == null && failure == null)
             {
-                if (tracing() != null)
-                   tracing().trace(null, "Completed with no reply");
-                return; // for now we don't report cancellation/timeout remotely, and rely on the coordinator's timeouts
+                Invariants.require(isCancelled());
+                if (!(replyContext instanceof LocalDelivery<?>))
+                {
+                    if (tracing() != null)
+                        tracing().trace(null, "Completed with no reply");
+                    return; // for now we don't report cancellation/timeout remotely, and rely on the coordinator's timeouts
+                }
+                // we must report something for local delivery, as we rely on this callback instead of registering a separate timeout
+                failure = CANCELLATION_EXCEPTION;
             }
-            // we must report something for local delivery, as we rely on this callback instead of registering a separate timeout
-            failure = CANCELLATION_EXCEPTION;
+            if (failure != null || reply.isFinal())
+            {
+                Invariants.require(!hasSentFinalReply);
+                hasSentFinalReply = true;
+            }
+            if (failure != null) cancel();
+            node.reply(replyTo, replyContext, reply, failure, tracing());
         }
-        if (failure != null || reply.isFinal())
-        {
-            Invariants.require(!hasSentFinalReply);
-            hasSentFinalReply = true;
-        }
-        if (failure != null) cancel();
-        node.reply(replyTo, replyContext, reply, failure, tracing());
     }
 
     @Override

@@ -18,11 +18,14 @@
 
 package accord.messages;
 
+import java.util.function.Function;
+
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.DepsCalculator;
+import accord.local.DepsCalculator.AbstractDepsReply;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
 import accord.local.Node.Id;
@@ -31,13 +34,14 @@ import accord.local.StoreParticipants;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.Route;
-import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
-public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeralReadDeps.GetEphemeralReadDepsOk>
+import static accord.api.ProtocolModifiers.loadKeysAsyncIfPermitted;
+
+public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<ReplyList<GetEphemeralReadDeps.GetEphemeralReadDepsOk>>
 {
     public static final class SerializationSupport
     {
@@ -68,7 +72,14 @@ public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeral
     }
 
     @Override
-    public GetEphemeralReadDepsOk applyInternal(SafeCommandStore safeStore)
+    protected void acceptInternal(ReplyList<GetEphemeralReadDepsOk> replies, Throwable failure)
+    {
+        if (failure != null) acceptReply(null, failure);
+        else ReplyList.invoke(replies, GetEphemeralReadDepsOk::reduce, this::acceptReply);
+    }
+
+    @Override
+    public ReplyList<GetEphemeralReadDepsOk> applyInternal(SafeCommandStore safeStore)
     {
         long latestEpoch = Math.max(safeStore.node().epoch(), node.epoch());
 
@@ -77,23 +88,51 @@ public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeral
         if (latestEpoch > executionEpoch && (safeStore.ranges().removed(executionEpoch, latestEpoch).intersects(participants.owns()) || node.topology().active().hasReplicationMaybeChanged(participants.owns(), executionEpoch)))
             return new GetEphemeralReadDepsOk(latestEpoch);
 
-        Deps deps;
-        ExecuteFlags flags;
-        try (DepsCalculator calculator = new DepsCalculator(txnId))
+        GetEphemeralReadDepsCalculator calculator = new GetEphemeralReadDepsCalculator(txnId, participants, latestEpoch);
+        try
         {
-             deps = calculator.calculate(safeStore, txnId, participants, minEpoch, Timestamp.MAX, false);
-             flags = calculator.executeFlags(txnId);
+            calculator.initialise(safeStore, minEpoch, false);
+            GetEphemeralReadDepsCalculator calc = calculator;
+            calculator = null;
+            return calc.calculate(safeStore);
         }
-        return new GetEphemeralReadDepsOk(deps, latestEpoch, flags);
+        finally
+        {
+            if (calculator != null)
+                calculator.close();
+        }
     }
 
-    @Override
-    public GetEphemeralReadDepsOk reduce(GetEphemeralReadDepsOk r1, GetEphemeralReadDepsOk r2)
+    static class GetEphemeralReadDepsCalculator extends DepsCalculator.DepsReplyCalculator<GetEphemeralReadDepsOk> implements Function<Void, GetEphemeralReadDepsOk>
     {
-        long latestEpoch = Math.max(r1.latestEpoch, r2.latestEpoch);
-        if (r1.deps == null || r2.deps == null)
-            return new GetEphemeralReadDepsOk(latestEpoch);
-        return new GetEphemeralReadDepsOk(r1.deps.with(r2.deps), latestEpoch, r1.flags.and(r2.flags));
+        final long latestEpoch;
+
+        public GetEphemeralReadDepsCalculator(TxnId txnId, StoreParticipants participants, long latestEpoch)
+        {
+            super(txnId, txnId, participants);
+            this.latestEpoch = latestEpoch;
+        }
+
+        public GetEphemeralReadDepsOk apply(Void ignore)
+        {
+            try
+            {
+                Deps deps = deps();
+                ExecuteFlags flags = executeFlags();
+                return new GetEphemeralReadDepsOk(deps, latestEpoch, flags);
+            }
+            finally
+            {
+                close();
+            }
+        }
+    }
+
+
+    @Override
+    public ReplyList<GetEphemeralReadDepsOk> reduce(ReplyList<GetEphemeralReadDepsOk> r1, ReplyList<GetEphemeralReadDepsOk> r2)
+    {
+        return ReplyList.merge(r1, r2);
     }
 
     @Override
@@ -114,7 +153,7 @@ public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeral
     @Override
     public LoadKeys loadKeys()
     {
-        return LoadKeys.SYNC;
+        return loadKeysAsyncIfPermitted(txnId);
     }
 
     @Override
@@ -123,7 +162,7 @@ public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeral
         return LoadKeysFor.READ_WRITE;
     }
 
-    public static class GetEphemeralReadDepsOk implements Reply
+    public static class GetEphemeralReadDepsOk extends AbstractDepsReply<GetEphemeralReadDepsOk>
     {
         public enum Flag { READY_TO_EXECUTE }
 
@@ -155,6 +194,14 @@ public class GetEphemeralReadDeps extends RouteRequest.WithUnsynced<GetEphemeral
         public MessageType type()
         {
             return MessageType.StandardMessage.GET_EPHEMERAL_READ_DEPS_RSP;
+        }
+
+        private static GetEphemeralReadDepsOk reduce(GetEphemeralReadDepsOk r1, GetEphemeralReadDepsOk r2)
+        {
+            long latestEpoch = Math.max(r1.latestEpoch, r2.latestEpoch);
+            if (r1.deps == null || r2.deps == null)
+                return new GetEphemeralReadDepsOk(latestEpoch);
+            return new GetEphemeralReadDepsOk(r1.deps.with(r2.deps), latestEpoch, r1.flags.and(r2.flags));
         }
     }
 }

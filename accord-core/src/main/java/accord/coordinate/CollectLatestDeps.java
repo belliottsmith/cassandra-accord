@@ -29,7 +29,6 @@ import accord.coordinate.tracking.QuorumTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.GetLatestDeps;
-import accord.messages.GetLatestDeps.GetLatestDepsOk;
 import accord.messages.GetLatestDeps.GetLatestDepsReply;
 import accord.primitives.Ballot;
 import accord.primitives.FullRoute;
@@ -46,7 +45,7 @@ import static accord.coordinate.tracking.RequestStatus.Failed;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.primitives.Routables.Slice.Minimal;
 
-public class CollectLatestDeps extends AbstractCoordination<Route<?>, List<LatestDeps>, GetLatestDepsReply, GetLatestDepsOk>
+public class CollectLatestDeps extends AbstractCoordination<Route<?>, List<LatestDeps>, GetLatestDepsReply, GetLatestDepsReply>
 {
     final Timestamp executeAt;
     final @Nullable Ballot ballot;
@@ -90,7 +89,7 @@ public class CollectLatestDeps extends AbstractCoordination<Route<?>, List<Lates
     {
         if (ok.isOk())
         {
-            recordOk(fromIndex, (GetLatestDepsOk) ok);
+            recordOk(fromIndex, ok);
             if (tracker.recordSuccess(from) == Success)
                 onQuorum();
         }
@@ -111,9 +110,9 @@ public class CollectLatestDeps extends AbstractCoordination<Route<?>, List<Lates
     private void onQuorum()
     {
         Invariants.require(!isDone());
-        SortedListMap<Node.Id, GetLatestDepsOk> oks = finishOks();
+        SortedListMap<Node.Id, GetLatestDepsReply> oks = finishOks();
         List<LatestDeps> result = new ArrayList<>(oks.size());
-        for (GetLatestDepsOk ok : oks.values())
+        for (GetLatestDepsReply ok : oks.values())
             result.add(ok.deps);
         finishWithSuccess(result);
     }

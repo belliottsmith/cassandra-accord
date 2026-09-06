@@ -461,7 +461,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
     }
 
     enum LocalExecuteState { PENDING, SUCCESS, TIMEOUT }
-    abstract class AbstractLocalExecute extends MapReduceConsumeCommandStores<P, Reply> implements Timeouts.Timeout
+    abstract class AbstractLocalExecute<R> extends MapReduceConsumeCommandStores<P, R> implements Timeouts.Timeout
     {
         LocalExecuteState state = PENDING;
         Cancellable cancel;
@@ -469,7 +469,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
 
         abstract long expiresAt();
         abstract Cancellable submit();
-        abstract void acceptInternal(Reply result, Throwable failure);
+        abstract void acceptInternal(R result, Throwable failure);
 
         protected AbstractLocalExecute()
         {
@@ -504,7 +504,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         }
 
         @Override
-        public void accept(Reply result, Throwable failure)
+        public void accept(R result, Throwable failure)
         {
             done();
             executor.executeMaybeImmediately(() -> acceptInternal(result, failure));

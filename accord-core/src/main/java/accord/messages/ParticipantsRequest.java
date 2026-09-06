@@ -38,7 +38,7 @@ import accord.utils.async.Cancellable;
 import static accord.topology.Shard.Flag.MUST_WITNESS;
 import static accord.utils.Invariants.illegalArgument;
 
-public abstract class ParticipantsRequest<P extends Participants<?>, R extends Reply> extends NoWaitRequest<P, R>
+public abstract class ParticipantsRequest<P extends Participants<?>, R> extends NoWaitRequest<P, R>
 {
     public final long waitForEpoch;
 

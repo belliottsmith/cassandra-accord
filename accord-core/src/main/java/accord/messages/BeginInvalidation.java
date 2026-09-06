@@ -60,6 +60,12 @@ public class BeginInvalidation extends ParticipantsRequest<Participants<?>, Begi
     }
 
     @Override
+    protected void acceptInternal(InvalidateReply reply, Throwable failure)
+    {
+        acceptReply(reply, failure);
+    }
+
+    @Override
     public InvalidateReply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.notAccept(safeStore, scope, txnId);

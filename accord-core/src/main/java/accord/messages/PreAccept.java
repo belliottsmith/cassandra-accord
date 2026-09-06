@@ -19,6 +19,7 @@
 package accord.messages;
 
 import java.util.Objects;
+import java.util.function.Function;
 import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
@@ -27,17 +28,19 @@ import org.slf4j.LoggerFactory;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Commands;
-import accord.local.DepsCalculator;
+import accord.local.DepsCalculator.AbstractDepsReply;
+import accord.local.DepsCalculator.DepsReplyCalculator;
 import accord.local.LoadKeys;
 import accord.local.LoadKeysFor;
+import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.primitives.PartialDeps;
 import accord.local.StoreParticipants;
 import accord.messages.RouteRequest.WithUnsynced;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
+import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Route;
 import accord.primitives.Status;
@@ -49,11 +52,12 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
+import static accord.api.ProtocolModifiers.loadKeysAsyncIfPermitted;
 import static accord.messages.MessageType.StandardMessage.PRE_ACCEPT_REQ;
 import static accord.messages.MessageType.StandardMessage.PRE_ACCEPT_RSP;
 import static accord.primitives.Timestamp.Flag.REJECTED;
 
-public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
+public class PreAccept extends WithUnsynced<ReplyList<PreAccept.PreAcceptReply>>
 {
     @SuppressWarnings("unused")
     private static final Logger logger = LoggerFactory.getLogger(PreAccept.class);
@@ -98,7 +102,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     @Override
     public LoadKeys loadKeys()
     {
-        return LoadKeys.SYNC;
+        return loadKeysAsyncIfPermitted(txnId);
     }
 
     @Override
@@ -120,7 +124,14 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     }
 
     @Override
-    public PreAcceptReply applyInternal(SafeCommandStore safeStore)
+    protected void acceptInternal(ReplyList<PreAcceptReply> replies, Throwable failure)
+    {
+        if (failure != null) acceptReply(null, failure);
+        else ReplyList.invoke(replies, PreAcceptReply::reduce, this::acceptReply);
+    }
+
+    @Override
+    public ReplyList<PreAcceptReply> applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, acceptEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
@@ -142,25 +153,22 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
                     return new PreAcceptOk(txnId, command.executeAt(), Deps.NONE, ExecuteFlags.none());
 
             case Retired:
-                Timestamp executeAt;
-                ExecuteFlags flags;
-                Deps deps;
-                try (DepsCalculator calculator = new DepsCalculator(txnId))
+                Timestamp witnessedAt = command.executeAtOrTxnId(); // if retired, executeAt may be null
+                PreAcceptDepsCalculator calculator = new PreAcceptDepsCalculator(txnId, witnessedAt, participants, node);
+                try
                 {
-                    deps = calculator.calculate(safeStore, txnId, participants, minEpoch, txnId, true);
-                    if (deps == null)
+                    if (!calculator.initialise(safeStore, minEpoch, true))
                         return PreAcceptNack.INSTANCE;
-                    flags = calculator.executeFlags(txnId);
-                    executeAt = calculator.executeAt(safeCommand, node);
-                }
 
-                // NOTE: we CANNOT test whether we adopt a future dependency here because it might be that this command
-                // is guaranteed to not reach agreement, but that this replica is unaware of that fact and has pruned
-                // all preceding transactions. In which case we may be able to adopt a future dependency but won't propose it.
-                // We do however prohibit later epochs as dependencies as we cannot handle those effectively
-                // when back-filling for execution of the transaction.
-                Invariants.require(deps.maxTxnId(txnId).epoch() <= txnId.epoch());
-                return new PreAcceptOk(txnId, executeAt, deps, flags);
+                    PreAcceptDepsCalculator calc = calculator;
+                    calculator = null;
+                    return calc.calculate(safeStore);
+                }
+                finally
+                {
+                    if (calculator != null)
+                        calculator.close();
+                }
 
             case Truncated:
             case RejectedBallot:
@@ -169,9 +177,9 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
     }
 
     @Override
-    public PreAcceptReply reduce(PreAcceptReply r1, PreAcceptReply r2)
+    public ReplyList<PreAcceptReply> reduce(ReplyList<PreAcceptReply> r1, ReplyList<PreAcceptReply> r2)
     {
-        return PreAcceptReply.reduce(r1, r2);
+        return ReplyList.merge(r1, r2);
     }
 
     @Override
@@ -180,7 +188,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         return PRE_ACCEPT_REQ;
     }
 
-    public static abstract class PreAcceptReply implements Reply
+    public static abstract class PreAcceptReply extends AbstractDepsReply<PreAcceptReply>
     {
         @Override
         public MessageType type()
@@ -209,6 +217,41 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         }
     }
 
+    public static class PreAcceptDepsCalculator extends DepsReplyCalculator<PreAcceptReply> implements Function<Void, PreAcceptReply>
+    {
+        final Node node;
+        final Timestamp witnessedAt;
+
+        public PreAcceptDepsCalculator(TxnId txnId, Timestamp witnessedAt, StoreParticipants participants, Node node)
+        {
+            super(txnId, txnId, participants);
+            this.node = node;
+            this.witnessedAt = Invariants.nonNull(witnessedAt);
+        }
+
+        public PreAcceptOk apply(Void ignore)
+        {
+            try
+            {
+                Deps deps = deps();
+                Timestamp executeAt = executeAt(witnessedAt, node);
+                ExecuteFlags flags = executeFlags();
+
+                // NOTE: we CANNOT test whether we adopt a future dependency here because it might be that this command
+                // is guaranteed to not reach agreement, but that this replica is unaware of that fact and has pruned
+                // all preceding transactions. In which case we may be able to adopt a future dependency but won't propose it.
+                // We do however prohibit later epochs as dependencies as we cannot handle those effectively
+                // when back-filling for execution of the transaction.
+                Invariants.require(deps.maxTxnId(txnId).epoch() <= txnId.epoch());
+                return new PreAcceptOk(txnId, executeAt, deps, flags);
+            }
+            finally
+            {
+                close();
+            }
+        }
+    }
+
     public static class PreAcceptOk extends PreAcceptReply
     {
         public final TxnId txnId;
@@ -219,7 +262,7 @@ public class PreAccept extends WithUnsynced<PreAccept.PreAcceptReply>
         public PreAcceptOk(TxnId txnId, Timestamp witnessedAt, Deps deps, ExecuteFlags flags)
         {
             this.txnId = txnId;
-            this.witnessedAt = witnessedAt;
+            this.witnessedAt = Invariants.nonNull(witnessedAt);
             this.deps = deps;
             this.flags = flags;
         }

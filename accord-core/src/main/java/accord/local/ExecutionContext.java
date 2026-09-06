@@ -158,6 +158,11 @@ public interface ExecutionContext
      */
     default boolean isIdempotent() { return false; }
 
+    /**
+     * Whether this execution should be retried if partially executes; useful only for INCR tasks that may partially succeed.
+     */
+    default boolean retryPartial() { return true; }
+
     default ExecutionKind executionKind() { return ExecutionKind.OTHER; }
 
     default ExecutionSequence executionSequence() { return ExecutionSequence.BY_PRIORITY; }

@@ -144,6 +144,12 @@ public class InformDurable extends RouteRequest<Reply> implements ExecutionConte
     }
 
     @Override
+    protected void acceptInternal(Reply reply, Throwable failure)
+    {
+        acceptReply(reply, failure);
+    }
+
+    @Override
     public Reply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, scope, minEpoch, txnId, maxEpoch);

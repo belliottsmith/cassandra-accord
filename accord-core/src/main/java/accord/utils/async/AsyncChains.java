@@ -440,7 +440,6 @@ public class AsyncChains
         }
     }
 
-
     private static class DetectLeak extends AsyncChains.Head<Void>
     {
         private final AtomicBoolean called = new AtomicBoolean(false);

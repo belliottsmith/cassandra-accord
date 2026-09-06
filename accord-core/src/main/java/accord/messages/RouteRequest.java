@@ -27,9 +27,9 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.utils.async.Cancellable;
 
-public abstract class RouteRequest<R extends Reply> extends ParticipantsRequest<Route<?>, R>
+public abstract class RouteRequest<R> extends ParticipantsRequest<Route<?>, R>
 {
-    public static abstract class WithUnsynced<R extends Reply> extends RouteRequest<R>
+    public static abstract class WithUnsynced<R> extends RouteRequest<R>
     {
         public final long minEpoch; // TODO (low priority, clarity): can this just always be TxnId.epoch?
 
