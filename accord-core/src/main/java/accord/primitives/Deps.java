@@ -18,9 +18,17 @@
 
 package accord.primitives;
 
+import java.util.AbstractList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import javax.annotation.Nullable;
+
 import accord.api.RoutingKey;
 import accord.local.cfk.CommandsForKey;
-import accord.primitives.Routable.Domain;
 import accord.utils.IndexedFunction;
 import accord.utils.Invariants;
 import accord.utils.MergeFewDisjointSortedListsCursor;
@@ -32,19 +40,9 @@ import accord.utils.SortedList.MergeCursor;
 import accord.utils.TriFunction;
 import accord.utils.UnhandledEnum;
 
-import java.util.AbstractList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.function.BiFunction;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.function.Predicate;
-import javax.annotation.Nullable;
-
 import static accord.local.cfk.CommandsForKey.managesExecution;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.Timestamp.Flag.UNSTABLE;
-import static accord.utils.Invariants.illegalState;
 
 /**
  * A collection of transaction dependencies, keyed by the key or range on which they were adopted.
@@ -103,14 +101,6 @@ public class Deps
         {
             this.keyBuilder = KeyDeps.builder();
             this.rangeBuilder = buildRangesByTxnId ? RangeDeps.byTxnIdBuilder() : RangeDeps.builderByRange();
-        }
-
-        public AbstractBuilder<T> addNormalise(Unseekable keyOrRange, TxnId txnId)
-        {
-            if (keyOrRange.domain() == txnId.domain()) add(keyOrRange, txnId);
-            else if (keyOrRange.domain() == Domain.Key) add(keyOrRange.asRange(), txnId);
-            else throw illegalState();
-            return this;
         }
 
         public AbstractBuilder<T> add(Unseekable keyOrRange, TxnId txnId)

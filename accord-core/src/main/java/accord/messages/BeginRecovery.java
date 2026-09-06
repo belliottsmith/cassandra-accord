@@ -19,13 +19,22 @@
 package accord.messages;
 
 import java.util.Collection;
+
 import javax.annotation.Nullable;
 
 import accord.api.Result;
-import accord.local.*;
-import accord.local.Node.Id;
+import accord.local.Command;
+import accord.local.CommandSummaries;
 import accord.local.CommandSummaries.IsDep;
 import accord.local.CommandSummaries.SummaryStatus;
+import accord.local.Commands;
+import accord.local.DepsCalculator.SynchronousDepsCalculator;
+import accord.local.LoadKeys;
+import accord.local.FindKeys;
+import accord.local.Node.Id;
+import accord.local.SafeCommand;
+import accord.local.SafeCommandStore;
+import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -48,9 +57,9 @@ import accord.utils.TinyEnumSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.Cancellable;
 
+import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
-import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Reject;
@@ -134,6 +143,12 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
     }
 
     @Override
+    protected void acceptInternal(RecoverReply reply, Throwable failure)
+    {
+        acceptReply(reply, failure);
+    }
+
+    @Override
     public RecoverReply applyInternal(SafeCommandStore safeStore)
     {
         StoreParticipants participants = StoreParticipants.update(safeStore, route, minEpoch, txnId, executeAtOrTxnIdEpoch);
@@ -156,7 +171,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
             Deps localDeps = null;
             if (!command.known().deps().hasCommittedOrDecidedDeps() && calculateDeps())
             {
-                localDeps = DepsCalculator.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, false);
+                localDeps = SynchronousDepsCalculator.calculateDeps(safeStore, txnId, participants, minEpoch, txnId, false);
             }
             if (localDeps != null && coordinatedDeps != null && !participants.touches().equals(coordinatedDeps.covering))
             {
@@ -273,13 +288,13 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
     }
 
     @Override
-    public LoadKeysFor loadKeysFor()
+    public FindKeys findKeys()
     {
         if (recoverFastPath())
-            return LoadKeysFor.RECOVERY;
+            return FindKeys.SUPERSEDING;
         if (calculateDeps())
-            return LoadKeysFor.READ_WRITE;
-        return LoadKeysFor.WRITE;
+            return FindKeys.CONFLICTS;
+        return FindKeys.DECLARED;
     }
 
     @Override

@@ -23,6 +23,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.Result;
 import accord.api.Result.PersistableResult;
+import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
@@ -41,6 +42,7 @@ import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.utils.UnhandledEnum;
 
+import static accord.api.ProtocolModifiers.loadKeysAsyncIfPermitted;
 import static accord.messages.MessageType.StandardMessage.APPLY_THEN_WAIT_UNTIL_APPLIED_REQ;
 import static accord.messages.RouteRequest.computeScope;
 
@@ -145,6 +147,12 @@ public class ApplyThenWaitUntilApplied extends WaitUntilApplied
         deps = null;
         writes = null;
         result = null;
+    }
+
+    @Override
+    public LoadKeys loadKeys()
+    {
+        return loadKeysAsyncIfPermitted(txnId);
     }
 
     @Override

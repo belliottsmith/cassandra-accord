@@ -209,7 +209,7 @@ public class AsyncResults
         }
     }
 
-    static class Chain<V> extends AbstractResult<V>
+    public static class Chain<V> extends AbstractResult<V> implements BiConsumer<V, Throwable>
     {
         private AsyncChain<V> chain;
         public Chain(AsyncChain<V> chain)
@@ -221,8 +221,60 @@ public class AsyncResults
         @Override
         void setResult(V result, Throwable failure)
         {
-            super.setResult(result, failure);
             chain = null;
+            super.setResult(result, failure);
+        }
+
+        @Override
+        public void accept(V success, Throwable fail)
+        {
+            setResult(success, fail);
+        }
+
+        @Override
+        public String toString()
+        {
+            AsyncChain<V> chain = this.chain;
+            if (chain != null)
+                return "Waiting On: " + chain;
+            return super.toString();
+        }
+    }
+
+    public static class CancellableChain<V> extends AbstractResult<V> implements Cancellable, BiConsumer<V, Throwable>, CancellableAsyncResult<V>
+    {
+        private AsyncChain<V> chain;
+        private Cancellable cancel;
+
+        public CancellableChain(AsyncChain<V> chain)
+        {
+            this.chain = chain;
+            this.cancel = chain.begin(this);
+        }
+
+        @Override
+        void setResult(V result, Throwable failure)
+        {
+            chain = null;
+            cancel = null;
+            super.setResult(result, failure);
+        }
+
+        @Override
+        public void cancel()
+        {
+            Cancellable cancel = this.cancel;
+            if (cancel == null)
+                return;
+            this.chain = null;
+            this.cancel = null;
+            cancel.cancel();
+        }
+
+        @Override
+        public void accept(V success, Throwable fail)
+        {
+            setResult(success, fail);
         }
 
         @Override
@@ -307,7 +359,7 @@ public class AsyncResults
         }
     }
 
-    static abstract class AbstractImmediate<V> implements AsyncResult<V>
+    public static abstract class AbstractImmediate<V> implements AsyncResult<V>
     {
         @Override
         public AsyncChain<V> chain()
@@ -391,9 +443,17 @@ public class AsyncResults
     /**
      * Creates an AsyncResult for the given chain. This calls begin on the supplied chain
      */
-    public static <V> AsyncResult<V> forChain(AsyncChain<V> chain)
+    public static <V> AsyncResult<V> begin(AsyncChain<V> chain)
     {
         return new Chain<>(chain);
+    }
+
+    /**
+     * Creates an AsyncResult for the given chain. This calls begin on the supplied chain
+     */
+    public static <V> CancellableAsyncResult<V> beginCancellable(AsyncChain<V> chain)
+    {
+        return new CancellableChain<>(chain);
     }
 
     public static <V> AsyncResult<V> success(V value)

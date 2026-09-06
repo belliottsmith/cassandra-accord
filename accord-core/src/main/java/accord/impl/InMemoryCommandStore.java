@@ -67,7 +67,7 @@ import accord.local.CommandSummaries;
 import accord.local.CommandSummaries.Summary;
 import accord.local.CommandSummaries.SummaryLoader;
 import accord.local.Commands;
-import accord.local.LoadKeysFor;
+import accord.local.FindKeys;
 import accord.local.MaxDecidedRX;
 import accord.local.NodeCommandStoreService;
 import accord.local.ExecutionContext;
@@ -92,8 +92,8 @@ import static accord.api.ProtocolModifiers.isRangeEndInclusive;
 import static accord.api.ProtocolModifiers.isRangeStartInclusive;
 import static accord.local.Cleanup.Input.FULL;
 import static accord.local.LoadKeys.NONE;
-import static accord.local.LoadKeysFor.RECOVERY;
-import static accord.local.LoadKeysFor.WRITE;
+import static accord.local.FindKeys.SUPERSEDING;
+import static accord.local.FindKeys.DECLARED;
 import static accord.local.RedundantStatus.Coverage.ALL;
 import static accord.local.StoreParticipants.Filter.LOAD;
 import static accord.primitives.Routable.Domain.Key;
@@ -456,7 +456,7 @@ public abstract class InMemoryCommandStore extends CommandStore
                     commandsForKey.put(key, safeCfk);
                 }
             }
-            else if (context.loadKeysFor() != WRITE)
+            else if (context.findKeys() != DECLARED)
             {
                 SummaryLoader loader = SummaryLoader.loader(unsafeGetRedundantBefore(), unsafeGetMaxDecidedRX(), context);
                 for (GlobalCommandsForKey global : this.commandsForKey.values())
@@ -839,7 +839,7 @@ public abstract class InMemoryCommandStore extends CommandStore
             if (commandsForRanges != null)
                 return commandsForRanges;
 
-            Invariants.require(context.loadKeysFor() != WRITE);
+            Invariants.require(context.findKeys() != DECLARED);
             MaxDecidedRX maxDecidedRX = commandStore().unsafeGetMaxDecidedRX();
             SummaryLoader loader = cfrLoad != null ? cfrLoad.loader
                                                    : SummaryLoader.loader(redundantBefore(), maxDecidedRX, context);
@@ -852,11 +852,11 @@ public abstract class InMemoryCommandStore extends CommandStore
             return commandsForRanges = () -> loaded;
         }
 
-        private boolean visitForKey(Unseekables<?> keysOrRanges, Predicate<CommandsForKey> forEach)
+        private boolean visitForKey(@Nullable Unseekables<?> keysOrRanges, Predicate<CommandsForKey> forEach)
         {
             for (SafeCommandsForKey safeCfk : commandsForKey.values())
             {
-                if (!keysOrRanges.contains(safeCfk.key()))
+                if (keysOrRanges != null && !keysOrRanges.contains(safeCfk.key()))
                     continue;
 
                 if (!forEach.test(safeCfk.current()))
@@ -865,18 +865,18 @@ public abstract class InMemoryCommandStore extends CommandStore
             return true;
         }
 
-        private <P1, P2> void visitForKey(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
+        private <P1, P2> void visitForKey(@Nullable Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
         {
             visitForKey(keysOrRanges, cfk -> { cfk.visit(startedBefore, testKind, visitor, p1, p2); return true; });
         }
 
-        public boolean visitForKey(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, SupersedingCommandVisitor visit)
+        public boolean visitForKey(@Nullable Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, SupersedingCommandVisitor visit)
         {
             return visitForKey(keysOrRanges, cfk -> cfk.visit(testTxnId, testKind, visit));
         }
 
         @Override
-        public <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
+        public <P1, P2> void visit(@Nullable Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
         {
             visitForKey(keysOrRanges, startedBefore, testKind, visitor, p1, p2);
             commandsForRanges().visit(keysOrRanges, startedBefore, testKind, visitor, p1, p2);
@@ -937,14 +937,14 @@ public abstract class InMemoryCommandStore extends CommandStore
 
     protected CommandsForRangeLoad cfrLoad(ExecutionContext context)
     {
-        if (context.loadKeysFor() != LoadKeysFor.RECOVERY)
+        if (context.findKeys() != FindKeys.SUPERSEDING)
             return null;
 
         SummaryLoader loader = SummaryLoader.loader(unsafeGetRedundantBefore(), unsafeGetMaxDecidedRX(), context);
         commandsForRanges.populateMinFutureRx(loader);
         TreeMap<Timestamp, Summary> loaded = new TreeMap<>();
         commandsForRanges.search(loader, null, txnId -> {
-            Invariants.require(loader.loadKeysFor() == RECOVERY);
+            Invariants.require(loader.loadKeysFor() == SUPERSEDING);
             Command command = commands.get(txnId).value();
             Summary summary = loader.ifRelevant(command);
             // TODO (expected): prune implied invalidations from index, so no need to special case

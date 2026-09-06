@@ -20,29 +20,29 @@ package accord.local;
 
 /**
  * For operations that need information associated with keys or ranges,
- * this indicates whether the data will be queried, updated, or both.
+ * this indicates what data will be queried.
  */
-public enum LoadKeysFor
+public enum FindKeys
 {
     /**
-     * WRITE covers only updating the relevant key state for the primaryTxnId,
+     * covers only updating the relevant key state for the primaryTxnId,
      * that is for key transactions this means updating key summaries, and for
      * range transactions this means updating any range summaries.
      * Importantly, this does not mean range transactions must be able to
      * synchronously (or otherwise) write to all intersecting key summaries.
      */
-    WRITE,
+    DECLARED,
 
     /**
-     * READ covers all intersecting summaries of relevant key or range transactions,
+     * CONFLICTS covers all intersecting summaries of relevant key or range transactions,
      * including any commands that should be witnessed by primaryTxnId.
      * This means range transactions MUST be able to consult all intersecting key summaries.
      */
-    READ_WRITE,
+    CONFLICTS,
 
     /**
-     * RECOVERY is READ_WRITE + summary information of keys/transactions that should have witnessed
+     * SUPERSEDING is CONFLICTS + summary information of keys/transactions that should have witnessed
      * the primaryTxnId.
      */
-    RECOVERY
+    SUPERSEDING
 }

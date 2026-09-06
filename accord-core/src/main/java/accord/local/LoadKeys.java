@@ -35,10 +35,15 @@ public enum LoadKeys
     ASYNC,
 
     /**
-     * Load and process the requested keys incrementally; the operation will be invoked multiples times
-     * as keys are loaded, until all the keys have been processed. If submitted by an already running execution
-     * this task must declare a subset of the keys and txnIds declared by the originating task.
-     * It is not permitted to chain INCR tasks together; INCR may only be submitted by an ASYNC or SYNC task.
+     * Important Notes:
+     *  1) An INCR task only adopts command summaries (keys or ranges) that were not loaded by its parent task, so the
+     *     parent task MUST process any keys that are available to it.
+     *  2) {@link SafeCommandStore#context()} will report only the KEYS that have been loaded for a run, but if there
+     *     are range summaries to process then the first invocation will include these as well. To visit all loaded
+     *     summaries ensure to pass {@code null} to {@link SafeCommandStore#visit}.
+     *<p>
+     * Load and process the requested key and range command summaries incrementally; the operation will be invoked
+     * multiples times as keys are loaded, until all the keys have been processed.
      */
     INCR,
 
@@ -70,5 +75,4 @@ public enum LoadKeys
                 return this.compareTo(ifSyncRequireAtLeast) >= 0;
         }
     }
-
 }
