@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.NavigableMap;
 import java.util.function.Consumer;
+
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
@@ -53,8 +54,8 @@ import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
-import accord.utils.Reduce;
 import accord.utils.LargeBitSet;
+import accord.utils.Reduce;
 import accord.utils.SortedList;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
@@ -63,9 +64,9 @@ import static accord.local.ExecutionContext.unsequencedIdempotentIncrementalWrit
 import static accord.local.LoadKeys.INCR;
 import static accord.local.LoadKeys.NONE;
 import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
-import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;
+import static accord.local.RedundantStatus.SomeStatus.LOCALLY_WITNESSED_ONLY;
 import static accord.local.cfk.UpdateUnmanagedMode.REGISTER;
 import static accord.primitives.Known.KnownRoute.MaybeRoute;
 import static accord.primitives.Routable.Domain.Range;
@@ -293,7 +294,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     public final boolean canExecuteWith(ExecutionContext context) { return canExecute(context) == context; }
 
     /**
-     * Attempt to ready the provided PreLoadContext; if this can only be achieved partially, a new PreLoadContext
+     * Attempt to ready the provided PreLoadContext; if this can only be achieved partially, a new ExecutionContext
      * will be returned containing the readily available data. If nothing is available, null will be returned.
      */
     public abstract @Nullable ExecutionContext canExecute(ExecutionContext context);
@@ -413,7 +414,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             return;
 
         // TODO (expected): we don't want to insert any dependencies for those we only touch; we just need to record them as decided/applied for execution
-        ExecutionContext context = new UpdateManagedContext(next.txnId(), update);
+        ExecutionContext context = new UpdateManagedContext(next.txnId, update);
         ExecutionContext execute = safeStore.canExecute(context);
         if (execute != null)
         {
@@ -431,7 +432,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 Unseekables<?> asyncKeys = remainingKeys.without(participants.touches()).intersecting(participants.hasTouched(), Minimal);
                 if (!asyncKeys.isEmpty())
                 {
-                    ExecutionContext async = unsequencedIdempotentIncrementalWrite(asyncKeys, "Update CommandsForKey");
+                    ExecutionContext async = new UpdateManagedContext(next.txnId, asyncKeys);
                     updateManagedCommandsForKeyIncremental(async, safeStore.commandStore(), forceNotify);
                     remainingKeys = remainingKeys.without(asyncKeys);
                 }
@@ -528,6 +529,8 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
         else
         {
+            // TODO (expected): no need to filter keys, as INCR tasks should subtract parent keys
+            //    (but should first synchronise executor behaviour between accord/C*)
             if (execute != null)
                 context = new UpdateUnmanagedContext(txnId, keys.without(execute.keys()));
 
@@ -540,7 +543,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         }
     }
 
-    static class UpdateManagedContext implements ExecutionContext
+    static final class UpdateManagedContext implements ExecutionContext
     {
         final TxnId primaryTxnId;
         final Unseekables<?> keys;
@@ -560,7 +563,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         @Override public String toString() { return describe(); }
     }
 
-    static class UpdateUnmanagedContext implements ExecutionContext
+    static final class UpdateUnmanagedContext implements ExecutionContext
     {
         final TxnId primaryTxnId;
         final Unseekables<?> keys;

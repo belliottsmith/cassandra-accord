@@ -165,6 +165,11 @@ public interface AsyncChain<V>
 
     default AsyncResult<V> beginAsResult()
     {
-        return AsyncResults.forChain(this);
+        return AsyncResults.begin(this);
+    }
+
+    default CancellableAsyncResult<V> beginAsCancellableResult()
+    {
+        return AsyncResults.beginCancellable(this);
     }
 }

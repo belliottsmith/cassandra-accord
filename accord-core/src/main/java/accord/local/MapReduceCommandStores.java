@@ -60,6 +60,8 @@ public abstract class MapReduceCommandStores<P extends Participants<?>, O> imple
 
     protected AsyncChain<O> applyAsyncInternal(Ranges ranges, CommandStore commandStore)
     {
+        // TODO (desired): shouldn't need to override the context to supply the ranges we interact with
+        //   (perhaps accept Ranges as another method signature, or else leave to commandStore to figure out)
         return commandStore.chain(slice(ranges, Minimal), this);
     }
 

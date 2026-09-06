@@ -22,7 +22,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.NavigableMap;
 
+import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
+
 import accord.api.RoutingKey;
+import accord.local.ExecutionContext.OverrideKeys;
 import accord.local.LoadKeys;
 import accord.local.ExecutionContext;
 import accord.local.RedundantBefore;
@@ -30,7 +34,7 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.primitives.Ranges;
-import accord.primitives.Routable;
+import accord.primitives.Routable.Domain;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -67,81 +71,95 @@ extends SafeCommandStore
     @Override
     public ExecutionContext canExecute(ExecutionContext with)
     {
-        if (with.isEmpty()) return with;
-        if (with.keys().domain() == Routable.Domain.Range)
-            return with.isSubsetOf(this.context) ? with : null;
+        Unseekables<?> withKeys = with.keys();
+        if (withKeys.domain() == Domain.Range)
+            return with.isSubsetOf(context) ? with : null;
 
-        LoadKeys require = with.loadKeys();
-        if (require != LoadKeys.NONE)
+        LoadKeys loadKeys = with.loadKeys();
+        if (loadKeys != LoadKeys.NONE && with.findKeys().compareTo(context.findKeys()) > 0)
+            return null;
+
+        Caches caches = null;
+        try
         {
-            ExecutionContext context = context();
-            if (!context.loadKeys().satisfiesIfPresent(require))
-                return null;
-
-            if (with.loadKeysFor().compareTo(context.loadKeysFor()) > 0)
-                return null;
-        }
-
-        try (Caches caches = tryGetCaches())
-        {
-            for (TxnId txnId : with.txnIds())
+            TxnId primaryTxnId = with.primaryTxnId();
+            if (primaryTxnId != null)
             {
-                if (null != getInternal(txnId))
-                    continue;
+                if (!isPresent(primaryTxnId))
+                {
+                    caches = tryGetCaches();
+                    if (ifLoadedInternal(primaryTxnId) == null)
+                        return null;
+                }
 
-                if (caches == null)
-                    return null;
+                TxnId additionalTxnId = with.additionalTxnId();
+                if (additionalTxnId != null && !isPresent(additionalTxnId))
+                {
+                    if (caches == null)
+                        caches = tryGetCaches();
 
-                C safeCommand = caches.acquireIfLoaded(txnId);
-                if (safeCommand == null)
-                    return null;
-
-                add(safeCommand, caches);
+                    if (ifLoadedInternal(additionalTxnId) == null)
+                        return null;
+                }
             }
 
-            LoadKeys loadKeys = with.loadKeys();
-            if (loadKeys == LoadKeys.NONE)
+            if (loadKeys == LoadKeys.NONE || withKeys.isEmpty())
                 return with;
 
             List<RoutingKey> unavailable = null;
-            Unseekables<?> keys = with.keys();
-            if (keys.isEmpty())
-                return with;
-
-            for (int i = 0 ; i < keys.size() ; ++i)
+            for (int i = 0 ; i < withKeys.size() ; ++i)
             {
-                RoutingKey key = (RoutingKey) keys.get(i);
-                if (null != getInternal(key))
-                    continue; // already in working set
+                RoutingKey key = (RoutingKey) withKeys.get(i);
+                if (isPresent(key))
+                    continue;
 
-                if (caches != null)
-                {
-                    CFK safeCfk = caches.acquireIfLoaded(key);
-                    if (safeCfk != null)
-                    {
-                        add(safeCfk, caches);
-                        continue;
-                    }
-                }
+                if (unavailable == null && caches == null)
+                    caches = tryGetCaches();
+
+                if (ifLoadedInternal(caches, key) != null)
+                    continue;
+
                 if (unavailable == null)
                     unavailable = new ArrayList<>();
+
                 unavailable.add(key);
             }
 
             if (unavailable == null)
                 return with;
 
-            if (unavailable.size() == keys.size())
+            if (unavailable.size() == withKeys.size())
                 return null;
 
-            return ExecutionContext.contextFor(with.primaryTxnId(), with.additionalTxnId(), keys.without(RoutingKeys.ofSortedUnique(unavailable)), loadKeys, context.loadKeysFor(), context.reason());
+            return new OverrideKeys(with, withKeys.without(RoutingKeys.ofSortedUnique(unavailable)));
+        }
+        finally
+        {
+            if (caches != null)
+                caches.close();
         }
     }
 
-    @Override
-    public ExecutionContext context()
+    private boolean isPresent(TxnId txnId)
     {
-        return context;
+        return getInternal(txnId) != null;
+    }
+
+    private boolean isPresentOrLoadedInternal(@Nonnull Caches caches, TxnId txnId)
+    {
+        return getInternal(txnId) != null || ifLoadedInternal(caches, txnId) != null;
+    }
+
+    private C ifLoadedInternal(@Nullable Caches caches, TxnId txnId)
+    {
+        if (caches == null)
+            return null;
+
+        C command = caches.acquireIfLoaded(txnId);
+        if (command == null)
+            return null;
+
+        return add(command, caches);
     }
 
     @Override
@@ -149,31 +167,45 @@ extends SafeCommandStore
     {
         try (Caches caches = tryGetCaches())
         {
-            if (caches == null)
-                return null;
+            return ifLoadedInternal(caches, txnId);
+        }
+    }
 
-            C command = caches.acquireIfLoaded(txnId);
-            if (command == null)
-                return null;
+    private boolean isPresentOrLoadedInternal(@Nonnull Caches caches, RoutingKey key)
+    {
+        return getInternal(key) != null || ifLoadedInternal(caches, key) != null;
+    }
 
-            return add(command, caches);
+    private boolean isPresent(RoutingKey key)
+    {
+        return getInternal(key) != null;
+    }
+
+    protected CFK ifLoadedInternal(@Nullable Caches caches, RoutingKey key)
+    {
+        if (caches == null)
+            return null;
+
+        CFK cfk = caches.acquireIfLoaded(key);
+        if (cfk == null)
+            return null;
+
+        return add(cfk, caches);
+    }
+
+    @Override
+    protected CFK ifLoadedInternal(RoutingKey key)
+    {
+        try (Caches caches = tryGetCaches())
+        {
+            return ifLoadedInternal(caches, key);
         }
     }
 
     @Override
-    protected CFK ifLoadedInternal(RoutingKey txnId)
+    public ExecutionContext context()
     {
-        try (Caches caches = tryGetCaches())
-        {
-            if (caches == null)
-                return null;
-
-            CFK cfk = caches.acquireIfLoaded(txnId);
-            if (cfk == null)
-                return null;
-
-            return add(cfk, caches);
-        }
+        return context;
     }
 
     // TODO (expected): cleanup the integration hooks here; they're a bit byzantine. Also clearly document behaviour.

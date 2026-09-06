@@ -35,6 +35,7 @@ import accord.local.Command;
 import accord.local.Command.Committed;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
+import accord.local.LoadKeys;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -735,14 +736,6 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         {
             reply(failReply, null);
         }
-    }
-
-    @Override
-    public Unseekables<?> keys()
-    {
-        if (flags.contains(READY_TO_EXECUTE) && fastReadsMayBypassCommandsForKey(txnId))
-            return RoutingKeys.EMPTY;
-        return scope;
     }
 
     protected void reply(Ranges unavailable, Data data, long uniqueHlc)

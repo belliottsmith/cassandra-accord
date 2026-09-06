@@ -18,33 +18,31 @@
 
 package accord.local;
 
-import accord.local.cfk.CommandsForKey;
+import java.util.AbstractList;
+import java.util.List;
+import java.util.function.Consumer;
+
+import javax.annotation.Nullable;
+
+import net.nicoulaj.compilecommand.annotations.Inline;
+
 import accord.primitives.Ranges;
 import accord.primitives.Routables.Slice;
 import accord.primitives.RoutingKeys;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-
 import accord.primitives.Unseekables;
 import accord.utils.Invariants;
-import net.nicoulaj.compilecommand.annotations.Inline;
-
-import java.util.AbstractList;
-import java.util.List;
-import java.util.function.Consumer;
-import javax.annotation.Nullable;
 
 import static accord.local.LoadKeys.INCR;
 import static accord.local.LoadKeys.NONE;
 import static accord.local.LoadKeys.SYNC;
-import static accord.local.LoadKeysFor.READ_WRITE;
-import static accord.local.LoadKeysFor.WRITE;
+import static accord.local.FindKeys.CONFLICTS;
+import static accord.local.FindKeys.DECLARED;
 
 /**
- * Lists txnids and keys of commands and commands for key that will be needed for an operation. Used
- * to ensure the necessary state is in memory for an operation before it executes.
- *
- * TODO (desired): rename to simply Context, or LoadContext
+ * Tasks declare required data and semantics for their execution.
+ * An INCR or ASYNC execution
  */
 public interface ExecutionContext
 {
@@ -144,19 +142,24 @@ public interface ExecutionContext
     }
 
     /**
-     * @return keys of the {@link CommandsForKey} objects that need to be loaded into memory before this operation is run
+     * @return keys or ranges that this key needs CommandSummaries loaded for
      */
     default Unseekables<?> keys() { return RoutingKeys.EMPTY; }
 
     default LoadKeys loadKeys() { return NONE; }
 
-    default LoadKeysFor loadKeysFor() { return WRITE; }
+    default FindKeys findKeys() { return DECLARED; }
 
     /**
      * Whether this execution may be retried safely; useful only for INCR tasks that may partially succeed,
      * so that the failed portions may be safely retried. It is expected that all INCR tasks are idempotent.
      */
     default boolean isIdempotent() { return false; }
+
+    /**
+     * Whether this execution should be retried if partially executes; useful only for INCR tasks that may partially succeed.
+     */
+    default boolean abandonPartialSuccess() { return false; }
 
     default ExecutionKind executionKind() { return ExecutionKind.OTHER; }
 
@@ -189,7 +192,7 @@ public interface ExecutionContext
                     requiredHistory = SYNC;
                 if (requiredHistory.compareTo(superset.loadKeys()) < 0)
                     return false;
-                if (loadKeysFor().compareTo(superset.loadKeysFor()) > 0)
+                if (findKeys().compareTo(superset.findKeys()) > 0)
                     return false;
             }
 
@@ -229,8 +232,9 @@ public interface ExecutionContext
         @Override default ExecutionSequence executionSequence() { return wrapped().executionSequence(); }
         @Override default ExecutionKind executionKind() { return wrapped().executionKind(); }
         @Override default boolean isIdempotent() { return wrapped().isIdempotent(); }
+        @Override default boolean abandonPartialSuccess() { return wrapped().abandonPartialSuccess(); }
         @Override default LoadKeys loadKeys() { return wrapped().loadKeys(); }
-        @Override default LoadKeysFor loadKeysFor() { return wrapped().loadKeysFor(); }
+        @Override default FindKeys findKeys() { return wrapped().findKeys(); }
         @Override default Timestamp executeAt() { return wrapped().executeAt(); }
         @Override default String reason() { return wrapped().reason(); }
         @Override default String describe() { return wrapped().describe(); }
@@ -251,7 +255,7 @@ public interface ExecutionContext
         @Override public ExecutionContext wrapped() { return wrapped; }
     }
 
-    static ExecutionContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, LoadKeys loadKeys, LoadKeysFor loadKeysFor, String reason)
+    static ExecutionContext contextFor(@Nullable TxnId primary, @Nullable TxnId additional, Unseekables<?> keys, LoadKeys loadKeys, FindKeys findKeys, String reason)
     {
         Invariants.require(primary == null ? additional == null : !primary.equals(additional));
         return new ExecutionContext()
@@ -260,7 +264,7 @@ public interface ExecutionContext
             @Override public @Nullable TxnId additionalTxnId() { return additional; }
             @Override public Unseekables<?> keys() { return keys; }
             @Override public LoadKeys loadKeys() { return loadKeys; }
-            @Override public LoadKeysFor loadKeysFor() { return loadKeysFor; }
+            @Override public FindKeys findKeys() { return findKeys; }
             @Override public String reason() { return reason; }
             @Override public String toString() { return describe(); }
         };
@@ -328,7 +332,7 @@ public interface ExecutionContext
             @Override public @Nullable TxnId primaryTxnId() { return txnId; }
             @Override public Unseekables<?> keys() { return keys; }
             @Override public LoadKeys loadKeys() { return SYNC; }
-            @Override public LoadKeysFor loadKeysFor() { return READ_WRITE; }
+            @Override public FindKeys findKeys() { return CONFLICTS; }
             @Override public ExecutionSequence executionSequence() { return ExecutionSequence.UNSEQUENCED; }
             @Override public String reason() { return reason; }
             @Override public String toString() { return describe(); }
@@ -342,7 +346,7 @@ public interface ExecutionContext
             @Override public @Nullable TxnId primaryTxnId() { return null; }
             @Override public Unseekables<?> keys() { return keys; }
             @Override public LoadKeys loadKeys() { return SYNC; }
-            @Override public LoadKeysFor loadKeysFor() { return READ_WRITE; }
+            @Override public FindKeys findKeys() { return CONFLICTS; }
             @Override public ExecutionSequence executionSequence() { return ExecutionSequence.UNSEQUENCED; }
             @Override public String reason() { return reason; }
             @Override public String toString() { return describe(); }

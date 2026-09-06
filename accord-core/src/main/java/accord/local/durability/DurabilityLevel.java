@@ -79,8 +79,8 @@ public class DurabilityLevel
     {
         SyncLocal local = min(a.local, b.local);
         SyncRemote remote = min(a.remote, b.remote);
-        SortedArrayList<Node.Id> including = union(a.including, b.including);
         SortedArrayList<Node.Id> excluding = union(a.excluding, b.excluding);
+        SortedArrayList<Node.Id> including = subtract(union(a.including, b.including), excluding);
         if (including != null && excluding != null)
             including = including.without(excluding);
         return new DurabilityLevel(local, remote, including, excluding);
@@ -91,7 +91,7 @@ public class DurabilityLevel
         SyncLocal local = max(a.local, b.local);
         SyncRemote remote = max(a.remote, b.remote);
         SortedArrayList<Node.Id> including = union(a.including, b.including);
-        SortedArrayList<Node.Id> excluding = subtract(a.excluding, b.excluding);
+        SortedArrayList<Node.Id> excluding = subtract(union(a.excluding, b.excluding), including);
         if (including != null && excluding != null)
             including = including.without(excluding);
         return new DurabilityLevel(local, remote, including, excluding);

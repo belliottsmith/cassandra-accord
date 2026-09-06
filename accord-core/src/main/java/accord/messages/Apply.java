@@ -152,7 +152,7 @@ public class Apply extends RouteRequest<ApplyReply>
         deps = null;
         writes = null;
         result = null;
-        if (reply != null || failure != null) super.acceptInternal(reply, failure);
+        if (reply != null || failure != null) acceptReply(reply, failure);
         else Invariants.require(isCancelled());
     }
 

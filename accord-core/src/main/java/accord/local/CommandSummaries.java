@@ -53,8 +53,7 @@ import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
 import static accord.local.CommandSummaries.SummaryStatus.NOTACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
-import static accord.local.LoadKeysFor.RECOVERY;
-import static accord.local.LoadKeysFor.WRITE;
+import static accord.local.FindKeys.DECLARED;
 import static accord.local.MaxDecidedRX.forDeps;
 import static accord.primitives.Known.KnownDeps.NoDeps;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -102,7 +101,6 @@ public interface CommandSummaries
 
         private static final Relevance[] lookup = values();
         public static final int ENCODED_MASK = 7;
-        public static final int ENCODED_BITS = 3;
         private final int encoded;
 
         Relevance(int encoded)
@@ -238,7 +236,7 @@ public interface CommandSummaries
     {
         public interface Factory<L extends SummaryLoader>
         {
-            L create(RedundantBefore redundantBefore, @Nullable MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, Kinds testKind, TxnId minTxnId, Timestamp executeAt, LoadKeysFor loadKeysFor);
+            L create(RedundantBefore redundantBefore, @Nullable MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchKeysOrRanges, Kinds testKind, TxnId minTxnId, Timestamp executeAt, FindKeys findKeys);
         }
 
         private static final ReducingRangeMap<TxnId> NO_RX = new ReducingRangeMap<>();
@@ -248,7 +246,7 @@ public interface CommandSummaries
         protected final Unseekables<?> searchFor;
         // TODO (expected): separate out Kinds we need before/after primaryTxnId/executeAt
         protected final Kinds testKind;
-        protected final LoadKeysFor loadKeysFor;
+        protected final FindKeys findKeys;
         protected final TxnId primaryTxnId, minTxnId;
         protected final DecidedRX decidedRx;
         protected final Timestamp primaryExecuteAt;
@@ -259,30 +257,30 @@ public interface CommandSummaries
         // TODO (expected): provide executeAt to PreLoadContext so we can more aggressively filter what we load, esp. by Kind
         public static SummaryLoader loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, ExecutionContext context)
         {
-            return loader(redundantBefore, maxDecidedRX, context.primaryTxnId(), context.executeAt(), context.loadKeysFor(), context.keys());
+            return loader(redundantBefore, maxDecidedRX, context.primaryTxnId(), context.executeAt(), context.findKeys(), context.keys());
         }
 
-        public static SummaryLoader loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Timestamp executeAt, LoadKeysFor loadKeysFor, Unseekables<?> keysOrRanges)
+        public static SummaryLoader loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Timestamp executeAt, FindKeys findKeys, Unseekables<?> keysOrRanges)
         {
-            return loader(redundantBefore, maxDecidedRX, primaryTxnId, executeAt, loadKeysFor, keysOrRanges, SummaryLoader::new);
+            return loader(redundantBefore, maxDecidedRX, primaryTxnId, executeAt, findKeys, keysOrRanges, SummaryLoader::new);
         }
 
         public static <L extends SummaryLoader> L loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, ExecutionContext context, Factory<L> factory)
         {
-            return loader(redundantBefore, maxDecidedRX, context.primaryTxnId(), context.executeAt(), context.loadKeysFor(), context.keys(), factory);
+            return loader(redundantBefore, maxDecidedRX, context.primaryTxnId(), context.executeAt(), context.findKeys(), context.keys(), factory);
         }
 
-        public static <L extends SummaryLoader> L loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Timestamp executeAt, LoadKeysFor loadKeysFor, Unseekables<?> keysOrRanges, Factory<L> factory)
+        public static <L extends SummaryLoader> L loader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Timestamp executeAt, FindKeys findKeys, Unseekables<?> keysOrRanges, Factory<L> factory)
         {
             Invariants.require(primaryTxnId != null);
             TxnId minTxnId = redundantBefore.min(keysOrRanges, Bounds::gcBefore);
-            Kinds kinds = primaryTxnId.witnesses().or(loadKeysFor == RECOVERY ? primaryTxnId.witnessedBy() : Nothing);
+            Kinds kinds = primaryTxnId.witnesses().or(findKeys == FindKeys.SUPERSEDING ? primaryTxnId.witnessedBy() : Nothing);
             if (!primaryTxnId.is(Txn.Kind.ExclusiveSyncPoint)) // the main distinction between RX and RV is that RV doesn't filter out decided transactions
                 maxDecidedRX = null;
-            return factory.create(redundantBefore, maxDecidedRX, primaryTxnId, keysOrRanges, kinds, minTxnId, executeAt, loadKeysFor);
+            return factory.create(redundantBefore, maxDecidedRX, primaryTxnId, keysOrRanges, kinds, minTxnId, executeAt, findKeys);
         }
 
-        public SummaryLoader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchFor, Kinds testKind, TxnId minTxnId, Timestamp primaryExecuteAt, LoadKeysFor loadKeysFor)
+        public SummaryLoader(RedundantBefore redundantBefore, MaxDecidedRX maxDecidedRX, TxnId primaryTxnId, Unseekables<?> searchFor, Kinds testKind, TxnId minTxnId, Timestamp primaryExecuteAt, FindKeys findKeys)
         {
             this.redundantBefore = redundantBefore;
             this.maxDecidedRX = maxDecidedRX;
@@ -291,7 +289,7 @@ public interface CommandSummaries
             this.testKind = testKind;
             this.minTxnId = minTxnId;
             this.primaryExecuteAt = primaryExecuteAt;
-            this.loadKeysFor = loadKeysFor;
+            this.findKeys = findKeys;
             this.decidedRx = forDeps(maxDecidedRX, searchFor, primaryTxnId);
         }
 
@@ -300,9 +298,9 @@ public interface CommandSummaries
             return searchFor;
         }
 
-        public LoadKeysFor loadKeysFor()
+        public FindKeys loadKeysFor()
         {
-            return loadKeysFor;
+            return findKeys;
         }
 
         public TxnId primaryTxnId()
@@ -393,7 +391,7 @@ public interface CommandSummaries
 
         private Relevance relevanceInternal(TxnId txnId, @Nullable SaveStatus saveStatus, @Nullable Durability durability, @Nullable Timestamp executeAt, @Nullable Unseekables<?> participants, boolean permitNull)
         {
-            if (loadKeysFor == WRITE || !txnId.is(testKind) || (saveStatus != null && saveStatus.compareTo(SaveStatus.TruncatedUnapplied) >= 0))
+            if (findKeys == DECLARED || !txnId.is(testKind) || (saveStatus != null && saveStatus.compareTo(SaveStatus.TruncatedUnapplied) >= 0))
                 return IRRELEVANT;
 
             if (!permitNull)
@@ -414,7 +412,7 @@ public interface CommandSummaries
                 return IRRELEVANT;
 
             Relevance atLeast = IRRELEVANT;
-            if (loadKeysFor == RECOVERY && txnId.witnesses(primaryTxnId))
+            if (findKeys == FindKeys.SUPERSEDING && txnId.witnesses(primaryTxnId))
             {
                 if (isIgnorableFutureRx(txnId, participants))
                     return IRRELEVANT;
@@ -531,7 +529,7 @@ public interface CommandSummaries
         public final <P> Summary get(Relevance relevance, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable P deps, TriPredicate<P, TxnId, Unseekables<?>> depTester)
         {
             touches = touches.intersecting(searchFor, Minimal);
-            IsDep isDep = loadKeysFor == RECOVERY ? IsDep.NOT_ELIGIBLE : null;
+            IsDep isDep = findKeys == FindKeys.SUPERSEDING ? IsDep.NOT_ELIGIBLE : null;
             switch (relevance)
             {
                 default: throw new UnhandledEnum(relevance);
@@ -569,15 +567,6 @@ public interface CommandSummaries
         }
     }
     
-    enum ComputeIsDep
-    {
-        // don't test deps
-        IGNORE,
-
-        // calculate but don't filter
-        EITHER
-    }
-
     interface ActiveCommandVisitor<P1, P2>
     {
         void visit(P1 p1, P2 p2, SummaryStatus status, Durability durability, Unseekable keyOrRange, TxnId txnId);
@@ -592,20 +581,20 @@ public interface CommandSummaries
         boolean visit(Unseekable keyOrRange, TxnId txnId, Timestamp executeAt, SummaryStatus status, @Nullable IsDep dep, Durability minDurability);
     }
 
-    boolean visit(Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, SupersedingCommandVisitor visit);
+    boolean visit(@Nullable Unseekables<?> keysOrRanges, TxnId testTxnId, Kinds testKind, SupersedingCommandVisitor visit);
 
     /**
      * Visits keys first in ascending order, with equal keys visiting TxnId is ascending order.
      * Visits range transactions in ascending order by TxnId, then visiting each Range in ascending order
      */
-    <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2);
+    <P1, P2> void visit(@Nullable Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2);
 
     // TODO (expected): ByRangeSnapshot based on IntervalBTree so we can elide superseded dependencies as we do with CommandsForKey
     interface ByTxnIdSnapshot extends CommandSummaries
     {
         NavigableMap<Timestamp, Summary> byTxnId();
 
-        default boolean visit(Unseekables<?> keysOrRanges,
+        default boolean visit(@Nullable Unseekables<?> keysOrRanges,
                               TxnId testTxnId,
                               Kinds testKind,
                               SupersedingCommandVisitor visit)
@@ -620,15 +609,17 @@ public interface CommandSummaries
                 if (!value.is(MAYBE_SUPERSEDING))
                     continue;
 
-                Unseekables<?> participants = value.participants;
-                Unseekables<?> intersecting = participants.overlapping(keysOrRanges);
-                if (!intersecting.isEmpty())
+                Unseekables<?> overlapping = value.participants;
+                if (keysOrRanges != null)
+                    overlapping = overlapping.overlapping(keysOrRanges);
+
+                if (!overlapping.isEmpty())
                 {
                     Timestamp executeAt = value.plainExecuteAt();
                     Invariants.require(executeAt != null);
                     SummaryStatus status = value.status();
                     IsDep dep = value.isDep();
-                    for (Unseekable participant : intersecting)
+                    for (Unseekable participant : overlapping)
                     {
                         if (!visit.visit(participant, value.plainTxnId(), executeAt, status, dep, NotDurable))
                             return false;
@@ -640,7 +631,7 @@ public interface CommandSummaries
         }
 
         @Override
-        default <P1, P2> void visit(Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2)
+        default <P1, P2> void visit(@Nullable Unseekables<?> keysOrRanges, Timestamp startedBefore, Kinds testKind, ActiveCommandVisitor<P1, P2> visit, P1 p1, P2 p2)
         {
             NavigableMap<Timestamp, Summary> map = byTxnId();
             for (Summary value : map.headMap(startedBefore, false).values())
@@ -654,7 +645,11 @@ public interface CommandSummaries
                 if (!value.is(ACTIVE))
                     continue;
 
-                for (Unseekable keyOrRange : value.participants.intersecting(keysOrRanges, Minimal))
+                Unseekables<?> participants = value.participants;
+                if (keysOrRanges != null)
+                    participants = participants.intersecting(keysOrRanges, Minimal);
+
+                for (Unseekable keyOrRange : participants)
                     visit.visit(p1, p2, value.status(), value.durability(), keyOrRange, value.plainTxnId());
             }
         }
