@@ -184,15 +184,18 @@ public enum Cleanup
         if (txnId.kind() == EphemeralRead)
             return NO;
 
-        if (expunge(txnId, executeAt, saveStatus, participants, redundantBefore, durableBefore))
-            return expunge(txnId);
+        Cleanup min = expunge(input, txnId, executeAt, saveStatus, participants, redundantBefore, durableBefore);
+        if (min == EXPUNGE)
+            return EXPUNGE;
 
         if (saveStatus == null || participants == null)
-            return NO;
+            return min;
 
-        if (participants.hasFullRoute())
-            return cleanupWithFullRoute(input, participants, txnId, executeAt, saveStatus, durability, redundantBefore, durableBefore);
-        return cleanupWithoutFullRoute(input, txnId, saveStatus, participants, redundantBefore);
+        Cleanup cleanup = participants.hasFullRoute()
+            ? cleanupWithFullRoute(input, participants, txnId, executeAt, saveStatus, durability, redundantBefore, durableBefore)
+            : cleanupWithoutFullRoute(input, txnId, saveStatus, participants, redundantBefore);
+
+        return min.atLeast(cleanup);
     }
 
     private static Cleanup cleanupWithFullRoute(Input input, StoreParticipants participants, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, RedundantBefore redundantBefore, DurableBefore durableBefore)
@@ -332,30 +335,32 @@ public enum Cleanup
         return NO;
     }
 
-    private static boolean expunge(TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
+    private static Cleanup expunge(Input input, TxnId txnId, @Nullable Timestamp executeAt, @Nullable SaveStatus saveStatus, @Nullable StoreParticipants participants, RedundantBefore redundantBefore, DurableBefore durableBefore)
     {
         // TODO (required): improve expungeability of data when we know all participating shards are durable,
         //  by e.g. emitting a special erase record that retains the participants, permitting us to expunge everything else independently
         // since we cannot guarantee to witness participants for all records, we must use the global durableBefore bounds
         if (txnId.is(Any) && !durableBefore.min(txnId).isDurable())
-            return false;
+            return NO;
 
         TxnId minGcBefore = redundantBefore.minGcBefore();
         if (minGcBefore.compareTo(txnId) <= 0)
-            return false;
+            return NO;
 
-        if (!dataStoreRequiresUniqueHlcs() || !txnId.is(Write)) return true;
-        if (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)) return true;
+        if (!dataStoreRequiresUniqueHlcs() || !txnId.is(Write)) return expunge(txnId);
+        if (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)) return expungeIfFull(input, txnId);
         // note, it is safe to use ApplyAtKnown even with PARTIAL input here, because we are only discarding information,
         // and we can safely discard any stale executeAt
-        if (executeAt == null) return true;
+        if (executeAt == null) return expungeIfFull(input, txnId);
 
         long minGcHlcBefore = redundantBefore.minGcHlcBefore();
-        if (executeAt.uniqueHlc() < minGcHlcBefore) return true;
+        if (executeAt.uniqueHlc() < minGcHlcBefore) return expungeIfFull(input, txnId);
         if (participants == null)
-            return true;
+            return expungeIfFull(input, txnId);
         Participants<?> waitsOn = participants.waitsOn();
-        return waitsOn == null || waitsOn.isEmpty();
+        if (waitsOn == null || waitsOn.isEmpty())
+            return expungeIfFull(input, txnId);
+        return NO;
     }
 
     public static Cleanup forOrdinal(int ordinal)
@@ -402,5 +407,10 @@ public enum Cleanup
     private static Cleanup expunge(TxnId txnId)
     {
         return EXPUNGE;
+    }
+
+    private static Cleanup expungeIfFull(Input input, TxnId txnId)
+    {
+        return input.isPartial() ? TRUNCATE : EXPUNGE;
     }
 }

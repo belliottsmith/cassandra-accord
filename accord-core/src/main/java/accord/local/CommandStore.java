@@ -34,10 +34,12 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedMap;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,7 +86,6 @@ import accord.utils.async.AsyncResults;
 import accord.utils.async.AsyncResults.SettableResult;
 import accord.utils.async.AsyncResults.SettableWithDescription;
 import accord.utils.async.Cancellable;
-import org.agrona.collections.LongHashSet;
 
 import static accord.api.DataStore.FetchKind.Image;
 import static accord.api.DataStore.FetchKind.Sync;
@@ -119,6 +120,7 @@ import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.utils.Invariants.nonNull;
 import static java.util.concurrent.TimeUnit.MINUTES;
+import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**
  * Single threaded internal shard of accord transaction metadata
@@ -180,18 +182,20 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
     {
         final SettableResult<Void> whenDone;
         final Ranges allRanges;
+        final TxnId min;
         Ranges waitingOn, waitingOnDurable;
 
         // for testing only
         volatile boolean invalid;
 
-        WaitingOnVisibility(SettableResult<Void> whenDone, Ranges ranges)
+        WaitingOnVisibility(SettableResult<Void> whenDone, TxnId min, Ranges ranges)
         {
             this.whenDone = whenDone;
+            this.min = min;
             this.allRanges = this.waitingOn = this.waitingOnDurable = ranges;
         }
     }
-    private final TreeMap<Long, WaitingOnVisibility> waitingOnVisibility = new TreeMap<>();
+    private final TreeMap<TxnId, WaitingOnVisibility> waitingOnVisibility = new TreeMap<>();
 
     protected CommandStore(int id,
                            NodeCommandStoreService node,
@@ -747,30 +751,30 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
     // may be invoked by any thread without holding the command store lock
     AsyncResult<Void> readyToCoordinate(Ranges ranges, long epoch)
     {
-        if (redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).epoch() >= epoch)
+        TxnId min = TxnId.max(TxnId.minForEpoch(epoch), redundantBefore.max(ranges, b -> b == null ? TxnId.NONE : b.maxBound(UNREADY)));
+        if (redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).compareTo(min) >= 0)
             return DONE;
 
-        SettableResult<Void> whenDone = new SettableWithDescription<>(this + " is ready to coordinate " + ranges + " on epoch " + epoch);
-        TxnId minForEpoch = TxnId.minForEpoch(epoch);
-        Ranges remaining = redundantBefore.removeWitnessed(minForEpoch, ranges);
-        WaitingOnVisibility sync = new WaitingOnVisibility(whenDone, remaining);
+        SettableResult<Void> whenDone = new SettableWithDescription<>(this + " is ready to coordinate " + ranges + " after " + min);
+        Ranges remaining = redundantBefore.removeWitnessed(min, ranges);
+        WaitingOnVisibility sync = new WaitingOnVisibility(whenDone, min, remaining);
         synchronized (waitingOnVisibility)
         {
-            WaitingOnVisibility prev = waitingOnVisibility.putIfAbsent((Long)epoch, sync);
+            WaitingOnVisibility prev = waitingOnVisibility.putIfAbsent(min, sync);
             Invariants.require(prev == null);
         }
-        ensureReadyToCoordinate(epoch, ranges, sync);
+        ensureReadyToCoordinate(min, ranges, sync, 0);
         return whenDone;
     }
 
-    private void ensureReadyToCoordinate(long epoch, Ranges ranges, WaitingOnVisibility waiting)
+    private void ensureReadyToCoordinate(TxnId min, Ranges ranges, WaitingOnVisibility waiting, int attempts)
     {
-        TxnId min = TxnId.nonNullOrMax(TxnId.minForEpoch(epoch), redundantBefore.max(ranges, b -> b == null ? TxnId.NONE : b.maxBound(UNREADY)));
-        node.durability().close("[" + this + " Epoch " + epoch + ']', VisibilitySyncPoint, min, ranges, KnownToSelf, 1, TimeUnit.HOURS)
-            .invoke((success, fail) -> onReadyToCoordinateDurabilityResult(epoch, ranges, waiting, min, fail, true));
+        String id = "epoch " + min.epoch() + (min.equals(TxnId.minForEpoch(min.epoch())) ? "" : "(after " + min + ')');
+        node.durability().close("[" + this + ' ' + id + ']', VisibilitySyncPoint, min, ranges, KnownToSelf, 1, TimeUnit.HOURS)
+            .invoke((success, fail) -> onReadyToCoordinateDurabilityResult(id, ranges, waiting, min, fail, true, attempts));
     }
 
-    private void onReadyToCoordinateDurabilityResult(long epoch, Ranges ranges, WaitingOnVisibility waiting, TxnId min, Throwable fail, boolean deferIfAwaitingDurability)
+    private void onReadyToCoordinateDurabilityResult(String id, Ranges ranges, WaitingOnVisibility waiting, TxnId min, Throwable fail, boolean deferIfAwaitingDurability, int attempts)
     {
         if (waiting.invalid)
             return;
@@ -781,15 +785,15 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
 
         if (!retired.isEmpty())
         {
-            logger.info("{}, Failed to close epoch {} for ranges {}, but some are retired; marking these as synced.", this, (Long)epoch, ranges, fail);
+            logger.info("{}, Failed to close {} for ranges {}, but some are retired; marking these as synced.", this, id, ranges, fail);
             execute((Empty)() -> "Mark Retired Ranges Synced", safeStore -> {
-                markVisibleInternal(safeStore, epoch, retired, "(Retired)");
+                markVisibleInternal(safeStore, min, retired, "(Retired)");
             }, agent);
         }
         else if (remaining.isEmpty())
         {
             if (fail != null)
-                logger.info("{}, Failed to close epoch {} for ranges {}, but none remaining. Aborting.", this, (Long)epoch, ranges, fail);
+                logger.info("{}, Failed to close {} for ranges {}, but none remaining. Aborting.", this, id, ranges, fail);
         }
 
         if (!remaining.isEmpty())
@@ -805,12 +809,12 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
             {
                 // TODO (expected): make this configurable
                 // schedule this check for later, to give durability some time to run
-                node.scheduler().once(() -> onReadyToCoordinateDurabilityResult(epoch, ranges, waiting, min, fail, false), 5L, MINUTES);
+                node.scheduler().once(() -> onReadyToCoordinateDurabilityResult(id, ranges, waiting, min, fail, false, 1 + attempts), 5L, MINUTES);
                 return;
             }
-            if (fail != null) logger.error("{} Failed to close epoch {} for ranges {}. Retrying.", this, (Long)epoch, remaining, fail);
-            else logger.error("{} DurabilityRequest completed successfully, but still awaiting visibility for ranges: {} on epoch {}. Retrying.", this, remaining, (Long)epoch);
-            node.someExecutor().execute(() -> ensureReadyToCoordinate(epoch, remaining, waiting));
+            if (fail != null) logger.error("{} Failed to close {} for ranges {}. Retrying.", this, id, remaining, fail);
+            else logger.error("{} Durability request completed successfully, but still awaiting visibility for ranges: {} on {}. Retrying.", this, remaining, id);
+            node.scheduler().once(() -> ensureReadyToCoordinate(min, remaining, waiting, attempts + 1), 30L, SECONDS);
         }
     }
 
@@ -910,9 +914,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
                 return AsyncResults.success(null);
 
             List<AsyncResult<Void>> awaiting = new ArrayList<>();
-            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
+            for (Map.Entry<TxnId, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
-                if (e.getKey() > epoch)
+                if (e.getKey().epoch() > epoch)
                     break;
 
                 Ranges remaining = e.getValue().waitingOn;
@@ -938,9 +942,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
                 return Ranges.EMPTY;
 
             Ranges waitingOn = Ranges.EMPTY;
-            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
+            for (Map.Entry<TxnId, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
-                if (e.getKey() > syncId.epoch())
+                if (e.getKey().compareTo(syncId) > 0)
                     break;
 
                 Ranges remaining = e.getValue().waitingOn;
@@ -963,9 +967,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
             if (waitingOnVisibility.isEmpty())
                 return;
 
-            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
+            for (Map.Entry<TxnId, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
-                if (e.getKey() > syncId.epoch())
+                if (e.getKey().compareTo(syncId) > 0)
                     break;
 
                 Ranges remaining = e.getValue().waitingOn.without(ranges);
@@ -982,9 +986,9 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
             if (waitingOnVisibility.isEmpty())
                 return;
 
-            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
+            for (Map.Entry<TxnId, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
-                if (e.getKey() > syncId.epoch())
+                if (e.getKey().compareTo(syncId) > 0)
                     break;
 
                 Ranges unmark = e.getValue().waitingOnDurable.slice(ranges, Minimal);
@@ -999,20 +1003,20 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
         Invariants.require(syncId.is(VisibilitySyncPoint));
         RedundantBefore addRedundantBefore = RedundantBefore.create(ranges, syncId, LOCALLY_WITNESSED_ONLY);
         safeStore.upsertRedundantBefore(addRedundantBefore);
-        markVisibleInternal(safeStore, syncId.epoch(), ranges, syncId);
+        markVisibleInternal(safeStore, syncId, ranges, syncId);
     }
 
-    private void markVisibleInternal(SafeCommandStore safeStore, long epoch, Ranges ranges, Object describe)
+    private void markVisibleInternal(SafeCommandStore safeStore, TxnId achieved, Ranges ranges, Object describe)
     {
         synchronized (waitingOnVisibility)
         {
             if (waitingOnVisibility.isEmpty())
                 return;
 
-            LongHashSet remove = null;
-            for (Map.Entry<Long, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
+            HashSet<TxnId> remove = null;
+            for (Map.Entry<TxnId, WaitingOnVisibility> e : waitingOnVisibility.entrySet())
             {
-                if (e.getKey() > epoch)
+                if (e.getKey().compareTo(achieved) > 0)
                     break;
 
                 Ranges waitingOn = e.getValue().waitingOn;
@@ -1029,7 +1033,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
                         logger.debug("{} completed full visibility sync for {} on epoch {} using {}", this, e.getValue().allRanges, e.getKey(), describe);
                         done.trySuccess(null);
                         if (remove == null)
-                            remove = new LongHashSet();
+                            remove = new HashSet<>();
                         remove.add(e.getKey());
                     }
                     else

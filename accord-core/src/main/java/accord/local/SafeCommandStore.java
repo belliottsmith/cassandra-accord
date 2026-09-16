@@ -371,6 +371,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
                 TxnId txnId = deps.txnIdWithFlags(i);
                 if (txnId.is(SHARD_BOUND))
                 {
+                    // TODO (required): document the justification for this - why are we marking LOCALLY_WITNESSED rather than e.g. SHARD_APPLIED?
                     Ranges ranges = deps.ranges(txnId).slice(ranges().all(), Minimal);
                     addRedundantBefore = RedundantBefore.merge(addRedundantBefore, RedundantBefore.create(ranges, txnId, LOCALLY_WITNESSED_ONLY));
                 }
