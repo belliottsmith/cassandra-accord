@@ -769,7 +769,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
 
     private void ensureReadyToCoordinate(TxnId min, Ranges ranges, WaitingOnVisibility waiting, int attempts)
     {
-        String id = "epoch " + min.epoch() + (min.equals(TxnId.minForEpoch(min.epoch())) ? "" : "(after " + min + ')');
+        String id = "epoch " + min.epoch() + (min.equals(TxnId.minForEpoch(min.epoch())) ? "" : " (after " + min + ')');
         node.durability().close("[" + this + ' ' + id + ']', VisibilitySyncPoint, min, ranges, KnownToSelf, 1, TimeUnit.HOURS)
             .invoke((success, fail) -> onReadyToCoordinateDurabilityResult(id, ranges, waiting, min, fail, true, attempts));
     }

@@ -223,7 +223,7 @@ public class DurabilityRequest
         Ranges success = satisfies.slice(waitingOn, Minimal);
         Ranges failed = expect.without(satisfies);
 
-        if (!failed.isEmpty())
+        if (!failed.isEmpty() && finishedAt > 0)
             logFailure(success, failed, e, durability);
 
         Ranges newAchieved = this.achieved.union(MERGE_ADJACENT, success);

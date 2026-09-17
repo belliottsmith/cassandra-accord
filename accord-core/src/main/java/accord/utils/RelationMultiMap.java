@@ -229,6 +229,7 @@ public class RelationMultiMap
          */
         public void add(V value)
         {
+            Invariants.nonNull(value);
             if (hasOrderedValues && totalCount > keyOffset && adapter.valueComparator().compare(keysToValues[totalCount - 1], value) >= 0)
                 hasOrderedValues = false;
 

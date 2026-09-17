@@ -44,14 +44,16 @@ public class Invariants
     }
 
     private static final Logger logger = LoggerFactory.getLogger(Invariants.class);
+    public static final String KEY_PARANOID = "accord.paranoid";
     public static final String KEY_PARANOIA_CPU = "accord.paranoia.cpu";
     public static final String KEY_PARANOIA_MEMORY = "accord.paranoia.memory";
     public static final String KEY_PARANOIA_COSTFACTOR = "accord.paranoia.costfactor";
+    public static final String KEY_TESTING = "accord.testing";
     private static final int PARANOIA_COMPUTE = Paranoia.valueOf(System.getProperty(KEY_PARANOIA_CPU, "NONE").toUpperCase()).ordinal();
     private static final int PARANOIA_MEMORY = Paranoia.valueOf(System.getProperty(KEY_PARANOIA_MEMORY, "NONE").toUpperCase()).ordinal();
     private static final int PARANOIA_FACTOR = ParanoiaCostFactor.valueOf(System.getProperty(KEY_PARANOIA_COSTFACTOR, "LOW").toUpperCase()).ordinal();
-    private static final boolean IS_PARANOID = Boolean.parseBoolean(System.getProperty("accord.paranoid", "false")) || PARANOIA_COMPUTE > 0 || PARANOIA_MEMORY > 0;
-    private static final boolean IS_TESTING = System.getProperty("accord.testing", "false").equals("true");
+    private static final boolean IS_PARANOID = Boolean.parseBoolean(System.getProperty(KEY_PARANOID, "false")) || PARANOIA_COMPUTE > 0 || PARANOIA_MEMORY > 0;
+    private static final boolean IS_TESTING = System.getProperty(KEY_TESTING, "false").equals("true");
     private static Consumer<RuntimeException> onUnexpected = IS_TESTING
                                                              ? fail -> { throw fail; }
                                                              : fail -> logger.error("Invariant failed", fail);
@@ -69,7 +71,7 @@ public class Invariants
 
     public static boolean testParanoia(Paranoia compute, Paranoia memory, ParanoiaCostFactor factor)
     {
-        return PARANOIA_COMPUTE >= compute.ordinal() && PARANOIA_MEMORY >= memory.ordinal() && PARANOIA_FACTOR >= factor.ordinal();
+        return IS_PARANOID && PARANOIA_COMPUTE >= compute.ordinal() && PARANOIA_MEMORY >= memory.ordinal() && PARANOIA_FACTOR >= factor.ordinal();
     }
 
     public static boolean debug()
