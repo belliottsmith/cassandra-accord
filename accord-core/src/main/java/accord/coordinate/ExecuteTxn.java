@@ -24,7 +24,10 @@ import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
 
+import org.agrona.collections.IntHashSet;
+
 import accord.api.Data;
+import accord.api.ExclusiveAsyncExecutor;
 import accord.api.Result;
 import accord.api.Timeouts;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
@@ -39,7 +42,6 @@ import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
-import accord.api.ExclusiveAsyncExecutor;
 import accord.local.StoreParticipants;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.CommandsForKey.TxnInfo;
@@ -70,14 +72,13 @@ import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
-import org.agrona.collections.IntHashSet;
 
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
-import static accord.api.ProtocolModifiers.replicaExecuteDistributedPersist;
-import static accord.api.ProtocolModifiers.recoverReads;
 import static accord.api.ProtocolModifiers.fastReadExecutionMayResendTxn;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
+import static accord.api.ProtocolModifiers.recoverReads;
+import static accord.api.ProtocolModifiers.replicaExecuteDistributedPersist;
 import static accord.api.ProtocolModifiers.sendMinimal;
 import static accord.api.ProtocolModifiers.sendNoStableIfFastExec;
 import static accord.api.ProtocolModifiers.sendOnlyReadStableMessages;
@@ -297,9 +298,12 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
         IntHashSet readSet = new IntHashSet();
         readingFrom.forEach(i -> readSet.add(i.id));
-        SortedArrayList<Id> contact = all.nodes().without(all::isFaulty);
+        SortedArrayList<Id> contact = all.nodes();
         for (Node.Id to : contact)
         {
+            if (all.status(to).isUnavailable())
+                continue; // not reading, so send to everyone who's up
+
             if (readSet.contains(to.id))
                 continue;
 

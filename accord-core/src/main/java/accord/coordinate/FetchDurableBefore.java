@@ -30,19 +30,43 @@ import accord.local.Node;
 import accord.messages.GetDurableBefore;
 import accord.messages.GetDurableBefore.DurableBeforeReply;
 import accord.primitives.Ranges;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
 import accord.topology.Topology;
+import accord.utils.ReducingRangeMap;
 import accord.utils.SortedListMap;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.Cancellable;
 
-public class FetchDurableBefore extends AbstractCoordination<Ranges, DurableBefore, DurableBeforeReply, DurableBefore>
+public class FetchDurableBefore extends AbstractCoordination<Ranges, FetchDurableBefore.Watermarks, DurableBeforeReply, FetchDurableBefore.Watermarks>
 {
+    /**
+     * The watermarks we collect from a quorum of peers: the merged {@link DurableBefore}, and the highest locally
+     * applied bound any of them reported for each range (see {@link GetDurableBefore}).
+     */
+    public static class Watermarks
+    {
+        public final DurableBefore durableBefore;
+        public final ReducingRangeMap<TxnId> maxLocallyApplied;
+
+        public Watermarks(DurableBefore durableBefore, ReducingRangeMap<TxnId> maxLocallyApplied)
+        {
+            this.durableBefore = durableBefore;
+            this.maxLocallyApplied = maxLocallyApplied;
+        }
+
+        @Override
+        public String toString()
+        {
+            return "durableBefore=" + durableBefore + ", maxLocallyApplied=" + maxLocallyApplied;
+        }
+    }
+
     final QuorumTracker tracker;
 
-    public FetchDurableBefore(Node node, Topology topology, BiConsumer<? super DurableBefore, Throwable> callback)
+    public FetchDurableBefore(Node node, Topology topology, BiConsumer<? super Watermarks, Throwable> callback)
     {
         super(node, node.someExclusiveExecutor(), TxnId.NONE, topology.ranges(), topology.nodes(), callback);
         this.tracker = new QuorumTracker(new Topologies.Single(node.topology().sorter(), topology));
@@ -51,19 +75,19 @@ public class FetchDurableBefore extends AbstractCoordination<Ranges, DurableBefo
     void start()
     {
         super.start();
-        contact(ignore -> new GetDurableBefore(), id -> !node.id().equals(id));
+        contact((i1, i2) -> new GetDurableBefore(), id -> !node.id().equals(id));
         executor.executeMaybeImmediately(() -> {
             markSelfContacted();
-            onSuccess(node.id(), new DurableBeforeReply(node.durableBefore()));
+            onSuccess(node.id(), new DurableBeforeReply(node.durableBefore(), new ReducingRangeMap<>()));
         });
     }
 
-    public static AsyncChain<DurableBefore> catchup(Node node)
+    public static AsyncChain<Watermarks> catchup(Node node)
     {
         return new AsyncChains.Head<>()
         {
             @Override
-            public @Nullable Cancellable start(BiConsumer<? super DurableBefore, Throwable> callback)
+            public @Nullable Cancellable start(BiConsumer<? super Watermarks, Throwable> callback)
             {
                 catchup(node, callback);
                 return null;
@@ -71,11 +95,11 @@ public class FetchDurableBefore extends AbstractCoordination<Ranges, DurableBefo
         };
     }
 
-    public static void catchup(Node node, BiConsumer<? super DurableBefore, Throwable> callback)
+    public static void catchup(Node node, BiConsumer<? super Watermarks, Throwable> callback)
     {
         Topology topology = node.topology().currentLocal();
         if (topology.ranges().isEmpty())
-            callback.accept(DurableBefore.EMPTY, null);
+            callback.accept(new Watermarks(DurableBefore.EMPTY, new ReducingRangeMap<>()), null);
         else
             new FetchDurableBefore(node, topology, callback).start();
     }
@@ -83,7 +107,7 @@ public class FetchDurableBefore extends AbstractCoordination<Ranges, DurableBefo
     @Override
     void onSuccessInternal(Node.Id from, int fromIndex, DurableBeforeReply reply)
     {
-        recordOk(fromIndex, reply.durableBefore);
+        recordOk(fromIndex, new Watermarks(reply.durableBefore, reply.maxLocallyApplied));
         handle(tracker.recordSuccess(from));
     }
 
@@ -112,9 +136,10 @@ public class FetchDurableBefore extends AbstractCoordination<Ranges, DurableBefo
         switch (status)
         {
             case Success:
-                SortedListMap<Node.Id, DurableBefore> oks = finishOks();
-                DurableBefore durableBefore = oks.foldlNonNullValues(DurableBefore::merge, DurableBefore.EMPTY);
-                finishWithSuccess(durableBefore);
+                SortedListMap<Node.Id, Watermarks> oks = finishOks();
+                DurableBefore durableBefore = oks.foldlNonNullValues((w, prev) -> DurableBefore.merge(prev, w.durableBefore), DurableBefore.EMPTY);
+                ReducingRangeMap<TxnId> maxLocallyApplied = oks.foldlNonNullValues((w, prev) -> ReducingRangeMap.merge(prev, w.maxLocallyApplied, Timestamp::nonNullOrMax), new ReducingRangeMap<>());
+                finishWithSuccess(new Watermarks(durableBefore, maxLocallyApplied));
                 break;
             case Failed:
                 finishOnFailure();

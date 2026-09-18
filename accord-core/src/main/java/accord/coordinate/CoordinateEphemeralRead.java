@@ -114,7 +114,7 @@ public class CoordinateEphemeralRead extends AbstractCoordinatePreAccept<Result,
     void start()
     {
         super.start();
-        contact(to -> new GetEphemeralReadDeps(to, topologies, scope, txnId, executeAtEpoch));
+        contact((to, nodeStatus) -> nodeStatus.isFaulty() ? null : new GetEphemeralReadDeps(to, topologies, scope, txnId, executeAtEpoch));
     }
 
     @Override

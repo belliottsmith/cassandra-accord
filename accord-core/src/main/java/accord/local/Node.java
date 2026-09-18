@@ -37,6 +37,7 @@ import accord.api.Agent;
 import accord.api.AsyncExecutor;
 import accord.api.ExclusiveAsyncExecutor;
 import accord.api.TopologyService;
+import accord.api.TopologySorter.NodeStatus;
 import accord.api.Tracing;
 import accord.coordinate.ExecuteTxn;
 import accord.impl.LocalDelivery;
@@ -552,24 +553,25 @@ public class Node implements NodeCommandStoreService
         agent.replicaEvents().onLocalExecution(this, txnId, result);
     }
 
-    public void send(Topologies topologies, Request send, @Nullable Tracing tracing)
+    public void send(Topologies topologies, NodeStatus ifAtLeast, Request send, @Nullable Tracing tracing)
     {
         SortedArrayList<Node.Id> nodes = topologies.nodes();
         for (int i = 0 ; i < nodes.size() ; ++i)
         {
             Node.Id to = nodes.get(i);
-            if (!topologies.isFaulty(nodes.get(i)))
+            if (topologies.status(to).isAtLeast(ifAtLeast))
                 send(to, send, tracing);
         }
     }
 
-    public void send(Topologies topologies, Function<Id, Request> requestFactory, @Nullable Tracing tracing)
+    public void send(Topologies topologies, NodeStatus ifAtLeast, Function<Id, Request> requestFactory, @Nullable Tracing tracing)
     {
         SortedArrayList<Node.Id> nodes = topologies.nodes();
         for (int i = 0 ; i < nodes.size() ; ++i)
         {
             Node.Id to = nodes.get(i);
-            if (!topologies.isFaulty(nodes.get(i)))
+            NodeStatus status = topologies.status(to);
+            if (status.isAtLeast(ifAtLeast))
                 send(to, requestFactory.apply(to), tracing);
         }
     }

@@ -117,7 +117,7 @@ public class TxnState extends WaitingState implements ExecutionContext
             {
                 clearPendingTimerDelay();
                 setScheduledTimer(updated.other());
-                owner.update(otherDeadline, this);
+                owner.update(0, otherDeadline, this);
             }
             else if (previousDeadline > 0)
             {
@@ -135,20 +135,20 @@ public class TxnState extends WaitingState implements ExecutionContext
             if (otherDeadline == 0)
             {
                 setScheduledTimer(updated);
-                if (previousDeadline > 0) owner.update(newDeadline, this);
-                else owner.add(newDeadline, this);
+                if (previousDeadline > 0) owner.update(nowMicros, newDeadline, this);
+                else owner.add(nowMicros, newDeadline, this);
             }
             else if (newDeadline < otherDeadline)
             {
                 setScheduledTimer(updated);
                 setPendingTimerDelay(Ints.saturatedCast(otherDeadline - newDeadline));
-                owner.update(newDeadline, this);
+                owner.update(nowMicros, newDeadline, this);
             }
             else
             {
                 setScheduledTimer(updated.other());
                 setPendingTimerDelay(Ints.saturatedCast(Math.max(1, newDeadline - otherDeadline)));
-                owner.update(otherDeadline, this);
+                owner.update(nowMicros, otherDeadline, this);
             }
         }
     }

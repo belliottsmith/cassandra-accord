@@ -449,7 +449,6 @@ abstract class WaitingState extends HomeState
     private void runInternal(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, @Nullable Tracing tracing, boolean isCallback)
     {
         Invariants.require(!owner.hasPending(Waiting, txnId));
-        incrementWaitingRunCounter();
         BlockedUntil blockedUntil = blockedUntil();
         Command command = safeCommand.current();
         if (command.saveStatus().compareTo(blockedUntil.unblockedFrom) >= 0)
@@ -898,6 +897,7 @@ abstract class WaitingState extends HomeState
     // TODO (expected): use back-off counter here
     private void retry(SafeCommandStore safeStore, SafeCommand safeCommand, DefaultProgressLog owner, BlockedUntil querying, @Nullable Tracing tracing)
     {
+        incrementWaitingRunCounter();
         if (!contactEveryone())
         {
             if (tracing != null)
@@ -910,7 +910,6 @@ abstract class WaitingState extends HomeState
         {
             if (tracing != null)
                 tracing.trace(owner.commandStore, "Retry queued for later.");
-            incrementWaitingRunCounter();
             set(safeStore, owner, querying, Queued);
         }
     }

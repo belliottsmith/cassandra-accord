@@ -45,7 +45,6 @@ import accord.primitives.Route;
 import accord.primitives.Txn;
 import accord.topology.Topologies;
 import accord.utils.Invariants;
-import accord.utils.SortedArrays;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
@@ -53,6 +52,7 @@ import accord.utils.Rethrowable;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults.SettableResult;
 
+import static accord.api.TopologySorter.NodeStatus.UNREADABLE;
 import static accord.coordinate.CoordinationAdapter.Adapters.exclusiveSyncPoint;
 import static accord.primitives.Status.Durability.HasOutcome.Quorum;
 import static accord.primitives.Status.Durability.HasOutcome.Universal;
@@ -135,7 +135,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
         Txn txn = node.agent().emptySystemTxn(syncPoint.syncId.kind(), syncPoint.syncId.domain());
         PersistableResult result = txn.result(syncPoint.syncId, syncPoint.executeAt, null).toPersistable();
         super.start();
-        contact(to -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.fullRoute, syncPoint.syncId, txn, syncPoint.waitFor, scope, null, result));
+        contact((to, status) -> new ApplyThenWaitUntilApplied(to, tracker.topologies(), syncPoint.executeAt, tracker.topologies().currentEpoch(), syncPoint.fullRoute, syncPoint.syncId, txn, syncPoint.waitFor, scope, null, result));
     }
 
     @Override
@@ -272,11 +272,11 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
             if (result.min.remote == SyncRemote.All)
             {
                 node.topology().onEpochRetired(scope.toRanges(), syncPoint.syncId);
-                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Universal), tracing);
+                node.send(tracker.topologies(), UNREADABLE, new SetShardDurable(syncPoint, Universal), tracing);
             }
             else if (result.min.remote == SyncRemote.Quorum)
             {
-                node.send(tracker.topologies(), new SetShardDurable(syncPoint, Quorum), tracing);
+                node.send(tracker.topologies(), UNREADABLE, new SetShardDurable(syncPoint, Quorum), tracing);
             }
             else
             {

@@ -927,7 +927,7 @@ public class CommandsForKeyTest
         }
     }
 
-    private static class TestCommandStore extends CommandStore implements Agent, OwnershipEventListener
+    static class TestCommandStore extends CommandStore implements Agent, OwnershipEventListener
     {
         static class Task extends AsyncResults.AbstractResult<Void>
         {

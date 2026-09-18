@@ -341,7 +341,9 @@ public class ShardDurability
                 currentSplits = Math.min(currentSplits * 2, maxSplits);
                 logger.info("Increased numberOfSplits to {} for shard {}", currentSplits, shard.range);
             }
-            long retryDelay = node.agent().retrySyncPointDelay(node, retries, MICROSECONDS);
+            long retryDelay = activeRequest != null
+                              ? node.agent().retrySyncPointDelay(node, retries, MICROSECONDS)
+                              : node.agent().retryBackgroundSyncPointDelay(node, retries, nodeOffset, shard.rf(), MICROSECONDS);
             if (activeRequest != null) logger.info("Retrying {} for {} in {}s", ranges, activeRequest.requestedBy, String.format("%.2f", retryDelay/1000_000.0));
             else logger.debug("Retrying {} in {}s", ranges, String.format("%.2f", retryDelay/1000_000.0));
             scheduled = node.scheduler().selfRecurring(() -> {
@@ -402,16 +404,23 @@ public class ShardDurability
                 if (fail != null && (!(fail instanceof CoordinationFailed)) && activeRequest != null)
                     logger.warn("{}: Failed to agree RX requested by {} for {}.", syncId, activeRequest.requestedBy, ranges, fail);
                 if (fail != null && activeRequest != null)
-                    logger.warn("{}: Failed to agree RX requested by {} for {}: {}.", syncId, activeRequest.requestedBy, ranges, fail.getMessage());
+                    logger.warn("{}: Failed to agree RX requested by {} for {}: {}.", syncId, activeRequest.requestedBy, ranges, describeFailure(fail));
                 else if (fail != null && (!(fail instanceof CoordinationFailed)))
                     logger.warn("{}: Failed to agree RX for {}.", syncId, ranges, fail);
                 else if (fail != null)
-                    logger.warn("{}: Failed to agree RX for {}: {}.", syncId, ranges, fail.getMessage());
+                    logger.warn("{}: Failed to agree RX for {}: {}.", syncId, ranges, describeFailure(fail));
                 else if (activeRequest != null)
                     logger.info("{}: Successfully agreed RX requested by {} for {}.", syncId, activeRequest.requestedBy, ranges);
                 else
                     logger.debug("{}: Successfully agreed RX for {}.", syncId, ranges);
             };
+        }
+
+        private String describeFailure(Throwable fail)
+        {
+            String message = fail.getMessage();
+            String name = fail.getClass().getSimpleName();
+            return message == null ? name : name + ": " + message;
         }
 
         synchronized boolean request(DurabilityRequest request, Range range)

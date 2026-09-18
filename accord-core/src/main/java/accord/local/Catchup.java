@@ -24,178 +24,46 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.RoutingKey;
-import accord.api.Timeouts;
-import accord.api.Timeouts.RegisteredTimeout;
 import accord.coordinate.FetchDurableBefore;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
-import accord.primitives.SaveStatus;
-import accord.primitives.Status;
+import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
+import accord.utils.ReducingRangeMap;
 import accord.utils.Reduce;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
-import accord.utils.async.AsyncResults.SettableResult;
 
-import static accord.api.ProgressLog.BlockedUntil.CanApply;
+import accord.local.durability.DurabilityService.SyncLocal;
+import accord.local.durability.DurabilityService.SyncRemote;
+
 import static accord.local.ExecutionContext.*;
-import static accord.local.RedundantStatus.Property.LOCALLY_APPLIED;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
 import static accord.primitives.Routables.Slice.Minimal;
+import static accord.local.durability.DurabilityService.SyncReadable.UnknownReadable;
 import static accord.utils.Functions.alwaysFalse;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
 public class Catchup
 {
     private static final Logger logger = LoggerFactory.getLogger(Catchup.class);
-    static class CommandStoreListener extends SettableResult<Unsuccessful> implements SyncPointListener, Timeouts.Timeout
+    static Ranges removeRedundant(Ranges waitingOn, ReducingRangeMap<TxnId> target, RedundantBefore redundantBefore, BiConsumer<Ranges, Ranges> removedAndRemaining)
     {
-        final CommandStore commandStore;
-        final long deadline;
-        final TimeUnit deadlineUnits;
-        final DurableBefore durableBefore;
-        RegisteredTimeout timeout;
-        Ranges waitingOn;
+        return target.foldlWithBounds(waitingOn, (TxnId targetTxnId, Ranges ranges, RoutingKey targetStart, RoutingKey targetEnd) -> {
+            if (targetTxnId == null)
+                return ranges;
 
-        CommandStoreListener(SafeCommandStore safeStore, long deadline, TimeUnit deadlineUnits, DurableBefore durableBefore)
-        {
-            this.commandStore = safeStore.commandStore();
-            this.deadline = deadline;
-            this.deadlineUnits = deadlineUnits;
-            this.durableBefore = durableBefore;
-        }
-
-        synchronized boolean register(SafeCommandStore safeStore)
-        {
-            waitingOn = safeStore.ranges().all().slice(durableBefore.ranges(Objects::nonNull), Minimal).mergeTouching();
-            logger.debug("{}: Registering listener on {}, filtering by {}", safeStore.commandStore(), waitingOn, safeStore.redundantBefore().map(b -> b == null ? null : b.maxBound(LOCALLY_APPLIED), TxnId[]::new));
-            updateWaitingOn(safeStore);
-
-            if (!waitingOn.isEmpty())
-            {
-                logger.info("{}: catching-up {}", safeStore.commandStore(), durableBefore.foldl(waitingOn, (entry, sb, p1, p2) -> {
-                    if (sb.length() > 0)
-                        sb.append(", ");
-                    if (entry == null)
-                    {
-                        sb.append("??");
-                    }
-                    else
-                    {
-                        TxnId txnId = entry.quorum.withoutNonIdentityFlags();
-                        Range range = entry.toPlainRange();
-                        markWaiting(safeStore, txnId, range);
-                        sb.append(range).append(": ").append(entry.quorum);
-                    }
-                    return sb;
-                }, new StringBuilder(), null, null));
-                safeStore.register(this);
-                timeout = safeStore.node().timeouts().registerAt(this, deadline, deadlineUnits);
-                return true;
-            }
-            else
-            {
-                done(safeStore);
-                return false;
-            }
-        }
-
-        private static void markWaiting(SafeCommandStore safeStore, TxnId txnId, Range range)
-        {
-            //noinspection DataFlowIssue
-            safeStore = safeStore;
-            ExecutionContext ctx = unsequenced(txnId, "Catchup");
-            if (safeStore.canExecuteWith(ctx)) markWaiting(safeStore, safeStore.unsafeTryGet(txnId), range);
-            else safeStore.commandStore().execute(ctx, (Consumer<? super SafeCommandStore>) safeStore0 -> markWaiting(safeStore0, safeStore0.unsafeTryGet(txnId), range), safeStore.agent());
-        }
-
-        private static void markWaiting(SafeCommandStore safeStore, SafeCommand safeCommand, Range range)
-        {
-            if (!safeCommand.current().hasBeen(Status.PreApplied))
-                safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, Ranges.of(range), null);
-        }
-
-        private void done(SafeCommandStore safeStore)
-        {
-            trySuccess(null);
-            logger.info("{}: fully caught-up with quorums", safeStore.commandStore());
-            if (timeout != null)
-            {
-                timeout.cancel();
-                timeout = null;
-            }
-        }
-
-        private void updateWaitingOn(SafeCommandStore safeStore)
-        {
-            RedundantBefore redundantBefore = safeStore.redundantBefore();
-            Ranges newWaitingOn = redundantBefore.removeLostOrStale(waitingOn);
-            if (newWaitingOn != waitingOn)
-            {
-                Ranges retiredOrStale = waitingOn.without(newWaitingOn);
-                if (!retiredOrStale.isEmpty())
-                    logger.info("{}: {} are retired (or stale)", safeStore.commandStore(), retiredOrStale);
-            }
-
-            waitingOn = removeRedundant(newWaitingOn, durableBefore, redundantBefore, (caughtUp, remaining) -> {
-                logger.info("{}: caught-up with quorum for {}; {} remaining", safeStore.commandStore(), caughtUp, remaining);
-            });
-        }
-
-        @Override
-        public void update(SafeCommandStore safeStore, Command command)
-        {
-            if (command.saveStatus().compareTo(SaveStatus.Applied) < 0 || command.saveStatus().compareTo(SaveStatus.TruncatedUnapplied) >= 0)
-                return;
-
-            if (!command.participants().touches().intersects(waitingOn))
-                return;
-
-            synchronized (this)
-            {
-                updateWaitingOn(safeStore);
-                if (!waitingOn.isEmpty())
-                    return;
-            }
-            done(safeStore);
-            safeStore.unregister(this);
-        }
-
-        @Override
-        public void timeout()
-        {
-            Unsuccessful unsuccessful = null;
-            synchronized (this)
-            {
-                if (!waitingOn.isEmpty())
-                    unsuccessful = new Unsuccessful(waitingOn);
-            }
-            commandStore.chain((Empty)() -> "Timeout Catchup", safeStore -> { safeStore.unregister(this); })
-                        .begin(commandStore.agent);
-            trySuccess(unsuccessful);
-        }
-
-        @Override
-        public int stripe()
-        {
-            return commandStore.id;
-        }
-    }
-
-    static Ranges removeRedundant(Ranges waitingOn, DurableBefore durableBefore, RedundantBefore redundantBefore, BiConsumer<Ranges, Ranges> removedAndRemaining)
-    {
-        return durableBefore.foldl(waitingOn, (DurableBefore.Entry entry, Ranges ranges, Object p1, Object p2) -> {
-            Ranges entryRanges = Ranges.of(entry);
-            return redundantBefore.foldlWithBounds(entryRanges, (RedundantBefore.Bounds bounds, Ranges rs, RoutingKey boundStart, RoutingKey boundEnd) -> {
+            Ranges targetRanges = Ranges.of(targetStart.rangeFactory().newRange(targetStart, targetEnd));
+            return redundantBefore.foldlWithBounds(targetRanges, (RedundantBefore.Bounds bounds, Ranges rs, RoutingKey boundStart, RoutingKey boundEnd) -> {
                 TxnId locallyRedundant = bounds.maxBound(LOCALLY_REDUNDANT);
-                if (locallyRedundant.compareTo(entry.quorum) >= 0)
+                if (locallyRedundant.compareTo(targetTxnId) >= 0)
                 {
                     Ranges boundRanges = Ranges.of(Range.of(boundStart, boundEnd));
                     Ranges caughtUp = rs.slice(boundRanges, Minimal);
@@ -207,7 +75,7 @@ public class Catchup
                 }
                 return rs;
             }, ranges, alwaysFalse());
-        }, waitingOn, null, null);
+        }, waitingOn, alwaysFalse());
     }
 
     public static class Unsuccessful
@@ -231,31 +99,59 @@ public class Catchup
         return catchup(node, deadline, units, Arrays.asList(node.commandStores().all()));
     }
 
+    /**
+     * Catch up with our peers by agreeing a <em>new</em> sync point over the ranges we own and waiting until we have
+     * applied it locally: by construction, when it applies locally every transaction that executes before it has applied
+     * locally too, so we are caught up as of now.
+     *
+     * We previously adopted a sync point our peers had *already* agreed and applied, learned from their durability
+     * watermarks. That bound is only as fresh as the durability cycle (minutes), so catchup could report success while
+     * we were still missing every transaction since - which then had to be recovered one at a time by the progress log,
+     * far more expensively, and on a busy key possibly not at all. Measured before this change: catchup "finished" in
+     * 14s with ~20,000 transactions still outstanding on the node.
+     *
+     * Note this is only safe because plain catchup does not mark anything unready or discard any data - waiting for a
+     * newer bound is strictly more conservative. {@link #rebootstrapIfBehind}, which does affect readiness, continues to
+     * use the quorum-durable bound.
+     */
     public static AsyncResult<Unsuccessful> catchup(Node node, long deadline, TimeUnit units, List<CommandStore> commandStores)
     {
-        return FetchDurableBefore.catchup(node).flatMap(durableBefore -> {
-            List<AsyncChain<CommandStoreListener>> chains = new ArrayList<>();
-            for (CommandStore commandStore : commandStores)
+        List<AsyncChain<Unsuccessful>> chains = new ArrayList<>(commandStores.size());
+        for (CommandStore commandStore : commandStores)
+            chains.add(catchup(node, commandStore, deadline, units));
+
+        if (chains.isEmpty())
+            return AsyncResults.success(null);
+
+        return AsyncChains.reduce(chains, Unsuccessful::merge).beginAsResult();
+    }
+
+    private static AsyncChain<Unsuccessful> catchup(Node node, CommandStore commandStore, long deadline, TimeUnit units)
+    {
+        return commandStore.chain((Empty)() -> "Catchup", safeStore -> {
+            Ranges ranges = safeStore.ranges().all().mergeTouching();
+            return safeStore.redundantBefore().removeLostOrStale(ranges);
+        }).flatMap(ranges -> {
+            if (ranges.isEmpty())
             {
-                chains.add(commandStore.chain((Empty)() -> "Catchup", safeStore -> {
-                    CommandStoreListener listener = new CommandStoreListener(safeStore, deadline, units, durableBefore);
-                    if (listener.register(safeStore))
-                        return listener;
-                    return null;
-                }));
+                logger.info("{}: nothing to catch up", commandStore);
+                return AsyncChains.success(null);
             }
-            return AsyncChains.allOf(chains).flatMap(listeners -> {
-                List<AsyncResult<Unsuccessful>> registered = new ArrayList<>(listeners.size());
-                for (CommandStoreListener listener : listeners)
-                {
-                    if (listener != null)
-                        registered.add(listener);
-                }
-                if (registered.isEmpty())
-                    return AsyncChains.success((Unsuccessful)null);
-                return AsyncResults.reduce(registered, Unsuccessful::merge).chain();
-            });
-        }).beginAsResult();
+
+            long timeoutMicros = Math.max(1, units.toMicros(deadline) - node.elapsed(MICROSECONDS));
+            logger.info("{}: catching-up {} by agreeing a new sync point", commandStore, ranges);
+            return node.durability()
+                       .sync("Catchup " + commandStore, null, ranges, SyncLocal.Self, SyncRemote.NoRemote, UnknownReadable, timeoutMicros, MICROSECONDS)
+                       .chain()
+                       .map(ignore -> {
+                           logger.info("{}: caught-up {}", commandStore, ranges);
+                           return (Unsuccessful) null;
+                       })
+                       .recover(failure -> {
+                           logger.info("{}: could not catch up {}: {}", commandStore, ranges, failure.toString());
+                           return AsyncChains.success(new Unsuccessful(ranges));
+                       });
+        });
     }
 
     private static AsyncResult<?> rebootstrapIfBehind(Node node, SafeCommandStore safeStore, DurableBefore durableBefore)
@@ -265,7 +161,7 @@ public class Catchup
         {
             Ranges tmp = safeStore.ranges().all().slice(durableBefore.ranges(Objects::nonNull), Minimal).mergeTouching();
             tmp = redundantBefore.removeLostOrStale(tmp);
-            catchUp = Catchup.removeRedundant(tmp, durableBefore, redundantBefore, (caughtUp, remaining) -> {});
+            catchUp = Catchup.removeRedundant(tmp, quorumDurableTarget(durableBefore), redundantBefore, (caughtUp, remaining) -> {});
         }
 
         if (catchUp.isEmpty())
@@ -278,6 +174,19 @@ public class Catchup
         return safeStore.commandStore().rebootstrap(node, catchUp, BootstrapReason.CATCHUP);
     }
 
+    private static ReducingRangeMap<TxnId> quorumDurableTarget(DurableBefore durableBefore)
+    {
+        ReducingRangeMap<TxnId> target = new ReducingRangeMap<>();
+        for (DurableBefore.Entry entry : durableBefore)
+        {
+            if (entry == null)
+                continue;
+            ReducingRangeMap<TxnId> quorumDurable = ReducingRangeMap.create(Ranges.of(entry.toPlainRange()), entry.quorum.withoutNonIdentityFlags());
+            target = ReducingRangeMap.merge(target, quorumDurable, Timestamp::nonNullOrMax);
+        }
+        return target;
+    }
+
     public static AsyncChain<?> rebootstrapIfBehind(Node node)
     {
         return rebootstrapIfBehind(node, Arrays.asList(node.commandStores().all()));
@@ -285,7 +194,8 @@ public class Catchup
 
     public static AsyncChain<?> rebootstrapIfBehind(Node node, List<CommandStore> commandStores)
     {
-        return FetchDurableBefore.catchup(node).flatMap(durableBefore -> {
+        return FetchDurableBefore.catchup(node).flatMap(watermarks -> {
+            DurableBefore durableBefore = watermarks.durableBefore;
             List<AsyncChain<?>> chains = new ArrayList<>();
             for (CommandStore commandStore : commandStores)
             {

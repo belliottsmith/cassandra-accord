@@ -26,6 +26,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -137,6 +138,10 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private final Long2ObjectHashMap<Object> active = new Long2ObjectHashMap<>();
     private final Map<TxnId, TxnState> debugDeleted = Invariants.debug() && Invariants.isParanoid() && Invariants.isTesting() ? new Object2ObjectHashMap<>() : null;
 
+    // peek into the future by this many micros when picking what to run.
+    // this is primarily to handle the fact that we do not support 0 delay when scheduling, so tasks that should be run immediately are schedule with 1us delay
+    private static final long RUN_AHEAD_MICROS = 100;
+
     private static final Object[] EMPTY_RUN_BUFFER = new Object[0];
     private static final RunInvoker[] EMPTY_AWAITING_EPOCH_BUFFER = new RunInvoker[0];
 
@@ -154,6 +159,8 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
     private int modeFlags;
 
     private volatile boolean stopped = true;
+    private volatile int scheduled;
+    private static final AtomicIntegerFieldUpdater<DefaultProgressLog> scheduledUpdater = AtomicIntegerFieldUpdater.newUpdater(DefaultProgressLog.class, "scheduled");
     private Config config = new Config();
 
     private long prevCallbackId;
@@ -169,14 +176,16 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         return node;
     }
 
-    void update(long deadline, TxnState timer)
+    void update(long now, long deadline, TxnState timer)
     {
         timers.update(deadline, timer);
+        maybeNotify(now);
     }
 
-    void add(long deadline, TxnState timer)
+    void add(long now, long deadline, TxnState timer)
     {
         timers.add(deadline, timer);
+        maybeNotify(now);
     }
 
     @Nullable TxnState get(TxnId txnId)
@@ -554,7 +563,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (stopped || processing)
             return;
 
-        long nowMicros = node.recentElapsed(TimeUnit.MICROSECONDS);
+        long nowMicros = node.recentElapsed(TimeUnit.MICROSECONDS) + RUN_AHEAD_MICROS;
         processing = true;
         try
         {
@@ -576,6 +585,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         }
         finally
         {
+            scheduled = 0;
             processing = false;
         }
     }
@@ -984,16 +994,14 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         if (stopped)
             return;
 
-        if (commandStore.inStore())
-        {
-            accept(null);
-        }
-        else
-        {
-            long now = node.recentElapsed(MICROSECONDS);
-            if (timers.shouldWake(now))
-                commandStore.execute((ExecutionContext.Empty) () -> "Run ProgressLog", this, node.agent());
-        }
+        maybeNotify(node.recentElapsed(MICROSECONDS));
+    }
+
+    private void maybeNotify(long nowMicros)
+    {
+        nowMicros += RUN_AHEAD_MICROS;
+        if (timers.shouldWake(nowMicros) && scheduledUpdater.compareAndSet(this, 0, 1))
+            commandStore.execute((ExecutionContext.Empty) () -> "Run ProgressLog", this, node.agent());
     }
 
     public Config config()

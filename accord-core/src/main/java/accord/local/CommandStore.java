@@ -717,23 +717,6 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
                               bootstrap.reads);
     }
 
-    protected AsyncChain<DurabilityResults> prepareToBootstrap(Node node, Object requestedBy, Ranges ranges, BootstrapReason reason)
-    {
-        // TODO (expected): configurable timeout
-        SortedArrayList<Node.Id> selfOnly = SortedArrayList.ofSorted(node.id());
-        switch (reason)
-        {
-            default: throw new UnhandledEnum(reason);
-            case GAIN_OWNERSHIP:
-                return CoordinateMaxConflict.maxConflict(node, ranges)
-                       .flatMapResult(atLeast -> node.durability().sync(requestedBy, null, atLeast, ranges, null, selfOnly, NoLocal, MinorityQuorumAndWaitedForAll, KnownReadable, 1L, TimeUnit.HOURS));
-            case CATCHUP:
-            case LOG_CORRUPTED:
-            case LOG_INCOMPLETE:
-                return node.durability().sync(requestedBy, null, ranges, null, selfOnly, NoLocal, MinorityQuorumAndWaitedForAll, KnownReadable, 1L, TimeUnit.HOURS).chain();
-        }
-    }
-
     /**
      * Defer submitting the work until we have wired up any changes to topology in memory, then first submit the work
      * to setup any state in the command store, and finally submit the distributed work to bootstrap the data locally.
