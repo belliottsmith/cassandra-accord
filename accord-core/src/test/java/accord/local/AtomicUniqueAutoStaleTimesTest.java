@@ -267,7 +267,7 @@ public class AtomicUniqueAutoStaleTimesTest
             {
                 double leafHits = hits[2 * leaf] + hits[2 * leaf + 1];
                 Assertions.assertThat(leafHits)
-                          .as("leaf[%d] (buckets %d+%d) hits=%.0f expected≈%.0f distribution=%s",
+                          .as("leaf[%d] (buckets %d+%d) hits=%.0f expected~%.0f distribution=%s",
                               leaf, 2 * leaf, 2 * leaf + 1, leafHits, leafExpected, Arrays.toString(hits))
                           .isCloseTo(leafExpected, Offset.offset(leafTol));
             }
@@ -281,7 +281,7 @@ public class AtomicUniqueAutoStaleTimesTest
                 boolean boundary = (i <= 1) || (i >= BUCKETS - 2);
                 double tol = (boundary ? 0.75 : 0.25) * bucketExpected;
                 Assertions.assertThat((double) hits[i])
-                          .as("bucket[%d]%s hits=%d expected≈%.0f distribution=%s",
+                          .as("bucket[%d]%s hits=%d expected~%.0f distribution=%s",
                               i, boundary ? " (boundary)" : "", hits[i], bucketExpected, Arrays.toString(hits))
                           .isCloseTo(bucketExpected, Offset.offset(tol));
             }
