@@ -52,6 +52,7 @@ import accord.utils.async.AsyncChain;
 import accord.utils.async.Cancellable;
 
 import static accord.api.ProtocolModifiers.permitLocalDelivery;
+import static accord.api.TopologySorter.NodeStatus.HEALTHY;
 import static accord.coordinate.AbstractCoordination.LocalExecuteState.PENDING;
 import static accord.coordinate.AbstractCoordination.LocalExecuteState.SUCCESS;
 import static accord.coordinate.AbstractCoordination.LocalExecuteState.TIMEOUT;
@@ -218,24 +219,36 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
                         {
                             default: throw new UnhandledEnum(nodeStatus);
                             case HEALTHY:
+                            {
+                                Request r = Invariants.nonNull(request.apply(to, HEALTHY));
+                                expectingReply.set(i);
+                                // TODO (expected): do not cancel PreAccept, Accept, Commit, Stable or Apply to self on done
+                                replyState[i] = node.send(to, r, executor, this, tracing);
+                                Invariants.require(expectingReply.get(i));
+                                continue;
+                            }
+
                             case UNREADABLE:
+                            {
                                 Request r = request.apply(to, nodeStatus);
                                 if (r != null)
-                                {
-                                    expectingReply.set(i);
-                                    // TODO (expected): do not cancel PreAccept, Accept, Commit, Stable or Apply to self on done
-                                    replyState[i] = node.send(to, r, executor, this, tracing);
-                                    Invariants.require(expectingReply.get(i));
-                                    break;
-                                }
-                                Invariants.require(nodeStatus == NodeStatus.UNREADABLE);
+                                    node.send(to, r, tracing);
+
+                                if (tracing != null)
+                                    tracing.trace(null, r != null ? "%s is %s; sending one-way" : "%s is %s; not contacting", to, nodeStatus);
+                                break;
+                            }
 
                             case UNAVAILABLE:
+                            {
                                 if (tracing != null)
                                     tracing.trace(null, "%s is %s; recording failure instead", to, nodeStatus);
-                                if (RequestStatus.Failed == tracker.prerecordFailure(to))
-                                    finishOnExaustion();
+                                break;
+                            }
                         }
+
+                        if (RequestStatus.Failed == tracker.prerecordFailure(to))
+                            finishOnExaustion();
                     }
                 }
             }

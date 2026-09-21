@@ -194,8 +194,7 @@ public class Catchup
 
     public static AsyncChain<?> rebootstrapIfBehind(Node node, List<CommandStore> commandStores)
     {
-        return FetchDurableBefore.catchup(node).flatMap(watermarks -> {
-            DurableBefore durableBefore = watermarks.durableBefore;
+        return FetchDurableBefore.catchup(node).flatMap(durableBefore -> {
             List<AsyncChain<?>> chains = new ArrayList<>();
             for (CommandStore commandStore : commandStores)
             {

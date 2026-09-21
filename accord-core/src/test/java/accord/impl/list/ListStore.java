@@ -343,6 +343,12 @@ public class ListStore extends Snapshotter<ListStore.Snapshot> implements DataSt
     private final Int2ObjectHashMap<Ranges> pendingFetches = new Int2ObjectHashMap<>();
 
     @Override
+    public FetchResult sync(Node node, SafeCommandStore safeStore, Ranges ranges, TxnId atLeast, SortedArrays.SortedArrayList<Node.Id> readable, FetchRanges delegate)
+    {
+        return image(node, safeStore, ranges, atLeast, readable, delegate);
+    }
+
+    @Override
     public FetchResult image(Node node, SafeCommandStore safeStore, Ranges ranges, TxnId atLeast, SortedArrays.SortedArrayList<Node.Id> readable, FetchRanges delegate)
     {
         int storeId = safeStore.commandStore().id();

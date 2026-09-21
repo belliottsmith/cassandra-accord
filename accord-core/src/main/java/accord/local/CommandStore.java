@@ -263,12 +263,14 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
     public final void unsafeSetRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         rangesForEpoch = nonNull(newRangesForEpoch);
+        Invariants.require(redundantBefore == null || redundantBefore.foldlWithDefault(rangesForEpoch.all(), (b, v, p) -> v && b != null, null, true, null, v -> !v),
+                           "%s owns %s but has insufficient RedundantBefore bounds", this, rangesForEpoch);
     }
 
     protected void loadRangesForEpoch(RangesForEpoch newRangesForEpoch)
     {
         Invariants.require(this.rangesForEpoch == null || rangesForEpoch.isPrefixOf(newRangesForEpoch));
-        unsafeSetRangesForEpoch(newRangesForEpoch);
+        this.rangesForEpoch = nonNull(newRangesForEpoch);
         if (redundantBefore.isEmpty() && newRangesForEpoch.size() > 0)
         {
             long minEpoch = rangesForEpoch.epochAtIndex(0);
@@ -735,16 +737,18 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
     AsyncResult<Void> readyToCoordinate(Ranges ranges, long epoch)
     {
         TxnId min = TxnId.max(TxnId.minForEpoch(epoch), redundantBefore.max(ranges, b -> b == null ? TxnId.NONE : b.maxBound(UNREADY)));
-        if (redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).compareTo(min) >= 0)
+        if (ranges.isEmpty() || redundantBefore.min(ranges, Bounds::locallyWitnessedBefore).compareTo(min) >= 0)
             return DONE;
 
-        SettableResult<Void> whenDone = new SettableWithDescription<>(this + " is ready to coordinate " + ranges + " after " + min);
         Ranges remaining = redundantBefore.removeWitnessed(min, ranges);
+        Invariants.require(!remaining.isEmpty(), "%s has nothing left to witness before %s in %s", this, min, ranges);
+
+        SettableResult<Void> whenDone = new SettableWithDescription<>(this + " is ready to coordinate " + ranges + " after " + min);
         WaitingOnVisibility sync = new WaitingOnVisibility(whenDone, min, remaining);
         synchronized (waitingOnVisibility)
         {
             WaitingOnVisibility prev = waitingOnVisibility.putIfAbsent(min, sync);
-            Invariants.require(prev == null);
+            Invariants.require(prev == null, "%s is already waiting on visibility for %s: %s", this, min, prev == null ? null : prev.whenDone);
         }
         ensureReadyToCoordinate(min, ranges, sync, 0);
         return whenDone;

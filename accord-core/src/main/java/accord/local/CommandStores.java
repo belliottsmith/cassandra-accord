@@ -1228,7 +1228,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
             RangesForEpoch rfe = e.getValue();
             Invariants.require(rfe != null);
             ShardHolder shard = new ShardHolder(current.byId(storeId), rfe, update.previouslyOwned.regains(rfe.all()));
-            shard.store.unsafeSetRangesForEpoch(rfe);
+            shard.store.loadRangesForEpoch(rfe); // load will initialise RedundantBefore if we've erased the journal state
             shards[storeId] = shard;
             maxId = Math.max(maxId, storeId);
         }

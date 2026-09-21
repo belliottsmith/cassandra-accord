@@ -206,7 +206,7 @@ class Bootstrap
 
     final Ranges all;
 
-    // TODO (expected): handle case where we clear these to empty; should trigger promise immediately
+    // cleared to empty when we no longer own the ranges; see maybeComplete()
     Ranges allValid, remaining;
 
     public Bootstrap(Node node, CommandStore commandStore, long epoch, Ranges ranges, BootstrapReason reason)
@@ -365,12 +365,8 @@ class Bootstrap
         Invariants.requireArgument(attempt.fetched.equals(attempt.fetchedAndSafeToRead));
         inProgress.remove(attempt);
         remaining = remaining.without(attempt.fetched);
-        if (inProgress.isEmpty() && remaining.isEmpty())
-        {
-            data.setSuccess(null);
-            reads.setSuccess(null);
-            commandStore.complete(this);
-        }
+
+        maybeComplete();
     }
 
     // distinct from abort as triggered by ourselves when we no longer own the range
@@ -380,5 +376,17 @@ class Bootstrap
         remaining = remaining.without(invalidate);
         for (Attempt attempt : inProgress)
             attempt.invalidate(invalidate);
+
+        maybeComplete();
+    }
+
+    private void maybeComplete()
+    {
+        if (inProgress.isEmpty() && remaining.isEmpty())
+        {
+            data.trySuccess(null);
+            reads.trySuccess(null);
+            commandStore.complete(this);
+        }
     }
 }
