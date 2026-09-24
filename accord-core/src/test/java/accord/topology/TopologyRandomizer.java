@@ -49,7 +49,6 @@ import accord.impl.PrefixedIntHashKey.PrefixedIntRoutingKey;
 import accord.local.CommandStore;
 import accord.local.Node;
 import accord.local.Node.Id;
-import accord.local.durability.DurabilityService;
 import accord.local.durability.DurabilityService.SyncRemote;
 import accord.primitives.Range;
 import accord.primitives.Ranges;

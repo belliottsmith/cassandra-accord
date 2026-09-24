@@ -50,7 +50,6 @@ import accord.topology.TopologyException;
 import accord.utils.Invariants;
 
 import static accord.api.TopologySorter.NodeStatus.HEALTHY;
-import static accord.api.TopologySorter.NodeStatus.UNREADABLE;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.primitives.Status.Durability.AllQuorums;

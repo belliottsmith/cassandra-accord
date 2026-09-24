@@ -792,7 +792,7 @@ public class Cluster
                     // TODO (expected): we seem to hit Log exceptions when rebootstrapping, suggesting we are handling them poorly
                     BootstrapReason reason = random.nextBoolean() ? LOG_CORRUPTED : LOG_INCOMPLETE;
                     topologyRandomizer.markRebootstrapping(node);
-                    stores.rebootstrap(node, reason).invoke(node.agent());
+                    stores.rebootstrap(node, reason).reads.invoke(node.agent());
                     Catchup.catchup(node, node.elapsed(SECONDS) + DAYS.toSeconds(1L), SECONDS);
 
                     while (sinks.drain(getPendingPredicate(id, stores.all())));

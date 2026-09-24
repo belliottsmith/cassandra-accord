@@ -71,7 +71,6 @@ import static accord.local.RedundantStatus.Property.LOCALLY_SYNCED;
 import static accord.local.RedundantStatus.Property.LOCALLY_WITNESSED;
 import static accord.local.RedundantStatus.Property.LOG_INCOMPLETE;
 import static accord.local.RedundantStatus.Property.LOG_UNAVAILABLE;
-import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED_HLC_BOUND;
 import static accord.local.RedundantStatus.Property.UNREADY;
 import static accord.local.RedundantStatus.Property.SHARD_APPLIED;

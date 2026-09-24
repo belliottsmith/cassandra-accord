@@ -34,7 +34,6 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,13 +64,11 @@ import accord.utils.IndexedQuadConsumer;
 import accord.utils.IndexedRangeQuadConsumer;
 import accord.utils.Invariants;
 import accord.utils.RandomSource;
-import accord.utils.Reduce;
 import accord.utils.SearchableRangeList;
 import accord.utils.LargeBitSet;
 import accord.utils.UnhandledEnum;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
-import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.Cancellable;
 import accord.utils.async.NestedAsyncResult;
@@ -898,30 +895,29 @@ public abstract class CommandStores implements AsyncExecutorFactory
         return REASSIGNED;
     }
 
-    public AsyncResult<Void> rebootstrap(Node node, BootstrapReason reason)
+    public EpochReady rebootstrap(Node node, BootstrapReason reason)
     {
         return rebootstrap(node, null, reason);
     }
 
-    public AsyncResult<Void> rebootstrap(Node node, @Nullable Ranges ranges, BootstrapReason reason)
+    public EpochReady rebootstrap(Node node, @Nullable Ranges ranges, BootstrapReason reason)
     {
         Invariants.requireArgument(reason != GAIN_OWNERSHIP, "Rebootstrap reason cannot be " + reason);
-        List<AsyncResult<EpochReady>> results = new ArrayList<>();
+
+        List<EpochReady> results = new ArrayList<>();
         Snapshot snapshot = current;
+
+        long epoch = snapshot.global.epoch();
         for (ShardHolder shard : snapshot.shards)
         {
             Ranges rebootstrap = ranges == null ? shard.ranges.currentRanges()
                                                 : shard.ranges().currentRanges().slice(ranges, Minimal);
 
             if (!rebootstrap.isEmpty())
-                results.add(shard.store.startBootstrap(node, rebootstrap, snapshot.global.epoch(), Sync, reason));
+                results.add(shard.store.startBootstrap(node, rebootstrap, epoch, Sync, reason));
         }
-        return AsyncResults.allOf(results).flatMap(list -> {
-            return AsyncChains.reduce(list.stream()
-                                             .map(b -> b.reads.chain())
-                                             .collect(Collectors.toList()),
-                                      Reduce.toNull()).beginAsResult();
-        });
+
+        return EpochReady.merge(epoch, results);
     }
 
     private synchronized TopologyUpdate updateTopology(Node node, Snapshot prev, Topology newTopology)
@@ -1010,12 +1006,7 @@ public abstract class CommandStores implements AsyncExecutorFactory
 
             bootstrap = () -> {
                 List<EpochReady> list = bootstrapUpdates.stream().map(Supplier::get).collect(toList());
-                return new EpochReady(epoch,
-                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::active), Reduce.toNull()),
-                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::coordinate), Reduce.toNull()),
-                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::data), Reduce.toNull()),
-                                      AsyncResults.debuggableReduce(Lists.transform(list, EpochReady::reads), Reduce.toNull())
-                );
+                return EpochReady.merge(epoch, list);
             };
         }
 
@@ -1252,6 +1243,8 @@ public abstract class CommandStores implements AsyncExecutorFactory
                 EpochReady ready = update.bootstrap.get();
                 return new EpochReady(ready.epoch,
                                       ready.active,
+                                      ready.refusing,
+                                      ready.notRefusing,
                                       NestedAsyncResult.flatMap(flush, ignore -> ready.coordinate),
                                       NestedAsyncResult.flatMap(flush, ignore -> ready.data),
                                       NestedAsyncResult.flatMap(flush, ignore -> ready.reads)

@@ -30,24 +30,24 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.RoutingKey;
 import accord.coordinate.FetchDurableBefore;
+import accord.local.durability.DurabilityService.SyncLocal;
+import accord.local.durability.DurabilityService.SyncRemote;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
-import accord.utils.ReducingRangeMap;
+import accord.topology.EpochReady;
 import accord.utils.Reduce;
+import accord.utils.ReducingRangeMap;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 
-import accord.local.durability.DurabilityService.SyncLocal;
-import accord.local.durability.DurabilityService.SyncRemote;
-
-import static accord.local.ExecutionContext.*;
+import static accord.local.ExecutionContext.Empty;
 import static accord.local.RedundantStatus.Property.LOCALLY_REDUNDANT;
-import static accord.primitives.Routables.Slice.Minimal;
 import static accord.local.durability.DurabilityService.SyncReadable.UnknownReadable;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Functions.alwaysFalse;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -154,7 +154,7 @@ public class Catchup
         });
     }
 
-    private static AsyncResult<?> rebootstrapIfBehind(Node node, SafeCommandStore safeStore, DurableBefore durableBefore)
+    private static EpochReady rebootstrapIfBehind(Node node, SafeCommandStore safeStore, DurableBefore durableBefore)
     {
         RedundantBefore redundantBefore = safeStore.redundantBefore();
         Ranges catchUp;
@@ -167,7 +167,7 @@ public class Catchup
         if (catchUp.isEmpty())
         {
             logger.info("No ranges to rebootstrap");
-            return AsyncResults.success(null);
+            return EpochReady.done(node.epoch());
         }
 
         logger.info("Rebootstrapping {} with quorums", catchUp);
@@ -200,7 +200,7 @@ public class Catchup
             {
                 chains.add(commandStore.chain((Empty)() -> "Catchup", safeStore -> {
                     return rebootstrapIfBehind(node, safeStore, durableBefore);
-                }).flatMapResult(i -> i));
+                }).flatMapResult(i -> i.reads));
             }
             return AsyncChains.reduce(chains, Reduce.toNull());
         });

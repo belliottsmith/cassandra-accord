@@ -197,6 +197,8 @@ class Bootstrap
     final Node node;
     final CommandStore commandStore;
     final long epoch;
+    final AsyncResult.Settable<Void> refusing;
+    final AsyncResult.Settable<Void> notRefusing;
     final AsyncResult.Settable<Void> coordinate;
     final AsyncResult.Settable<Void> data;
     final AsyncResult.Settable<Void> reads;
@@ -224,6 +226,8 @@ class Bootstrap
         this.remaining = allValid = all = ranges;
         this.reason = reason;
         this.description = "Bootstrap " + ranges + " for epoch " + epoch + " in " + commandStore + " (" + reason + ")";
+        this.refusing = new AsyncResults.SettableWithDescription<>(description);
+        this.notRefusing = new AsyncResults.SettableWithDescription<>(description);
         this.coordinate = new AsyncResults.SettableWithDescription<>(description);
         this.data = new AsyncResults.SettableWithDescription<>(description);
         this.reads = new AsyncResults.SettableWithDescription<>(description);
@@ -250,9 +254,12 @@ class Bootstrap
             case LOG_INCOMPLETE:
             case LOG_CORRUPTED:
                 commandStore.unsafeRefuseRequests(safeStore, all);
+                refusing.trySuccess(null);
             case CATCHUP:
                 safeStore.markUnsafeToRead(all);
             case GAIN_OWNERSHIP:
+                refusing.trySuccess(null);
+                notRefusing.trySuccess(null);
                 withMaxConflict(0, reason.compareTo(CATCHUP) > 0);
                 break;
         }
@@ -294,7 +301,10 @@ class Bootstrap
                     safeStore = safeStore;
                     safeStore.upsertRedundantBefore(upsertRedundantBefore);
                     if (refusing)
+                    {
                         commandStore.unsafeAcceptNonDepsRequests(safeStore, allValid);
+                        notRefusing.trySuccess(null);
+                    }
                     commandStore.unsafeSetMaxConflicts(commandStore.unsafeGetMaxConflicts().update(upsertMaxConflicts));
                     commandStore.readyToCoordinate(allValid, epoch)
                                 .invoke(coordinate.settingCallback())
@@ -320,6 +330,8 @@ class Bootstrap
             coordinate.tryFailure(failure);
             reads.tryFailure(failure);
             data.tryFailure(failure);
+            refusing.tryFailure(failure);
+            notRefusing.tryFailure(failure);
         };
     }
 

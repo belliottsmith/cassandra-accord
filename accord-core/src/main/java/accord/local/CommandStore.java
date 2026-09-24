@@ -51,7 +51,6 @@ import accord.api.Journal;
 import accord.api.LocalListeners;
 import accord.api.ProgressLog;
 import accord.api.ProtocolModifiers;
-import accord.coordinate.CoordinateMaxConflict;
 import accord.impl.AbstractAsyncExecutor;
 import accord.impl.AbstractReplayer;
 import accord.local.CommandStores.GainOwnership;
@@ -63,7 +62,6 @@ import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.local.durability.DurabilityLevel;
 import accord.local.durability.DurabilityResult;
-import accord.local.durability.DurabilityResults;
 import accord.primitives.RangeRoute;
 import accord.primitives.Ranges;
 import accord.primitives.Routables;
@@ -104,11 +102,8 @@ import static accord.local.RedundantStatus.SomeStatus.QUORUM_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.SHARD_APPLIED_ONLY;
 import static accord.local.RedundantStatus.SomeStatus.UNREADY_ONLY;
 import static accord.local.durability.DurabilityService.SyncLocal.KnownToSelf;
-import static accord.local.durability.DurabilityService.SyncLocal.NoLocal;
 import static accord.local.durability.DurabilityService.SyncLocal.Self;
-import static accord.local.durability.DurabilityService.SyncReadable.KnownReadable;
 import static accord.local.durability.DurabilityService.SyncReadable.UnknownReadable;
-import static accord.local.durability.DurabilityService.SyncRemote.MinorityQuorumAndWaitedForAll;
 import static accord.local.durability.DurabilityService.SyncRemote.NoRemote;
 import static accord.messages.ReadData.unavailable;
 import static accord.primitives.AbstractRanges.UnionMode.MERGE_ADJACENT;
@@ -672,37 +667,35 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
                     return EpochReady.all(epoch, done);
                 };
             case REASSIGNED:
-                return () -> epochReadyAfterBootstrap(epoch, startBootstrap(node, newRanges, epoch, Image, GAIN_OWNERSHIP));
+                return () -> startBootstrap(node, newRanges, epoch, Image, GAIN_OWNERSHIP);
         }
     }
 
-    public AsyncResult<?> rebootstrap(Node node, BootstrapReason reason)
+    public EpochReady rebootstrap(Node node, BootstrapReason reason)
+    {
+        return rebootstrap(node, null, reason);
+    }
+
+    public EpochReady rebootstrap(Node node, @Nullable Ranges ranges, BootstrapReason reason)
     {
         Invariants.requireArgument(reason != GAIN_OWNERSHIP);
         RangesForEpoch rfe = unsafeGetRangesForEpoch();
-        return startBootstrap(node, rfe.currentRanges(), rfe.epochAtIndex(rfe.size() - 1), Sync, reason);
+        long epoch = node.epoch();
+        Invariants.require(epoch >= rfe.epochAtIndex(rfe.size() - 1));
+        Ranges bootstrapRanges = rfe.currentRanges();
+        if (ranges != null)
+            bootstrapRanges = bootstrapRanges.slice(ranges, Minimal);
+        return startBootstrap(node, bootstrapRanges, epoch, Sync, reason);
     }
 
-    public AsyncResult<?> rebootstrap(Node node, Ranges ranges, BootstrapReason reason)
-    {
-        Invariants.requireArgument(reason != GAIN_OWNERSHIP);
-        RangesForEpoch rfe = unsafeGetRangesForEpoch();
-        return startBootstrap(node, rfe.currentRanges().slice(ranges, Minimal), rfe.epochAtIndex(rfe.size() - 1), Sync, reason);
-    }
-
-    private EpochReady epochReadyAfterBootstrap(long epoch, AsyncResult<EpochReady> bootstrap)
-    {
-        return EpochReady.wrap(epoch, bootstrap);
-    }
-
-    protected AsyncResult<EpochReady> startBootstrap(Node node, Ranges newRanges, long epoch, FetchKind fetchKind, BootstrapReason reason)
+    protected EpochReady startBootstrap(Node node, Ranges newRanges, long epoch, FetchKind fetchKind, BootstrapReason reason)
     {
         if (newRanges.isEmpty())
-            return AsyncResults.success(EpochReady.done(epoch));
+            return EpochReady.done(epoch);
 
-        return node.withEpochAtLeast(epoch, null, () -> chain((Empty) () -> "New Epoch", safeStore -> {
+        return EpochReady.wrap(epoch, node.withEpochAtLeast(epoch, null, () -> chain((Empty) () -> "New Epoch", safeStore -> {
             return startBootstrapInternal(node, safeStore, newRanges, epoch, fetchKind, reason);
-        })).beginAsResult();
+        })).beginAsResult());
     }
 
     private static final AsyncResult<Void> MUST_OVERWRITE = AsyncResults.failure(new IllegalStateException());
@@ -714,6 +707,8 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
         bootstrap.start(safeStore);
         return new EpochReady(epoch,
                               MUST_OVERWRITE,
+                              bootstrap.refusing,
+                              bootstrap.notRefusing,
                               bootstrap.coordinate,
                               bootstrap.data,
                               bootstrap.reads);

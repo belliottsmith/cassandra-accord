@@ -35,6 +35,17 @@ public class EpochReady
     public final AsyncResult<Void> active;
 
     /**
+     * If necessary, relevant tasks are being refused by the participating CommandStore(s).
+     * It is safe to receive messages, as any unsafe messages will not be processed.
+     */
+    public final AsyncResult<Void> refusing;
+
+    /**
+     * The CommandStore(s) are no longer refusing all requests, but may be refusing DEPS requests.
+     */
+    public final AsyncResult<Void> notRefusing;
+
+    /**
      * The node has retrieved enough remote information to answer coordination decisions for the epoch
      * (including fast path decisions).
      * Once a quorum of the new epoch has achieved this, earlier epochs do not need to be contacted
@@ -56,8 +67,15 @@ public class EpochReady
 
     public EpochReady(long epoch, AsyncResult<Void> active, AsyncResult<Void> coordinate, AsyncResult<Void> data, AsyncResult<Void> reads)
     {
+        this(epoch, active, DONE, DONE, coordinate, data, reads);
+    }
+
+    public EpochReady(long epoch, AsyncResult<Void> active, AsyncResult<Void> refusing, AsyncResult<Void> notRefusing, AsyncResult<Void> coordinate, AsyncResult<Void> data, AsyncResult<Void> reads)
+    {
         this.epoch = epoch;
         this.active = Invariants.nonNull(active);
+        this.refusing = Invariants.nonNull(refusing);
+        this.notRefusing = Invariants.nonNull(notRefusing);
         this.coordinate = Invariants.nonNull(coordinate);
         this.data = Invariants.nonNull(data);
         this.reads = Invariants.nonNull(reads);
@@ -66,6 +84,16 @@ public class EpochReady
     public AsyncResult<Void> active()
     {
         return active;
+    }
+
+    public AsyncResult<Void> refusing()
+    {
+        return refusing;
+    }
+
+    public AsyncResult<Void> notRefusing()
+    {
+        return notRefusing;
     }
 
     public AsyncResult<Void> coordinate()
@@ -90,7 +118,7 @@ public class EpochReady
 
     public static EpochReady all(long epoch, AsyncResult<Void> done)
     {
-        return new EpochReady(epoch, done, done, done, done);
+        return new EpochReady(epoch, done, done, done, done, done, done);
     }
 
     @Override
@@ -99,16 +127,34 @@ public class EpochReady
         return "EpochReady{" +
                "epoch=" + epoch +
                ", active=<" + active +
+               ">, refusals=<" + refusing +
+               ">, accepting=<" + notRefusing +
                ">, coordinate=<" + coordinate +
                ">, data=<" + data +
                ">, reads=<" + reads +
                ">}";
     }
 
+    /** combine one EpochReady per command store into one for the node: every phase waits for every store */
+    public static EpochReady merge(long epoch, java.util.List<EpochReady> merge)
+    {
+        if (merge.isEmpty())
+            return done(epoch);
+        return new EpochReady(epoch,
+                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::active), accord.utils.Reduce.toNull()),
+                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::refusing), accord.utils.Reduce.toNull()),
+                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::notRefusing), accord.utils.Reduce.toNull()),
+                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::coordinate), accord.utils.Reduce.toNull()),
+                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::data), accord.utils.Reduce.toNull()),
+                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::reads), accord.utils.Reduce.toNull()));
+    }
+
     public static EpochReady wrap(long epoch, AsyncResult<EpochReady> async)
     {
         return new EpochReady(epoch,
                               NestedAsyncResult.flatMap(async, e -> e.active),
+                              NestedAsyncResult.flatMap(async, e -> e.refusing),
+                              NestedAsyncResult.flatMap(async, e -> e.notRefusing),
                               NestedAsyncResult.flatMap(async, e -> e.coordinate),
                               NestedAsyncResult.flatMap(async, e -> e.data),
                               NestedAsyncResult.flatMap(async, e -> e.reads)
