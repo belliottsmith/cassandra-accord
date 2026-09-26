@@ -20,14 +20,16 @@ package accord.impl;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.BiFunction;
-
 import javax.annotation.Nullable;
 
 import accord.api.LocalListeners;
@@ -36,8 +38,8 @@ import accord.api.VisibleForImplementation;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.Commands;
-import accord.local.Node;
 import accord.local.ExecutionContext;
+import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
@@ -118,7 +120,7 @@ public class DefaultLocalListeners implements LocalListeners
 
         private static void notify(SafeCommandStore safeStore, TxnId listenerId, TxnId updatedId)
         {
-            Commands.listenerUpdate(safeStore, safeStore.unsafeTryGet(listenerId), safeStore.unsafeTryGet(updatedId));
+            Commands.listenerUpdate(safeStore, safeStore.unsafeGetNoLogFault(listenerId), safeStore.unsafeGetNoLogFault(updatedId));
         }
 
         @Override
@@ -195,6 +197,13 @@ public class DefaultLocalListeners implements LocalListeners
                 TxnId listenerId = listeners[i];
                 owner.notifySink.notify(safeStore, safeCommand, listenerId);
             }
+        }
+
+        void copyListenersTo(Collection<TxnId> to)
+        {
+            trim();
+            for (int i = 0 ; i < count ; ++i)
+                to.add(listeners[i]);
         }
 
         /*
@@ -551,25 +560,51 @@ public class DefaultLocalListeners implements LocalListeners
     }
 
     @Override
-    public void clearBefore(TxnId clearBefore)
+    public void cleanupBefore(TxnId clearBefore, TxnId unreadyBefore)
     {
+        Set<TxnId> notify = new HashSet<>();
         while (!BTree.isEmpty(txnListeners))
         {
             TxnListeners entry = BTree.findByIndex(txnListeners, 0);
             if (entry.compareTo(clearBefore) >= 0)
-                return;
+                break;
 
+            entry.copyListenersTo(notify);
             commandStore.execute(entry, safeStore -> {
-                SafeCommand safeCommand = safeStore.unsafeTryGet(entry);
+                SafeCommand safeCommand = safeStore.unsafeGetNoLogFault(entry);
                 Command command = safeCommand.current();
                 SaveStatus saveStatus = command.saveStatus();
-                Invariants.require(saveStatus.compareTo(entry.await) >= 0 || command.participants().stillOwns().isEmpty());
+                Invariants.expect(saveStatus.compareTo(entry.await) >= 0 || command.participants().stillOwns().isEmpty(),
+                                  "Clearing listeners of %s with status %s that has not reached %s", entry, saveStatus, entry.await);
                 entry.notify(this, safeStore, safeCommand);
             }, commandStore.agent());
+
             txnListeners = BTreeRemoval.remove(txnListeners, TxnListeners::compareListeners, entry);
+        }
+
+        if (unreadyBefore.compareTo(clearBefore) > 0)
+        {
+            Object[] snapshot = txnListeners;
+            int ub = BTree.findIndex(snapshot, TxnId::compareTo, unreadyBefore);
+            if (ub < 0) ub = -2 - ub;
+            for (TxnListeners entry : BTree.<TxnListeners>iterable(txnListeners, 0, ub, BTree.Dir.ASC))
+                entry.copyListenersTo(notify);
+        }
+
+        if (!notify.isEmpty())
+        {
+            List<TxnId> sorted = new ArrayList<>(notify);
+            sorted.sort(TxnId::compareTo);
+            for (TxnId waitingId : sorted)
+            {
+                commandStore.execute(ExecutionContext.unsequenced(waitingId, "Refresh Redundant Dependencies"), safeStore -> {
+                    Commands.maybeExecute(safeStore, safeStore.unsafeGetNoLogFault(waitingId), false, true);
+                }, commandStore.agent());
+            }
         }
     }
 
+    @Override
     public void clear()
     {
         txnListeners = BTree.empty();

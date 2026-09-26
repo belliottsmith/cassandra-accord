@@ -18,7 +18,13 @@
 
 package accord.topology;
 
+import java.util.List;
+
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+
 import accord.utils.Invariants;
+import accord.utils.Reduce;
 import accord.utils.async.AsyncResult;
 import accord.utils.async.AsyncResults;
 import accord.utils.async.NestedAsyncResult;
@@ -62,6 +68,8 @@ public class EpochReady
     /**
      * The node has retrieved enough remote information to safely process reads, including replicating all
      * necessary DataStore information, and any additional transactions necessary for consistency.
+     *
+     * Note that {@link #coordinate} may need to also be waited on, depending on the consumer's semantics.
      */
     public final AsyncResult<Void> reads;
 
@@ -111,6 +119,14 @@ public class EpochReady
         return reads;
     }
 
+    public AsyncResult<Void> coordinateAndReads()
+    {
+        if (coordinate == reads)
+            return reads;
+        List<AsyncResult<Void>> results = ImmutableList.of(coordinate, reads);
+        return AsyncResults.debuggableReduce(results, Reduce.toNull());
+    }
+
     public static EpochReady done(long epoch)
     {
         return all(epoch, DONE);
@@ -141,12 +157,12 @@ public class EpochReady
         if (merge.isEmpty())
             return done(epoch);
         return new EpochReady(epoch,
-                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::active), accord.utils.Reduce.toNull()),
-                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::refusing), accord.utils.Reduce.toNull()),
-                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::notRefusing), accord.utils.Reduce.toNull()),
-                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::coordinate), accord.utils.Reduce.toNull()),
-                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::data), accord.utils.Reduce.toNull()),
-                              AsyncResults.debuggableReduce(com.google.common.collect.Lists.transform(merge, EpochReady::reads), accord.utils.Reduce.toNull()));
+                              AsyncResults.debuggableReduce(Lists.transform(merge, EpochReady::active), Reduce.toNull()),
+                              AsyncResults.debuggableReduce(Lists.transform(merge, EpochReady::refusing), Reduce.toNull()),
+                              AsyncResults.debuggableReduce(Lists.transform(merge, EpochReady::notRefusing), Reduce.toNull()),
+                              AsyncResults.debuggableReduce(Lists.transform(merge, EpochReady::coordinate), Reduce.toNull()),
+                              AsyncResults.debuggableReduce(Lists.transform(merge, EpochReady::data), Reduce.toNull()),
+                              AsyncResults.debuggableReduce(Lists.transform(merge, EpochReady::reads), Reduce.toNull()));
     }
 
     public static EpochReady wrap(long epoch, AsyncResult<EpochReady> async)

@@ -107,7 +107,7 @@ abstract class PostProcess
                     finally { safeStore.unrecurse(); }
                 }
                 else commandStore.execute(new LoadPrunedCallback(txnId, RoutingKeys.of(key)), safeStore0 -> {
-                    load(safeStore0, safeStore0.unsafeGetNoCleanup(txnId), safeStore0.get(key), notifySink);
+                    load(safeStore0, safeStore0.unsafeGetNoLogFault(txnId), safeStore0.get(key), notifySink);
                 }, (success, fail) -> {
                     if (fail != null)
                         commandStore.agent().onException(new RuntimeException("Failed to load pruned " + txnId + "; may prevent flushing", fail));

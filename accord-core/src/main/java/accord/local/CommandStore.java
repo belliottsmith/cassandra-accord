@@ -114,6 +114,7 @@ import static accord.primitives.Txn.Kind.VisibilitySyncPoint;
 import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.utils.Invariants.nonNull;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -753,10 +754,10 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
     {
         String id = "epoch " + min.epoch() + (min.equals(TxnId.minForEpoch(min.epoch())) ? "" : " (after " + min + ')');
         node.durability().close("[" + this + ' ' + id + ']', VisibilitySyncPoint, min, ranges, KnownToSelf, 1, TimeUnit.HOURS)
-            .invoke((success, fail) -> onReadyToCoordinateDurabilityResult(id, ranges, waiting, min, fail, true, attempts));
+            .invoke((success, fail) -> onReadyToCoordinateDurabilityResult(id, ranges, waiting, min, fail, 0, attempts));
     }
 
-    private void onReadyToCoordinateDurabilityResult(String id, Ranges ranges, WaitingOnVisibility waiting, TxnId min, Throwable fail, boolean deferIfAwaitingDurability, int attempts)
+    private void onReadyToCoordinateDurabilityResult(String id, Ranges ranges, WaitingOnVisibility waiting, TxnId min, Throwable fail, long deferredIfAwaitingDurabilityMicros, int attempts)
     {
         if (waiting.invalid)
             return;
@@ -787,11 +788,15 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
                 waitingOnDurable = waiting.waitingOnDurable;
             }
 
-            if (waitingOn.isEmpty() && waitingOnDurable.containsAll(remaining) && deferIfAwaitingDurability)
+            long cycleTimeMicros = node.durability().shards().shardCycleTimeMicros();
+            if (waitingOn.isEmpty() && waitingOnDurable.containsAll(remaining) && deferredIfAwaitingDurabilityMicros < cycleTimeMicros * 2)
             {
-                // TODO (expected): make this configurable
                 // schedule this check for later, to give durability some time to run
-                node.scheduler().once(() -> onReadyToCoordinateDurabilityResult(id, ranges, waiting, min, fail, false, 1 + attempts), 5L, MINUTES);
+                long deferMicros = deferredIfAwaitingDurabilityMicros * 2;
+                if (deferMicros == 0) deferMicros = TimeUnit.SECONDS.toMicros(1L);
+                if (deferMicros > cycleTimeMicros) deferMicros = cycleTimeMicros;
+                long newDeferredIfAwaitingDurabilityMicros = deferredIfAwaitingDurabilityMicros + deferMicros;
+                node.scheduler().once(() -> onReadyToCoordinateDurabilityResult(id, ranges, waiting, min, fail, newDeferredIfAwaitingDurabilityMicros, attempts), deferMicros, MICROSECONDS);
                 return;
             }
             if (fail != null) logger.error("{} Failed to close {} for ranges {}. Retrying.", this, id, remaining, fail);
@@ -884,7 +889,7 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
         TxnId clearWaitingBefore = redundantBefore.minShardAndLocallyAppliedBefore();
         TxnId clearAllBefore = TxnId.min(clearWaitingBefore, durableBefore().min.quorum);
         progressLog.clearBefore(safeStore, clearWaitingBefore, clearAllBefore);
-        listeners.clearBefore(clearWaitingBefore);
+        listeners.cleanupBefore(clearWaitingBefore, added.maxUnreadyBefore());
     }
 
     @VisibleForTesting
@@ -1146,7 +1151,13 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
     {
         try
         {
-            SafeCommand safeCommand = safeStore.unsafeTryGet(waitingOn);
+            SafeCommand safeCommand = safeStore.unsafeTryGetNoLogFault(waitingOn);
+            if (safeCommand == null)
+            {
+                tryExecuteListening(safeStore, iterator, done);
+                return;
+            }
+
             //noinspection DataFlowIssue
             safeStore = safeStore;
             //noinspection DataFlowIssue

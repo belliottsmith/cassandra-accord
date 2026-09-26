@@ -283,11 +283,16 @@ class Bootstrap
         });
     }
 
+    /**
+     * Note that we use precisely the bounds we obtain from the DurabilityService to update RedundantBefore,
+     * even if we could in principle install a bound based on the max conflicts we derived first.
+     * This means the dependencies of the transaction do not extend into the fuzzy period over which we're initiating
+     * the process and so doesn't rely on pruning them after the fact.
+     */
     private void withQuorumBound(int attempt, boolean refusing)
     {
-        TxnId min = new TxnId(minEpoch, minHlc, ExclusiveSyncPoint, Domain.Range, node.id());
+        TxnId min = this.min = new TxnId(minEpoch, minHlc, ExclusiveSyncPoint, Domain.Range, node.id());
         MaxConflicts upsertMaxConflicts = MaxConflicts.create(allValid, MaxConflicts.Entry.create(min, min, min));
-        RedundantBefore upsertRedundantBefore = RedundantBefore.create(allValid, min, reason.redundantStatus);
         node.durability().sync(description, null, min, allValid, null, SortedArrayList.ofSorted(node.id()), NoLocal, MinorityQuorumAndWaitedForAll, KnownReadable, 1L, TimeUnit.HOURS)
             .invoke((ready, fail) -> {
                 if (fail != null)
@@ -299,7 +304,7 @@ class Bootstrap
                 commandStore.execute((Empty)() -> description, safeStore -> {
                     //noinspection SillyAssignment,DataFlowIssue
                     safeStore = safeStore;
-                    safeStore.upsertRedundantBefore(upsertRedundantBefore);
+                    safeStore.upsertRedundantBefore(bounds(ready));
                     if (refusing)
                     {
                         commandStore.unsafeAcceptNonDepsRequests(safeStore, allValid);
@@ -322,6 +327,23 @@ class Bootstrap
                 }, node.agent());
             });
 
+    }
+
+    private RedundantBefore bounds(DurabilityResults ready)
+    {
+        if (ready == null)
+            return RedundantBefore.EMPTY;
+
+        Ranges valid = allValid;
+        RedundantBefore result = RedundantBefore.EMPTY;
+        for (Map.Entry<TxnId, Ranges> e : ready.rangesByTxnId().entrySet())
+        {
+            Ranges ranges = e.getValue().slice(valid, Minimal);
+            if (ranges.isEmpty())
+                continue;
+            result = RedundantBefore.merge(result, RedundantBefore.create(ranges, e.getKey(), reason.redundantStatus));
+        }
+        return result;
     }
 
     private Runnable doNotRetry(Throwable failure)

@@ -58,7 +58,7 @@ public interface NotifySink
             else
             {
                 safeStore.commandStore().execute(ExecutionContext.unsequenced(txnId, "Notify"), safeStore0 -> {
-                    notWaiting(safeStore0, safeStore0.unsafeGetNoCleanup(txnId), key, uniqueHlc);
+                    notWaiting(safeStore0, safeStore0.unsafeGetNoLogFault(txnId), key, uniqueHlc);
                 }, safeStore.agent());
             }
         }
@@ -87,9 +87,8 @@ public interface NotifySink
         // TODO (desired): we could complicate our state machine to replicate PreCommitted here, so we can simply wait for waitingOnStatus.execution
         private void doNotifyWaitingOn(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
         {
-            SafeCommand safeCommand = safeStore.unsafeGetNoCleanup(txnId);
+            SafeCommand safeCommand = safeStore.unsafeGetNoLogFault(txnId);
             Command command = safeCommand.current();
-            if (command == null) command = uninitialised(txnId);
             StoreParticipants participants = command.participants();
             if (!participants.hasTouched(key))
             {
@@ -129,7 +128,7 @@ public interface NotifySink
                 update = safeStore.ifLoadedAndInitialised(key);
             if (update != null && safeStore.tryRecurse())
             {
-                try { update.callback(safeStore, safeStore.unsafeGetNoCleanup(txnId).current(), false); }
+                try { update.callback(safeStore, safeStore.unsafeGetNoLogFault(txnId).current(), false); }
                 finally { safeStore.unrecurse(); }
             }
             else

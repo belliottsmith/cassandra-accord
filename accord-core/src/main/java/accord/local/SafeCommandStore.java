@@ -63,6 +63,8 @@ import accord.utils.SortedList;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
+import static accord.local.Cleanup.Input.FULL;
+import static accord.local.Cleanup.Input.FULL_UNSAFE;
 import static accord.local.CommandStore.purgeHistory;
 import static accord.local.ExecutionContext.unsequenced;
 import static accord.local.LoadKeys.INCR;
@@ -177,12 +179,35 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     // unsafe because we pass no scope, so we rely on the command already existing and having valid scope(s) for the operations in question
     // should only be used for internal bookkeeping
-    public SafeCommand unsafeTryGet(TxnId txnId)
+    public SafeCommand unsafeGet(TxnId txnId)
     {
         SafeCommand safeCommand = unsafeGetNoCleanup(txnId);
+        return maybeCleanup(safeCommand);
+    }
+
+    // unsafe because we pass no scope, so we rely on the command already existing and having valid scope(s) for the operations in question
+    // should only be used for internal bookkeeping
+    public SafeCommand unsafeTryGet(TxnId txnId)
+    {
+        SafeCommand safeCommand = unsafeTryGetNoCleanup(txnId);
         if (safeCommand != null)
             maybeCleanup(safeCommand);
         return safeCommand;
+    }
+
+    public SafeCommand unsafeTryGetNoLogFault(TxnId txnId)
+    {
+        SafeCommand safeCommand = unsafeTryGetNoCleanup(txnId);
+        if (safeCommand != null)
+            maybeCleanup(FULL_UNSAFE, safeCommand);
+
+        return safeCommand;
+    }
+
+    public SafeCommand unsafeGetNoLogFault(TxnId txnId)
+    {
+        SafeCommand safeCommand = unsafeGetNoCleanup(txnId);
+        return maybeCleanup(FULL_UNSAFE, safeCommand);
     }
 
     public SafeCommand unsafeTryGetNoCleanup(TxnId txnId)
@@ -205,10 +230,15 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         else throw illegalArgument("%s was not specified in %s", txnId, context().txnIds());
     }
 
-    protected SafeCommand maybeCleanup(SafeCommand safeCommand)
+    protected final SafeCommand maybeCleanup(SafeCommand safeCommand)
+    {
+        return maybeCleanup(FULL, safeCommand);
+    }
+
+    protected SafeCommand maybeCleanup(Cleanup.Input cleanup, SafeCommand safeCommand)
     {
         Command command = safeCommand.current();
-        Commands.maybeCleanup(this, safeCommand, command, command.participants());
+        Commands.maybeCleanup(cleanup, this, safeCommand, command, command.participants());
         return safeCommand;
     }
 
@@ -483,7 +513,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     private static void updateManagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId, boolean forceNotify)
     {
         // TODO (expected): avoid reentrancy / recursion
-        SafeCommand safeCommand = safeStore.unsafeGetNoCleanup(txnId);
+        SafeCommand safeCommand = safeStore.unsafeGetNoLogFault(txnId);
         for (RoutingKey key : (AbstractUnseekableKeys)update)
         {
             // we use callback and re-fetch current to guard against reentrancy causing
@@ -606,7 +636,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     private static void updateUnmanagedCommandsForKey(SafeCommandStore safeStore, Unseekables<?> update, TxnId txnId, UpdateUnmanagedMode mode)
     {
-        SafeCommand safeCommand = safeStore.unsafeGetNoCleanup(txnId);
+        SafeCommand safeCommand = safeStore.unsafeGetNoLogFault(txnId);
         for (RoutingKey key : (AbstractUnseekableKeys)update)
         {
             safeStore.get(key).registerUnmanaged(safeStore, safeCommand, mode);
@@ -672,7 +702,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     private static void registerTransitive(SafeCommandStore safeStore, TxnId txnId, Ranges witnessedBy)
     {
-        SafeCommand safeCommand = safeStore.unsafeGetNoCleanup(txnId);
+        SafeCommand safeCommand = safeStore.unsafeGetNoLogFault(txnId);
         Command command = safeCommand.current();
         if (command.known().route() != MaybeRoute)
             return;

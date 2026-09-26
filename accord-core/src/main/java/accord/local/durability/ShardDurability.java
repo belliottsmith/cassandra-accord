@@ -506,6 +506,11 @@ public class ShardDurability
         reschedule();
     }
 
+    public long shardCycleTimeMicros()
+    {
+        return shardCycleTimeMicros;
+    }
+
     public synchronized void reconfigure(int targetShardSplits, int maxShardSplits, long newShardCycleTime, TimeUnit units)
     {
         this.maxShardSplits = maxShardSplits;

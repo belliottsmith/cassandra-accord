@@ -895,7 +895,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     public static RedundantBefore EMPTY = new RedundantBefore();
 
     private final Ranges staleRanges, lostRanges;
-    private final TxnId maxStale, maxShardAppliedBefore, maxGcBefore;
+    private final TxnId maxUnready, maxShardAppliedBefore, maxGcBefore;
     private final TxnId minShardAndLocallyAppliedBefore, minGcBefore;
     private final long minGcHlcBefore;
     private final long maxStartEpoch, minEndEpoch;
@@ -903,7 +903,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     private RedundantBefore()
     {
         staleRanges = lostRanges = Ranges.EMPTY;
-        maxStale = maxShardAppliedBefore = maxGcBefore = TxnId.NONE;
+        maxUnready = maxShardAppliedBefore = maxGcBefore = TxnId.NONE;
         minShardAndLocallyAppliedBefore = minGcBefore = TxnId.NONE;
         minGcHlcBefore = 0L;
         maxStartEpoch = 0;
@@ -952,7 +952,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         }
 
         Invariants.require(minGcHlcBefore < Long.MAX_VALUE);
-        this.maxStale = maxUnready;
+        this.maxUnready = maxUnready;
         this.maxShardAppliedBefore = maxShardAppliedBefore;
         this.maxGcBefore = maxGcBefore;
         this.minShardAndLocallyAppliedBefore = minShardAndLocallyRedundantBefore;
@@ -1133,6 +1133,11 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         return minShardAndLocallyAppliedBefore;
     }
 
+    public TxnId maxUnreadyBefore()
+    {
+        return maxUnready;
+    }
+
     public TxnId minGcBefore()
     {
         return minGcBefore;
@@ -1158,14 +1163,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
     {
         if (txnId.isSyncPoint())
         {
-            if (!mayFilterUnreadyOrNotOwned(txnId, executeAt, participants))
+            if (!mayFilterStaleOrUnreadyOrNotOwned(txnId, executeAt, participants))
                 return participants;
 
             return foldl(participants, Bounds::withoutRedundantAnd_UnreadyOrRetiredOrNotOwned, participants, txnId, executeAt);
         }
         else
         {
-            if (!mayFilterStale(txnId, participants))
+            if (!mayFilterStaleOrUnready(txnId, participants))
                 return participants;
 
             return foldl(participants, Bounds::withoutRedundantAnd_Unready, participants, txnId, executeAt);
@@ -1220,20 +1225,20 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
     public boolean mayFilter(TxnId txnId, @Nullable Timestamp executeAtIfKnown, Participants<?> participants)
     {
-        return mayFilterUnreadyOrNotOwned(txnId, executeAtIfKnown, participants);
+        return mayFilterStaleOrUnreadyOrNotOwned(txnId, executeAtIfKnown, participants);
     }
 
-    private boolean mayFilterUnreadyOrNotOwned(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
+    private boolean mayFilterStaleOrUnreadyOrNotOwned(TxnId txnId, @Nullable Timestamp executeAt, Participants<?> participants)
     {
         long maxEpoch = (executeAt == null ? txnId : executeAt).epoch();
         return (minEndEpoch <= maxEpoch && lostRanges.intersects(participants))
                || (executeAt != null && executeAt.epoch() < maxStartEpoch)
-               || mayFilterStale(txnId, participants);
+               || mayFilterStaleOrUnready(txnId, participants);
     }
 
-    private boolean mayFilterStale(TxnId txnId, Participants<?> participants)
+    private boolean mayFilterStaleOrUnready(TxnId txnId, Participants<?> participants)
     {
-        return maxStale.compareTo(txnId) > 0 || (staleRanges != null && staleRanges.intersects(participants));
+        return maxUnready.compareTo(txnId) > 0 || (staleRanges != null && staleRanges.intersects(participants));
     }
 
     /**

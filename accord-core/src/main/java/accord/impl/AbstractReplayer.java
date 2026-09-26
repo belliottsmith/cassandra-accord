@@ -129,7 +129,7 @@ public abstract class AbstractReplayer implements Journal.Replayer
 
     protected void replay(SafeCommandStore safeStore, TxnId txnId, Replay replay)
     {
-        SafeCommand safeCommand = safeStore.unsafeTryGet(txnId);
+        SafeCommand safeCommand = safeStore.unsafeGet(txnId);
         {
             Command command = safeCommand.current();
             if (command.saveStatus().compareTo(SaveStatus.Stable) >= 0 && command.saveStatus().compareTo(PreApplied) <= 0)

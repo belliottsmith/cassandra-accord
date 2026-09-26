@@ -881,7 +881,7 @@ class Updating
         commandStore.execute(context, safeStore -> {
             SafeCommandsForKey safeCommandsForKey = safeStore.get(key);
             CommandsForKey cur = safeCommandsForKey.current();
-            CommandsForKeyUpdate next = Updating.updateUnmanaged(cur, safeStore, safeStore.unsafeGetNoCleanup(txnId));
+            CommandsForKeyUpdate next = Updating.updateUnmanaged(cur, safeStore, safeStore.unsafeGetNoLogFault(txnId));
             if (cur != next)
             {
                 if (cur != next.cfk())

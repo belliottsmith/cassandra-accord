@@ -200,7 +200,7 @@ public class Catchup
             {
                 chains.add(commandStore.chain((Empty)() -> "Catchup", safeStore -> {
                     return rebootstrapIfBehind(node, safeStore, durableBefore);
-                }).flatMapResult(i -> i.reads));
+                }).flatMapResult(i -> i.reads));  // CATCHUP does not interfere with existing coordination guarantees, so coordinate is not needed here
             }
             return AsyncChains.reduce(chains, Reduce.toNull());
         });
