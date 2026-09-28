@@ -72,6 +72,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
+ * This file was authored by Claude
+ *
  * Tests for {@code CommandsForKey} when the UNREADY bound ({@code bounds.readyAt}) advances past records we are still
  * tracking, as happens on rebootstrap - and in particular on a {@code LOG_CORRUPTED} rebootstrap, where the region
  * before the bound is also {@code LOG_UNAVAILABLE}, so those records can never be loaded or updated again.
@@ -92,7 +94,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
                                "LOG_UNAVAILABLE/LOG_INCOMPLETE bounds rather than on UNREADY.")
 public class CommandsForKeyUnreadyTest
 {
-    private static final RoutingKey KEY = IntKey.routing(1);
+    static final RoutingKey KEY = IntKey.routing(1);
     private static final Keys KEYS = IntKey.keys(1);
     private static final Ranges RANGES = Ranges.of(IntKey.range(0, 2));
     private static final FullRoute<?> KEY_ROUTE = KEYS.toRoute(IntKey.routing(1));
@@ -277,7 +279,7 @@ public class CommandsForKeyUnreadyTest
         return result.toArray(new TxnId[0]);
     }
 
-    private static Unmanaged[] unmanageds(CommandsForKey cfk)
+    static Unmanaged[] unmanageds(CommandsForKey cfk)
     {
         Unmanaged[] result = new Unmanaged[cfk.unmanagedCount()];
         for (int i = 0; i < result.length; ++i)
@@ -285,22 +287,22 @@ public class CommandsForKeyUnreadyTest
         return result;
     }
 
-    private static TxnId txnId(long hlc, Txn.Kind kind)
+    static TxnId txnId(long hlc, Txn.Kind kind)
     {
         return new TxnId(1, hlc, 0, kind, Domain.Key, Any, NODE);
     }
 
-    private static TxnId rangeSyncPoint(long hlc)
+    static TxnId rangeSyncPoint(long hlc)
     {
         return new TxnId(1, hlc, 0, Txn.Kind.ExclusiveSyncPoint, Domain.Range, Any, NODE);
     }
 
-    private static QuickBounds bounds(TxnId readyAt)
+    static QuickBounds bounds(TxnId readyAt)
     {
         return new QuickBounds(0, Long.MAX_VALUE, readyAt, TxnId.NONE, TxnId.NONE, TxnId.NONE);
     }
 
-    private static Deps deps(TxnId... txnIds)
+    static Deps deps(TxnId... txnIds)
     {
         try (Deps.Builder builder = new Deps.Builder(true))
         {
@@ -310,7 +312,8 @@ public class CommandsForKeyUnreadyTest
         }
     }
 
-    private static class Harness implements NotifySink
+    // package-private so the fuzz test in this package can reuse the harness
+    static class Harness implements NotifySink
     {
         final CommandsForKeyTest.Canon canon = new CommandsForKeyTest.Canon(new DefaultRandom(1));
         final CommandsForKeyTest.TestCommandStore commandStore = new CommandsForKeyTest.TestCommandStore(1 << 20, 1 << 20, 1 << 20, 1 << 20);

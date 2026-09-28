@@ -350,6 +350,9 @@ public abstract class ReadTracker extends AbstractTracker<ReadTracker.ReadShardT
                     break;
                 ++index;
             }
+            if (index > last)
+                return false;
+
             candidates.set(index, candidates.get(last));
             candidates.remove(last);
         }

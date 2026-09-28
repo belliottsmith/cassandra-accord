@@ -593,6 +593,7 @@ public class DefaultLocalListeners implements LocalListeners
 
         if (!notify.isEmpty())
         {
+            // TODO (expected): execute via continuation(s) to minimise number of scheduled tasks, and execute optimistically for already loaded commands
             List<TxnId> sorted = new ArrayList<>(notify);
             sorted.sort(TxnId::compareTo);
             for (TxnId waitingId : sorted)

@@ -385,6 +385,23 @@ public abstract class CommandStore implements AbstractAsyncExecutor, ExclusiveAs
         return refuses != null;
     }
 
+    /**
+     * Claude-generated debugging method
+     */
+    public String describeState()
+    {
+        StringBuilder sb = new StringBuilder("store").append(id).append('{');
+        ReducingRangeMap<Refuse> refuses = this.refuses;
+        sb.append("refuses=").append(refuses == null ? "none" : refuses);
+        List<Bootstrap> snapshot;
+        // a defensive copy of a synchronizedSet: the copy itself locks, but only for the duration of the copy
+        try { snapshot = new ArrayList<>(bootstraps); }
+        catch (Throwable t) { snapshot = Collections.emptyList(); }
+        if (!snapshot.isEmpty())
+            sb.append(", bootstraps=").append(snapshot);
+        return sb.append('}').toString();
+    }
+
     protected void unsafeRefuseRequests(SafeCommandStore safeStore, Ranges refuse)
     {
         logger.info("{}: Refusing ALL requests for {}", this, refuse);

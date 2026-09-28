@@ -304,6 +304,7 @@ class Bootstrap
                 commandStore.execute((Empty)() -> description, safeStore -> {
                     //noinspection SillyAssignment,DataFlowIssue
                     safeStore = safeStore;
+                    // TODO (required): to guarantee we cannot break quorum, we should FIRST obtain a visibility sync point we can apply, or even make it part of the sync()
                     safeStore.upsertRedundantBefore(bounds(ready));
                     if (refusing)
                     {

@@ -348,13 +348,13 @@ public enum Cleanup
             return NO;
 
         if (!dataStoreRequiresUniqueHlcs() || !txnId.is(Write)) return expunge(txnId);
-        if (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)) return expungeIfFull(input, txnId);
+        if (saveStatus == null || !saveStatus.known.is(ApplyAtKnown)) return expunge(txnId);
         // note, it is safe to use ApplyAtKnown even with PARTIAL input here, because we are only discarding information,
         // and we can safely discard any stale executeAt
-        if (executeAt == null) return expungeIfFull(input, txnId);
+        if (executeAt == null) return expunge(txnId);
 
         long minGcHlcBefore = redundantBefore.minGcHlcBefore();
-        if (executeAt.uniqueHlc() < minGcHlcBefore) return expungeIfFull(input, txnId);
+        if (executeAt.uniqueHlc() < minGcHlcBefore) return expunge(txnId);
         if (participants == null)
             return expungeIfFull(input, txnId);
         Participants<?> waitsOn = participants.waitsOn();

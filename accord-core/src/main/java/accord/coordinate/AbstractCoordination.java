@@ -215,6 +215,10 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
                     {
                         Invariants.require(replyState[i] == null);
                         NodeStatus nodeStatus = topologies.status(to);
+                        // don't drop self-addressed messages; this is generally sensible, but in particular
+                        // helps us achieve KnownToSelf statuses promptly on startup/rebootstrap that are necessary for progress
+                        if (nodeStatus.isFaulty() && to.equals(node.id()))
+                            nodeStatus = HEALTHY;
                         switch (nodeStatus)
                         {
                             default: throw new UnhandledEnum(nodeStatus);
