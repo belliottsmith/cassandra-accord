@@ -809,12 +809,12 @@ public class Cluster
                     for (CommandStore store : stores.all())
                         ((ListAgent) store.agent()).restore((InMemoryCommandStore) store);
                     journal.replay(stores, null);
-                    Catchup.catchup(node, node.elapsed(SECONDS) + DAYS.toSeconds(1L), SECONDS);
-
                     // Re-enable safety checks
                     while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
-                    node.unsafeSetReplaying(false);
                     verifyConsistentRestore(beforeStores, stores.all());
+                    node.unsafeSetReplaying(false);
+                    Catchup.catchup(node, node.elapsed(SECONDS) + DAYS.toSeconds(1L), SECONDS);
+                    while (sinks.drain(getPendingPredicate(id, stores.all()))) ;
                     stores.forAllUnsafe(commandStore -> commandStore.resumeBootstrap(node, GAIN_OWNERSHIP));
                     // we can get ahead of prior state by executing further if we skip some earlier phase's dependencies
                     listStore.checkAtLeast(stores, prevData);

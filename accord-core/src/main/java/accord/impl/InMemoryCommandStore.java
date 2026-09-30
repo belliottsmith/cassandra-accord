@@ -718,9 +718,9 @@ public abstract class InMemoryCommandStore extends CommandStore
         }
 
         @Override
-        protected SafeCommand maybeCleanup(Cleanup.Input cleanup, SafeCommand safeCommand)
+        protected SafeCommand maybeCleanup(SafeCommand safeCommand)
         {
-            SafeCommand result = super.maybeCleanup(cleanup, safeCommand);
+            SafeCommand result = super.maybeCleanup(safeCommand);
             if (((InMemorySafeCommand)result).touch())
                 commandStore().onRead(result.current());
             return result;

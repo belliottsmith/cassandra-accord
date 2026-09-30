@@ -230,12 +230,12 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         else throw illegalArgument("%s was not specified in %s", txnId, context().txnIds());
     }
 
-    protected final SafeCommand maybeCleanup(SafeCommand safeCommand)
+    protected SafeCommand maybeCleanup(SafeCommand safeCommand)
     {
         return maybeCleanup(FULL, safeCommand);
     }
 
-    protected SafeCommand maybeCleanup(Cleanup.Input cleanup, SafeCommand safeCommand)
+    protected final SafeCommand maybeCleanup(Cleanup.Input cleanup, SafeCommand safeCommand)
     {
         Command command = safeCommand.current();
         Commands.maybeCleanup(cleanup, this, safeCommand, command, command.participants());

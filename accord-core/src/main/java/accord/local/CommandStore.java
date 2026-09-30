@@ -115,7 +115,6 @@ import static accord.topology.EpochReady.DONE;
 import static accord.topology.EpochReady.done;
 import static accord.utils.Invariants.nonNull;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
-import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
 /**

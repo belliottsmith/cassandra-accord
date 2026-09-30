@@ -29,7 +29,10 @@ public interface TopologySorter
 {
     enum NodeStatus
     {
-        UNAVAILABLE, UNREADABLE, HEALTHY;
+        UNAVAILABLE, UNABLE_TO_CALCULATE_DEPS, UNREADABLE,
+        /* Some ranges may be unable to participate in some way */
+        DEGRADED,
+        HEALTHY;
 
         public final boolean isAtLeast(NodeStatus greaterThan)
         {
@@ -48,7 +51,12 @@ public interface TopologySorter
 
         public final boolean isUnreadable()
         {
-            return this != HEALTHY;
+            return compareTo(UNREADABLE) <= 0;
+        }
+
+        public final boolean isUnableToCalculateDeps()
+        {
+            return compareTo(UNABLE_TO_CALCULATE_DEPS) <= 0;
         }
 
         public final boolean isUnavailable()
