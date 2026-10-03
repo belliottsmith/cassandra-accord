@@ -18,6 +18,7 @@
 
 package accord.messages;
 
+import java.util.concurrent.CancellationException;
 import javax.annotation.Nullable;
 
 import accord.api.Result.PersistableResult;
@@ -243,9 +244,8 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
     @Override
     protected void acceptInternal(CheckStatusReply ok, Throwable failure)
     {
-        if (failure != null) node.reply(replyTo, replyContext, ok, failure, tracing());
-        else if (ok == null) node.reply(replyTo, replyContext, CheckStatusNack.NotOwned, null, tracing());
-        else node.reply(replyTo, replyContext, ok, null, tracing());
+        if (failure == null) node.reply(replyTo, replyContext, ok != null ? ok : CheckStatusNack.NotOwned, null, tracing());
+        else node.reply(replyTo, replyContext, ok, failure, tracing());
     }
 
     public interface CheckStatusReply extends Reply

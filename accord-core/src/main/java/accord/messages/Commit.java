@@ -265,8 +265,6 @@ public class Commit extends RouteRequest.WithUnsynced<CommitOrReadNack>
         {
             if (isCancelled())
             {
-                if (!(replyContext instanceof LocalDelivery<?>))
-                    return;
                 failure = CANCELLATION_EXCEPTION;
             }
             else

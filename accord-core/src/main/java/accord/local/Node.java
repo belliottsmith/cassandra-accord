@@ -18,6 +18,7 @@
 
 package accord.local;
 
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -620,6 +621,8 @@ public class Node implements NodeCommandStoreService
             agent.onException(failure);
             if (success != null)
                 agent().onException(new IllegalArgumentException(String.format("fail (%s) and send (%s) are both not null", failure, success)));
+            if (failure instanceof CancellationException && !(replyContext instanceof LocalDelivery<?>))
+                return; // cancellation likely means the request timed out - no need to respond unless LocalDelivery which registers no timeout
         }
         else if (success == null)
         {
