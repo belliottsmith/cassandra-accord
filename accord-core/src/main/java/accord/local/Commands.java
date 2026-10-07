@@ -114,6 +114,7 @@ import static accord.primitives.SaveStatus.Applying;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.LocalExecution.WaitingToExecute;
 import static accord.primitives.SaveStatus.PreAccepted;
+import static accord.primitives.SaveStatus.PreAcceptedPrivCoord;
 import static accord.primitives.SaveStatus.PreAcceptedWithDeps;
 import static accord.primitives.SaveStatus.PreAcceptedWithVote;
 import static accord.primitives.SaveStatus.ReadyToExecute;
@@ -157,6 +158,19 @@ public class Commands
         return preacceptOrRecover(safeStore, safeCommand, participants, newSaveStatus, txnId, partialTxn, partialDeps, Ballot.ZERO);
     }
 
+    /**
+     * Pre-accept a transaction we coordinate with a privileged coordinator fast path, recording our state as
+     * {@link SaveStatus#PreAcceptedPrivCoord} whether or not we vote for the fast path (our vote is implied by
+     * executeAt == txnId). This permits us to later determine that we are the transaction's privileged coordinator
+     * without reference to our node id. Promising any non-zero ballot moves us to {@link SaveStatus#PreAcceptedPrivCoordRecovery}.
+     */
+    public static AcceptOutcome preacceptAsPrivilegedCoordinator(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, Txn partialTxn)
+    {
+        Invariants.require(txnId.hasPrivilegedCoordinator());
+        Invariants.require(txnId.node.equals(safeStore.node().id()));
+        return preacceptOrRecover(safeStore, safeCommand, participants, PreAcceptedPrivCoord, txnId, partialTxn, null, Ballot.ZERO);
+    }
+
     public static AcceptOutcome recover(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, TxnId txnId, PartialTxn partialTxn, Ballot ballot)
     {
         // for recovery we only ever propose either the original epoch or an Accept that we witness; otherwise we invalidate
@@ -193,7 +207,7 @@ public class Commands
             }
             else
             {
-                safeCommand.updatePromised(ballot);
+                safeCommand.updatePromised(safeStore, ballot);
                 outcome = AcceptOutcome.Success;
             }
             logger.trace("{}: skipping preaccept - {}", txnId, outcome);
@@ -218,7 +232,9 @@ public class Commands
             Timestamp executeAt = safeStore.commandStore().preaccept(txnId, participants.route(), safeStore, ballot.equals(Ballot.ZERO));
             if (txnId != executeAt || !command.is(NotDefined))
             {
-                newSaveStatus = PreAccepted;
+                // the privileged coordinator retains its status whether or not it votes for the fast path, as its vote is implied by executeAt
+                if (newSaveStatus != PreAcceptedPrivCoord)
+                    newSaveStatus = PreAccepted;
                 validated = UPDATE_TXN_IGNORE_DEPS;
             }
 
@@ -253,7 +269,7 @@ public class Commands
         }
 
         safeStore.agent().replicaEvents().onPreNotAccepted(safeStore, command);
-        safeCommand.updatePromised(ballot);
+        safeCommand.updatePromised(safeStore, ballot);
         return true;
     }
 

@@ -114,6 +114,9 @@ public class ProtocolModifiers
         private static synchronized void setConfigured() { isConfigured = true; }
         private static void pre() { if (isConfigured) throw illegalState("Cannot set ProtocolModifiers after the configuration has been first used"); }
 
+        private static RateLimitedLogStatement.Factory rateLimitedLogStatementFactory = new RateLimitedLogStatement.NoLimitFactory();
+        public static synchronized void setRateLimitedLogStatementFactory(RateLimitedLogStatement.Factory newFactory) { pre(); rateLimitedLogStatementFactory = newFactory; }
+
         private static boolean rangeEndInclusive = true;
         public static synchronized void setRangeEndInclusive(boolean newRangeEndInclusive) { pre(); rangeEndInclusive = newRangeEndInclusive; }
 
@@ -239,6 +242,8 @@ public class ProtocolModifiers
     public static boolean isRangeEndExclusive() { return !rangeEndInclusive; }
     public static boolean isRangeStartInclusive() { return !rangeEndInclusive; }
     public static boolean isRangeStartExclusive() { return rangeEndInclusive; }
+
+    public static final RateLimitedLogStatement.Factory rateLimitedLogStatementFactory = Configure.rateLimitedLogStatementFactory;
 
     private static final FastPaths permittedFastPaths = Configure.permittedFastPaths;
     public static boolean usePrivilegedCoordinator() { return permittedFastPaths.hasPrivilegedCoordinator(); }
