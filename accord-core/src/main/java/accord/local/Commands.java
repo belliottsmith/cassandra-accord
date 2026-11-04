@@ -133,6 +133,7 @@ import static accord.primitives.Status.Truncated;
 import static accord.primitives.Route.isFullRoute;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.Write;
+import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
 import static accord.utils.Invariants.illegalState;
 import static accord.utils.Invariants.nonNull;
@@ -606,7 +607,7 @@ public class Commands
 
         if (newSaveStatus == SaveStatus.PreApplied && !waitingOn.isWaiting())
             newSaveStatus = Applying;
-        if (newSaveStatus == Applying && (!txnId.is(Write) || writes == null || !writes.keys.intersects(participants.stillExecutes())))
+        if (newSaveStatus == Applying && (!txnId.is(Write) || writes == null || !writes.appliesAny(partialTxn, participants.stillExecutes())))
             newSaveStatus = SaveStatus.Applied;
 
         switch (newSaveStatus)
@@ -877,6 +878,7 @@ public class Commands
             case Stable:
                 if (executeAtReplica(txnId, command.partialTxn())
                     && !command.participants().executes().isEmpty()
+                    && hasSufficientTxnForReplicaExecution(txnId, command)
                     && safeStore.safeToReadAt(command.executeAt()).containsAll(command.participants().executes())
                     && safeStore.commandStore().node().topology().epoch() >= command.executeAt.epoch()
                 )
@@ -896,7 +898,7 @@ public class Commands
 
             case PreApplied:
                 Command.Executed executed = command.asExecuted();
-                if (txnId.is(Write) && executed.writes().keys.intersects(executed.participants().stillExecutes()))
+                if (txnId.is(Write) && executed.writes().appliesAny(executed.partialTxn(), executed.participants().stillExecutes()))
                 {
                     safeCommand.applying(safeStore);
                     safeStore.notifyListeners(safeCommand, command);
@@ -917,11 +919,25 @@ public class Commands
         return true;
     }
 
+    /**
+     * A single key transaction's PartialTxn is complete (which replicaExecute validates); a multi key transaction is
+     * executed only for the keys we execute, but we must still be able to compute the transaction's Result
+     */
+    private static boolean hasSufficientTxnForReplicaExecution(TxnId txnId, Command command)
+    {
+        if (txnId.is(SingleKey))
+            return true;
+
+        PartialTxn txn = command.partialTxn();
+        return txn.query() != null && txn.covers(command.participants().executes());
+    }
+
     private static Command replicaExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, TxnId txnId)
     {
         FullRoute<?> route = (FullRoute<?>) command.route();
         PartialTxn txn = command.partialTxn();
-        txn.reconstitute(route);
+        if (txnId.is(SingleKey))
+            txn.reconstitute(route); // validate we have the complete transaction
         Timestamp applyAt;
         {
             Timestamp executeAt = command.executeAt();

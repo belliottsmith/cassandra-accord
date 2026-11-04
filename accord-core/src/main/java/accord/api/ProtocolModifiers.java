@@ -19,6 +19,7 @@
 package accord.api;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -224,6 +225,31 @@ public class ProtocolModifiers
         private static float replicaExecuteDistributedPersistChance = 1.0f;
         public static synchronized void setReplicaExecuteDistributedPersistChance(float newChance) { pre(); replicaExecuteDistributedPersistChance = newChance; }
 
+        private static Predicate<? super Txn> permitMultiKeyReplicaExecution = ignore -> false;
+        /**
+         * Permit (subject to {@link #setReplicaExecution}) transactions with multiple keys to be executed by each replica
+         * independently, as we do for single key transactions. This is only safe for transactions with "one shot"
+         * semantics, i.e. where:
+         * <ul>
+         *     <li>the writes to each key depend only on the reads of that same key (if any); and</li>
+         *     <li>the {@link Result} may be computed by any replica, and does not depend on the keys it executes.</li>
+         * </ul>
+         * The predicate is evaluated against both the complete {@link Txn} (by the coordinator) and the
+         * {@link accord.primitives.PartialTxn} (by each replica), so it must depend only on properties preserved by slicing.
+         * <p>
+         * Note that a replica executing a multi key transaction computes {@link accord.primitives.Writes} only for the
+         * keys it executes, and these may be propagated to (or recovered by) other replicas; so the {@link Write} must
+         * not depend on the data read by the replica that computed it (beyond that of the keys it applies to), and each
+         * replica derives the keys it applies from its own definition (see {@link accord.primitives.Writes#keysToApply}).
+         * <p>
+         * A replica that has already executed a write when the coordinator's read arrives replies as though it read first
+         * if it has nothing to read (see ReadData#actionFor); otherwise it must reply Redundant.
+         * TODO (required): a replica with something to read that has already executed the transaction replies Redundant,
+         *   which ExecuteTxn treats as a failure, so the client may be reported a failure (e.g. if RF=1 the shard is
+         *   exhausted) unless it first receives the replica's RemoteSuccess.
+         */
+        public static synchronized void setPermitMultiKeyReplicaExecution(Predicate<? super Txn> newPredicate) { pre(); permitMultiKeyReplicaExecution = newPredicate; }
+
         public static void validate()
         {
             Invariants.require(dataStoreDetectsFutureReads || (fastWriteExecution != MAY_BYPASS_SAFESTORE && fastReadExecution != MAY_BYPASS_SAFESTORE), "MAY_BYPASS_SAFESTORE is only permitted when dataStoreDetectsFutureReads");
@@ -278,7 +304,7 @@ public class ProtocolModifiers
     public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
 
     private static final SendStableMessages sendStableMessages = Configure.sendStableMessages;
-    public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && (!txnId.is(SingleKey) || !txnId.is(Txn.Kind.Write))); }
+    public static boolean sendOnlyReadStableMessages(TxnId txnId, @Nullable Txn txn) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && !isReplicaExecutable(txnId, txn)); }
     public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
     private static final boolean sendMinimal = Configure.sendMinimal;
@@ -316,7 +342,8 @@ public class ProtocolModifiers
             return true;
 
         // TODO (expected): why do we check txn != null?
-        return executeAtReplica(txnId, txn) && txn != null;
+        // TODO (desired): for multi key transactions, the home shard executing does not imply other shards have; consider if/when this is safe for them
+        return txnId.is(SingleKey) && executeAtReplica(txnId, txn) && txn != null;
     }
 
     private static final InformOfDurability informOfDurability = Configure.informOfDurability;
@@ -375,10 +402,27 @@ public class ProtocolModifiers
         return managesExecution(txnId) ? LoadKeys.SYNC : LoadKeys.ASYNC;
     }
 
+    private static final Predicate<? super Txn> permitMultiKeyReplicaExecution = Configure.permitMultiKeyReplicaExecution;
+
+    /**
+     * @return true if the transaction is of a kind that may be executed independently by each replica
+     * (see {@link Configure#setPermitMultiKeyReplicaExecution}), irrespective of {@link ReplicaExecution}
+     */
+    public static boolean isReplicaExecutable(TxnId txnId, @Nullable Txn txn)
+    {
+        if (!txnId.is(Txn.Kind.Write))
+            return false;
+
+        if (txnId.is(SingleKey))
+            return true;
+
+        return txnId.is(Domain.Key) && txn != null && permitMultiKeyReplicaExecution.test(txn);
+    }
+
     private static ReplicaExecution replicaExecution = Configure.replicaExecution;
     public static boolean executeAtReplica(TxnId txnId, @Nullable Txn txn)
     {
-        if (!txnId.is(SingleKey))
+        if (!isReplicaExecutable(txnId, txn))
             return false;
 
         switch (replicaExecution)

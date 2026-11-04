@@ -38,6 +38,7 @@ import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
+import accord.primitives.Status;
 import accord.local.StoreParticipants;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
@@ -286,7 +287,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             if (logger.isTraceEnabled())
                 logger.trace("{}: setting up read with status {} on {}", txnId, status, safeStore);
 
-            switch (actionForStatus(status))
+            switch (actionFor(command))
             {
                 default: throw new AssertionError();
                 case WAIT:
@@ -390,6 +391,35 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         return StoreAction.EXECUTE;
     }
 
+    /**
+     * As {@link #actionForStatus}, except that a write we would otherwise consider OBSOLETE because it has already been
+     * executed (e.g. by a replica executing it independently, before our read could execute) may still reply as though
+     * we read before it executed, if we have nothing to read: our reply is then fully determined by the command,
+     * whose executeAt retains any uniqueHlc that we would otherwise have reported. Replying Redundant in this case
+     * may otherwise fail the coordinator's execution (e.g. if no other replica can serve the read).
+     */
+    protected final StoreAction actionFor(Command command)
+    {
+        StoreAction action = actionForStatus(command.saveStatus());
+        if (action == StoreAction.OBSOLETE && mayReplyAsIfReadBeforeExecution(command))
+            return StoreAction.EXECUTE;
+        return action;
+    }
+
+    private boolean mayReplyAsIfReadBeforeExecution(Command command)
+    {
+        if (!txnId.is(Write) || executeOn().max != SaveStatus.ReadyToExecute)
+            return false;
+
+        // we must know the executeAt (and uniqueHlc) we executed with
+        if (!command.hasBeen(Status.PreApplied) || command.hasBeen(Status.Truncated))
+            return false;
+
+        PartialTxn txn = partialTxn != null ? partialTxn : command.partialTxn();
+        Participants<?> executes = command.participants().executes();
+        return txn != null && executes != null && !txn.read().keys().intersects(executes);
+    }
+
     @Override
     public boolean notify(SafeCommandStore safeStore, SafeCommand safeCommand)
     {
@@ -407,9 +437,10 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                 return false;
 
             SaveStatus saveStatus = command.saveStatus();
-            switch (actionForStatus(saveStatus))
+            StoreAction action = actionFor(command);
+            switch (action)
             {
-                default: throw new AssertionError("Unhandled Action: " + actionForStatus(saveStatus));
+                default: throw new AssertionError("Unhandled Action: " + action);
                 case WAIT:
                     if (flags.contains(NO_WAIT) && saveStatus.compareTo(SaveStatus.Stable) >= 0)
                     {

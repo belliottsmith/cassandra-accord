@@ -65,6 +65,26 @@ public class Writes
         return Objects.hash(txnId, executeAt, keys, write);
     }
 
+    /**
+     * The keys we must apply. NOTE: these are derived from our own definition of the transaction, NOT {@link #keys},
+     * which describes only the keys for which these Writes were computed. A replica that executes a multi key
+     * transaction itself computes Writes only for the keys it executes, but these Writes may then be propagated to
+     * (or recovered by) other replicas, whose keys they do not include. Since any write that is derivable from the
+     * transaction definition is not included in {@link #write}, every replica may apply its own keys given its
+     * (necessarily complete for the keys it executes) {@link PartialTxn}.
+     */
+    public Seekables<?, ?> keysToApply(@Nullable PartialTxn txn)
+    {
+        if (txn == null || txn.update() == null)
+            return keys;
+        return txn.update().keys();
+    }
+
+    public boolean appliesAny(@Nullable PartialTxn txn, Participants<?> executes)
+    {
+        return keysToApply(txn).intersects(executes);
+    }
+
     public AsyncChain<Void> apply(SafeCommandStore safeStore, Participants<?> executes, PartialTxn txn)
     {
         return apply(Write::apply, safeStore, executes, txn);
@@ -85,7 +105,7 @@ public class Writes
         if (write == null || executes.isEmpty())
             return AsyncChains.success(null);
 
-        Seekables<?, ?> keys = this.keys.overlapping(executes);
+        Seekables<?, ?> keys = keysToApply(txn).overlapping(executes);
         int count = keys.size();
         switch (count)
         {
