@@ -209,8 +209,8 @@ public class CommandBuilder
                 return Command.NotAcceptedWithoutDefinition.notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps);
             case AcceptedInvalidateWithDefinition:
             case AcceptedMedium:
-            case AcceptedMediumPrivCoord:
-            case AcceptedMediumPrivCoordRecovery:
+            case AcceptedPrivCoord:
+            case AcceptedPrivCoordRecovery:
             case AcceptedMediumWithDefinition:
             case AcceptedMediumWithDefAndVote:
             case AcceptedSlow:

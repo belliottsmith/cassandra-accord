@@ -68,8 +68,8 @@ class SaveStatusTest
         PreAcceptedPrivCoord,             // 31
         PreAcceptedPrivCoordRecovery,     // 32
         FastAcceptedPrivCoord,            // 33
-        AcceptedMediumPrivCoord,          // 34
-        AcceptedMediumPrivCoordRecovery,  // 35
+        AcceptedPrivCoord,          // 34
+        AcceptedPrivCoordRecovery,  // 35
     };
 
     @Test
@@ -120,7 +120,26 @@ class SaveStatusTest
             }
         }
         Assertions.assertThat(PreAcceptedPrivCoord.isPrivilegedCoordinatorZeroBallot()).isTrue();
-        Assertions.assertThat(AcceptedMediumPrivCoord.isPrivilegedCoordinator()).isTrue();
+        Assertions.assertThat(AcceptedPrivCoord.isPrivilegedCoordinator()).isTrue();
+
+        // AcceptedPrivCoord* know their proposed deps are those of the original coordinator; this is not reported.
+        // As the proposal may be via the medium or slow path, the equivalent for peers is AcceptedSlowWithDefinition (DepsProposed)
+        for (SaveStatus saveStatus : new SaveStatus[] { AcceptedPrivCoord, AcceptedPrivCoordRecovery })
+        {
+            Assertions.assertThat(saveStatus.is(Status.AcceptedSlow)).isTrue();
+            Assertions.assertThat(saveStatus.known.deps()).isSameAs(Known.KnownDeps.DepsProposedFromCoordinator);
+            Assertions.assertThat(saveStatus.report()).isSameAs(AcceptedSlowWithDefinition);
+            Assertions.assertThat(saveStatus.known).isEqualTo(AcceptedSlowWithDefinition.known.with(Known.KnownDeps.DepsProposedFromCoordinator));
+            Assertions.assertThat(SaveStatus.enrich(saveStatus, AcceptedSlowWithDefinition.known)).isSameAs(saveStatus);
+            Assertions.assertThat(SaveStatus.enrich(saveStatus, AcceptedMediumWithDefinition.known)).isSameAs(saveStatus);
+            // upon learning the decision, we (consistent with the PreCommitted deps statuses) only retain that deps were proposed
+            Assertions.assertThat(SaveStatus.get(Status.PreCommitted, saveStatus.known.atLeast(PreCommittedWithDefinition.known))).isSameAs(PreCommittedWithDefAndDeps);
+        }
+        for (SaveStatus saveStatus : SaveStatus.values())
+        {
+            if (saveStatus.report() != saveStatus && !saveStatus.known.equals(saveStatus.report().known))
+                Assertions.assertThat(saveStatus).isIn(AcceptedPrivCoord, AcceptedPrivCoordRecovery);
+        }
 
         // enriching should not be possible with priv coord statuses, as we do not give them deps/votes
         Assertions.assertThatThrownBy(() -> SaveStatus.enrich(PreAcceptedPrivCoord, PreAcceptedWithDeps.known));

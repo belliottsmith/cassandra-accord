@@ -107,6 +107,7 @@ import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
+import static accord.primitives.Known.KnownDeps.DepsProposedFromCoordinator;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.Outcome.Apply;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -1950,7 +1951,7 @@ public class Commands
 
         if (commitKind == StableMediumPath)
         {
-            if ((haveKnown.is(DepsProposedFixed) || (haveKnown.is(DepsProposed) && cur.acceptedOrCommitted().equals(Ballot.ZERO)))
+            if ((haveKnown.is(DepsProposedFixed) || ((haveKnown.is(DepsProposed) || haveKnown.is(DepsProposedFromCoordinator)) && cur.acceptedOrCommitted().equals(Ballot.ZERO)))
                 && expectKnown.is(DepsKnown) && ballot != null && ballot.equals(Ballot.ZERO) && participants.stillTouches().equals(cur.participants().touches()))
                 return UPDATE_TXN_MERGE_DEPS;
             return INSUFFICIENT;

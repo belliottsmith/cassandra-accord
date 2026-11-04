@@ -377,8 +377,8 @@ public class Pruning
                     case PREACCEPTED_COORD_RECOVERY:
                     case NOTACCEPTED:
                     case ACCEPTED:
-                    case ACCEPTED_MEDIUM_COORD:
-                    case ACCEPTED_MEDIUM_COORD_RECOVERY:
+                    case ACCEPTED_COORD:
+                    case ACCEPTED_COORD_RECOVERY:
                     case APPLIED_NOT_DURABLE:
                     case APPLIED_NOT_EXECUTED:
                         newByIdBuffer[pos - ++retainCount] = txn;

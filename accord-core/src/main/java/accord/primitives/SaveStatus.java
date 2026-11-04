@@ -42,6 +42,7 @@ import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
 import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
+import static accord.primitives.Known.KnownDeps.DepsProposedFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
 import static accord.primitives.Known.KnownExecuteAt.ApplyAtKnown;
 import static accord.primitives.Known.KnownExecuteAt.ExecuteAtErased;
@@ -91,11 +92,15 @@ public enum SaveStatus
     // TODO (expected): enrich with whether the proposal is a re-proposal of the original coordinator's or a fast path recovery (this may help future optimisations)
     AcceptedMedium                  ( 7, Status.AcceptedMedium),
     AcceptedMediumWithDefinition    ( 8, Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown),
-    AcceptedMediumPrivCoord         (34, SaveStatus.AcceptedMediumWithDefinition), // identical to AcceptedMediumWithDefinition, but no need to plumb through self node id to know if we're the coordinator
-    AcceptedMediumPrivCoordRecovery (35, SaveStatus.AcceptedMediumWithDefinition), // identical to AcceptedMediumPrivCoord, but promised a non-zero ballot
     AcceptedMediumWithDefAndVote    ( 9, Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown,        VotePreAccept),
     AcceptedSlow                    (10, Status.AcceptedSlow),
     AcceptedSlowWithDefinition      (11, Status.AcceptedSlow,           FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposed,       Unknown),
+    // The original (privileged) coordinator's own proposal, whether via the medium or slow path (the privileged coordinator
+    // only permits us to take the medium path with one fewer response). We know we are the coordinator without plumbing
+    // through our node id, and that our proposed deps are complete until executeAt. We report AcceptedSlowWithDefinition
+    // to peers, as we may not have proposed executeAt == TxnId, so the equivalent knowledge is DepsProposed (not DepsProposedFixed).
+    AcceptedPrivCoord               (34, SaveStatus.AcceptedSlowWithDefinition, DepsProposedFromCoordinator),
+    AcceptedPrivCoordRecovery       (35, SaveStatus.AcceptedSlowWithDefinition, DepsProposedFromCoordinator), // identical to AcceptedPrivCoord, but promised a non-zero ballot
     AcceptedSlowWithDefAndVote      (12, Status.AcceptedSlow,           FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposed,       Unknown,        VotePreAccept),
     PreCommitted                    (13, Status.PreCommitted,                                                                                            ReadyToExclude),
     PreCommittedWithDefinition      (14, Status.PreCommitted,           FullRoute,  DefinitionKnown,    ExecuteAtKnown,     DepsUnknown,        Unknown, ReadyToExclude),
@@ -206,11 +211,25 @@ public enum SaveStatus
 
     SaveStatus(int id, SaveStatus status)
     {
+        this(id, status, status.known);
+    }
+
+    /**
+     * Identical to {@code status}, except for the local knowledge of the dependencies
+     */
+    SaveStatus(int id, SaveStatus status, KnownDeps deps)
+    {
+        this(id, status, status.known.with(deps));
+        Invariants.require(status.known.deps().compareTo(deps) <= 0, "%s should know at least as much as %s", this, status);
+    }
+
+    private SaveStatus(int id, SaveStatus status, Known known)
+    {
         this.id = id;
         this.status = status.status;
         this.summary = status.summary;
         this.phase = status.phase;
-        this.known = status.known;
+        this.known = known;
         this.execution = status.execution;
         this.report = status;
     }
@@ -297,15 +316,15 @@ public enum SaveStatus
             case PreAcceptedPrivCoord:
             case PreAcceptedPrivCoordRecovery:
             case FastAcceptedPrivCoord:
-            case AcceptedMediumPrivCoord:
-            case AcceptedMediumPrivCoordRecovery:
+            case AcceptedPrivCoord:
+            case AcceptedPrivCoordRecovery:
                 return true;
         }
     }
 
     public boolean isPrivilegedCoordinatorZeroBallot()
     {
-        return this == PreAcceptedPrivCoord || this == AcceptedMediumPrivCoord;
+        return this == PreAcceptedPrivCoord || this == AcceptedPrivCoord;
     }
 
     public boolean isUninitialised()
@@ -380,6 +399,7 @@ public enum SaveStatus
                     switch (known.deps())
                     {
                         case DepsProposedFixed: return PreCommittedWithFixedDeps;
+                        case DepsProposedFromCoordinator: // we do not retain the privileged coordinator's distinction once PreCommitted
                         case DepsProposed:      return PreCommittedWithDeps;
                         default:                return PreCommitted;
                     }
@@ -391,6 +411,7 @@ public enum SaveStatus
                     case DepsUnknown:
                     case DepsFromCoordinator:   return PreCommittedWithDefinition; // TODO (required): consider if this is correct
                     case DepsProposedFixed:     return PreCommittedWithDefAndFixedDeps;
+                    case DepsProposedFromCoordinator: // we do not retain the privileged coordinator's distinction once PreCommitted
                     case DepsProposed:          return PreCommittedWithDefAndDeps;
                     case DepsKnown:
                     case DepsCommitted:

@@ -894,9 +894,10 @@ public class CommandsForKey extends CommandsForKeyUpdate
         NOTACCEPTED                            ( 5, SummaryStatus.NOTACCEPTED,            false, false, true,  false),
         // note that while ACCEPTED does not require executeAt for dependencies, it does require executeAt for computing the earlierWait collection for recovery
         ACCEPTED                               ( 6, SummaryStatus.ACCEPTED,               true,  true,  true,  false),
-        // TODO (required): confirm flags once the privileged fast quorum medium path is implemented
-        ACCEPTED_MEDIUM_COORD                  (15, SummaryStatus.ACCEPTED,               true,  true,  true,  false, true,  false),
-        ACCEPTED_MEDIUM_COORD_RECOVERY         (17, SummaryStatus.ACCEPTED,               true,  true,  true,  false, true,  false),
+        // the privileged coordinator's own proposal (medium or slow path); it computed its own deps, so they are known until executeAt (see KnownDeps.DepsProposedFromCoordinator)
+        // TODO (required): confirm flags once the privileged coordinator accept path is implemented
+        ACCEPTED_COORD                         (15, SummaryStatus.ACCEPTED,               true,  true,  true,  false, true,  false),
+        ACCEPTED_COORD_RECOVERY                (17, SummaryStatus.ACCEPTED,               true,  true,  true,  false, true,  false),
         COMMITTED                              ( 7, SummaryStatus.COMMITTED,              true,  true,  true,  true),
         STABLE                                 ( 8, SummaryStatus.STABLE,                 true,  true,  false, true),
         // TODO (expected): do not encode missing collection for APPLIED transactions,
@@ -943,8 +944,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
             putFromSaveStatus(SaveStatus.AcceptedInvalidate, NOTACCEPTED);
             putFromSaveStatus(SaveStatus.AcceptedInvalidateWithDefinition, NOTACCEPTED);
             putFromSaveStatus(SaveStatus.AcceptedMedium, ACCEPTED);
-            putFromSaveStatus(SaveStatus.AcceptedMediumPrivCoord, ACCEPTED_MEDIUM_COORD);
-            putFromSaveStatus(SaveStatus.AcceptedMediumPrivCoordRecovery, ACCEPTED_MEDIUM_COORD_RECOVERY);
+            putFromSaveStatus(SaveStatus.AcceptedPrivCoord, ACCEPTED_COORD);
+            putFromSaveStatus(SaveStatus.AcceptedPrivCoordRecovery, ACCEPTED_COORD_RECOVERY);
             putFromSaveStatus(SaveStatus.AcceptedMediumWithDefinition, ACCEPTED);
             putFromSaveStatus(SaveStatus.AcceptedMediumWithDefAndVote, ACCEPTED);
             putFromSaveStatus(SaveStatus.AcceptedSlow, ACCEPTED);
@@ -974,7 +975,14 @@ public class CommandsForKey extends CommandsForKeyUpdate
             putFromSaveStatus(SaveStatus.Vestigial, ERASED);
             putFromSaveStatus(SaveStatus.Invalidated, INVALIDATED);
             for (SaveStatus saveStatus : SaveStatus.values())
-                Invariants.require(FROM_SAVE_STATUS[saveStatus.ordinal()] != null || saveStatus.is(Status.NotDefined));
+            {
+                InternalStatus status = FROM_SAVE_STATUS[saveStatus.ordinal()];
+                Invariants.require(status != null || saveStatus.is(Status.NotDefined));
+                // the bound to which we consider dependencies complete must agree with the knowledge of the SaveStatus
+                if (status != null && status.hasDeps && saveStatus.known.deps().hasPreAcceptedOrProposedOrDecidedDeps())
+                    Invariants.require(status.depsKnownUntilExecuteAt == saveStatus.known.deps().isKnownUntilExecuteAt(),
+                                       "%s (%s) and %s disagree on whether deps are known until executeAt", saveStatus, saveStatus.known.deps(), status);
+            }
 
             SummaryStatus[] summaryStatuses = SummaryStatus.values();
             TO_SUMMARY_STATUS = Arrays.copyOf(summaryStatuses, summaryStatuses.length + 1);

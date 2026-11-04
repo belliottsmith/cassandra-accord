@@ -70,8 +70,8 @@ import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routable.Domain.Range;
 import static accord.primitives.Routables.Slice;
 import static accord.primitives.SaveStatus.AcceptedInvalidate;
-import static accord.primitives.SaveStatus.AcceptedMediumPrivCoord;
-import static accord.primitives.SaveStatus.AcceptedMediumPrivCoordRecovery;
+import static accord.primitives.SaveStatus.AcceptedPrivCoord;
+import static accord.primitives.SaveStatus.AcceptedPrivCoordRecovery;
 import static accord.primitives.SaveStatus.Erased;
 import static accord.primitives.SaveStatus.PreAcceptedPrivCoord;
 import static accord.primitives.SaveStatus.PreAcceptedPrivCoordRecovery;
@@ -576,8 +576,8 @@ public abstract class Command extends MinimalWithConcreteDeps
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
             SaveStatus saveStatus = this.saveStatus;
-            if (saveStatus == AcceptedMediumPrivCoord && !Ballot.ZERO.equals(promised))
-                saveStatus = AcceptedMediumPrivCoordRecovery;
+            if (saveStatus == AcceptedPrivCoord && !Ballot.ZERO.equals(promised))
+                saveStatus = AcceptedPrivCoordRecovery;
             return validate(new Accepted(txnId(), saveStatus, durability, participants, promised, executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted()));
         }
     }
@@ -1442,8 +1442,8 @@ public abstract class Command extends MinimalWithConcreteDeps
                 return validateCommandClass(status, NotAcceptedWithoutDefinition.class, klass);
             case AcceptedInvalidateWithDefinition:
             case AcceptedMedium:
-            case AcceptedMediumPrivCoord:
-            case AcceptedMediumPrivCoordRecovery:
+            case AcceptedPrivCoord:
+            case AcceptedPrivCoordRecovery:
             case AcceptedMediumWithDefinition:
             case AcceptedMediumWithDefAndVote:
             case AcceptedSlow:
@@ -1554,6 +1554,7 @@ public abstract class Command extends MinimalWithConcreteDeps
                     break;
                 case DepsFromCoordinator:
                 case DepsProposedFixed:
+                case DepsProposedFromCoordinator:
                 case DepsProposed:
                 case DepsCommitted:
                 case DepsKnown:

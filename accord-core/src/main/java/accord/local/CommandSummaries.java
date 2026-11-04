@@ -468,6 +468,7 @@ public interface CommandSummaries
                     case DepsProposedFixed:
                         executeAt = txnId;
                         break;
+                    case DepsProposedFromCoordinator:
                     case DepsProposed:
                         if (txnId.compareTo(primaryTxnId) < 0)
                             ifRelevant = MAYBE_SUPERSEDING;

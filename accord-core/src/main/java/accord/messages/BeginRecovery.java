@@ -269,7 +269,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
     {
         if (!saveStatus.isPrivilegedCoordinator())
             return saveStatus.known.hasPrivilegedVote();
-        // TODO (required): AcceptedMediumPrivCoord* propose executeAt == txnId whether or not the coordinator voted; must encode the vote if we permit this
+        // TODO (required): AcceptedPrivCoord* may propose executeAt == txnId (via the medium path) whether or not the coordinator voted; must encode the vote if we permit this
         return saveStatus.is(PreAccepted) && txnId.equals(executeAt);
     }
 
