@@ -420,6 +420,15 @@ public class ProtocolModifiers
     }
 
     private static ReplicaExecution replicaExecution = Configure.replicaExecution;
+
+    /**
+     * A cheap test (that does not require the transaction definition) of whether we might execute at the replica
+     */
+    public static boolean mayExecuteAtReplica(TxnId txnId)
+    {
+        return replicaExecution != ReplicaExecution.NONE && txnId.is(Txn.Kind.Write) && txnId.is(Domain.Key);
+    }
+
     public static boolean executeAtReplica(TxnId txnId, @Nullable Txn txn)
     {
         if (!isReplicaExecutable(txnId, txn))

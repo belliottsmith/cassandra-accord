@@ -602,7 +602,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         @Override
         protected CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
         {
-            if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind(node.id())))
+            if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind(node.id()), true))
                 return CommitOrReadNack.Rejected;
 
             if (coordinatorBacklogExecution(ballot) && txnId.is(SingleKey) && txnId.is(Key))

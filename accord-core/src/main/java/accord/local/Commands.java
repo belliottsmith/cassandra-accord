@@ -43,6 +43,7 @@ import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
 import accord.messages.Commit;
+import accord.messages.ReadData;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -357,6 +358,15 @@ public class Commands
     // relies on mutual exclusion for each key
     public static CommitOutcome commit(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, SaveStatus newSaveStatus, Ballot ballot, TxnId txnId, Route<?> route, @Nullable Txn txn, Timestamp executeAt, Deps deps, @Nullable Commit.Kind kind)
     {
+        return commit(safeStore, safeCommand, participants, newSaveStatus, ballot, txnId, route, txn, executeAt, deps, kind, false);
+    }
+
+    /**
+     * @param readFollows true iff the caller will read the transaction from this store once committed (e.g. StableThenRead),
+     *                    in which case we must not execute the transaction ourselves before that read (see {@link #mustDeferReplicaExecution})
+     */
+    public static CommitOutcome commit(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants, SaveStatus newSaveStatus, Ballot ballot, TxnId txnId, Route<?> route, @Nullable Txn txn, Timestamp executeAt, Deps deps, @Nullable Commit.Kind kind, boolean readFollows)
+    {
         final Command command = safeCommand.current();
         if (kind == StableFastPath && !command.promised().equals(Ballot.ZERO))
         {
@@ -422,7 +432,7 @@ public class Commands
             WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, executeAt, participants, partialDeps);
             committed = safeCommand.stable(safeStore, participants, ballot, executeAt, partialTxn, partialDeps, waitingOn);
             safeStore.agent().replicaEvents().onStable(safeStore, committed);
-            maybeExecute(safeStore, safeCommand, true, true);
+            maybeExecute(safeStore, safeCommand, safeCommand.current(), true, true, readFollows ? MaybeExecuteAdapter.READ_FOLLOWS : MaybeExecuteAdapter.DEFAULT);
         }
         else
         {
@@ -834,8 +844,19 @@ public class Commands
             }
         };
 
+        /**
+         * As DEFAULT, but a read of the transaction from this store will follow (see {@link Commands#commit})
+         */
+        MaybeExecuteAdapter READ_FOLLOWS = new MaybeExecuteAdapter()
+        {
+            @Override public void notifyWaiting(SafeCommandStore safeStore, SafeCommand waiting) { DEFAULT.notifyWaiting(safeStore, waiting); }
+            @Override public void notWaiting(SafeCommandStore safeStore) { DEFAULT.notWaiting(safeStore); }
+            @Override public boolean readFollows() { return true; }
+        };
+
         void notifyWaiting(SafeCommandStore safeStore, SafeCommand safeCommand);
         void notWaiting(SafeCommandStore safeStore);
+        default boolean readFollows() { return false; }
     }
 
     // TODO (desired): merge notifyListeners and notifyWaitingOn into MaybeExecuteAdapter without allocation/megamorphic despatch penalty
@@ -876,12 +897,7 @@ public class Commands
         {
             default: throw UnhandledEnum.invalid(command.status());
             case Stable:
-                if (executeAtReplica(txnId, command.partialTxn())
-                    && !command.participants().executes().isEmpty()
-                    && hasSufficientTxnForReplicaExecution(txnId, command)
-                    && safeStore.safeToReadAt(command.executeAt()).containsAll(command.participants().executes())
-                    && safeStore.commandStore().node().topology().epoch() >= command.executeAt.epoch()
-                )
+                if (mayReplicaExecute(safeStore, command) && !mustDeferReplicaExecution(safeStore, command, adapter.readFollows()))
                 {
                     if (null == (command = replicaExecute(safeStore, safeCommand, command, txnId)))
                         break;
@@ -919,6 +935,54 @@ public class Commands
         return true;
     }
 
+    private static boolean mayReplicaExecute(SafeCommandStore safeStore, Command command)
+    {
+        TxnId txnId = command.txnId();
+        return executeAtReplica(txnId, command.partialTxn())
+               && !command.participants().executes().isEmpty()
+               && hasSufficientTxnForReplicaExecution(txnId, command)
+               && safeStore.safeToReadAt(command.executeAt()).containsAll(command.participants().executes())
+               && safeStore.commandStore().node().topology().epoch() >= command.executeAt.epoch();
+    }
+
+    /**
+     * If some coordinator will read from (or is waiting to read from) this store, and we have something to read,
+     * we must not execute the transaction ourselves until it has read: else it must either read our writes, or reply
+     * Redundant (which may prevent it from completing its execution, e.g. if no other replica can serve the read).
+     * Once any such read completes it invokes {@link #maybeReplicaExecuteAfterRead}.
+     * (If we have nothing to read, ReadData can reply as though it read before we executed.)
+     */
+    private static boolean mustDeferReplicaExecution(SafeCommandStore safeStore, Command command, boolean readFollows)
+    {
+        PartialTxn txn = command.partialTxn();
+        if (!txn.read().keys().intersects(command.participants().executes()))
+            return false;
+
+        return readFollows || hasPendingReadBeforeExecution(safeStore, command.txnId());
+    }
+
+    private static boolean hasPendingReadBeforeExecution(SafeCommandStore safeStore, TxnId txnId)
+    {
+        return safeStore.commandStore().listeners.anyComplexListener(txnId, listener -> listener instanceof ReadData && ((ReadData) listener).isPendingReadBeforeExecution());
+    }
+
+    /**
+     * Invoked once a read that may have deferred replica execution (see {@link #mustDeferReplicaExecution}) completes on this store
+     */
+    public static void maybeReplicaExecuteAfterRead(SafeCommandStore safeStore, TxnId txnId)
+    {
+        SafeCommand safeCommand = safeStore.unsafeGetNoLogFault(txnId);
+        Command command = safeCommand.current();
+        if (command.saveStatus() != SaveStatus.ReadyToExecute || command.waitingOn().isWaiting())
+            return;
+
+        if (!mayReplicaExecute(safeStore, command) || hasPendingReadBeforeExecution(safeStore, txnId))
+            return;
+
+        if (null != replicaExecute(safeStore, safeCommand, command, txnId))
+            maybeExecute(safeStore, safeCommand, true, true); // PreApplied, so apply
+    }
+
     /**
      * A single key transaction's PartialTxn is complete (which replicaExecute validates); a multi key transaction is
      * executed only for the keys we execute, but we must still be able to compute the transaction's Result
@@ -951,7 +1015,8 @@ public class Commands
         {
             Participants<?> executes = command.participants().executes();
             CommandStore unsafeStore = safeStore.commandStore();
-            safeCommand.readyToExecute(safeStore);
+            if (command.saveStatus() != SaveStatus.ReadyToExecute)
+                safeCommand.readyToExecute(safeStore);
             safeStore = safeStore;
             long stamp = safeStore.commandStore().node().currentStamp();
             txn.read(safeStore, applyAt, executes).begin((data, fail) -> {
@@ -964,6 +1029,12 @@ public class Commands
                 {
                     if (!fastWritesMayBypassSafeStore())
                         replicaExecuteSlowApply(unsafeStore, ballot, txnId, route, txn, data, applyAt, stamp);
+                    // our read may have witnessed this transaction's own writes, if they were concurrently applied by an Apply
+                    // (e.g. from a coordinator persisting its own local execution, or from recovery), in which case we must
+                    // not compute (and apply) our own writes from it; the Apply will complete the transaction for us.
+                    // (the slow path is protected by apply() treating an already PreApplied command as Redundant)
+                    else if (data != null && !data.validateReply(txnId, applyAt, applyAt.uniqueHlc()))
+                        notifyAfterFailedFastApply(unsafeStore, txnId);
                     else if (stamp == unsafeStore.node.currentStamp() || unsafeStore.unsafeGetSafeToRead().lowerEntry(applyAt).getValue().containsAll(executes))
                         replicaExecuteFastApply(unsafeStore, ballot, txnId, route, txn, data, applyAt, executes);
                     else

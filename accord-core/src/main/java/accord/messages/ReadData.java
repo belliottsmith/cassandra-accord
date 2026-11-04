@@ -20,6 +20,7 @@ package accord.messages;
 
 import java.util.NavigableMap;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
@@ -34,6 +35,8 @@ import accord.local.Command;
 import accord.local.Command.Committed;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
+import accord.local.Commands;
+import accord.local.ExecutionContext;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -60,6 +63,7 @@ import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.api.ProtocolModifiers.dataStoreDetectsFutureReads;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.fastWritesMayBypassSafeStore;
+import static accord.api.ProtocolModifiers.mayExecuteAtReplica;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
@@ -641,6 +645,14 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         if (cancelSelf != null)
             cancelSelf.cancel();
         cleanup(clear);
+
+        // we may have deferred replica execution on this store until we had read (see Commands#mustDeferReplicaExecution)
+        if (readsBeforeExecution() && mayExecuteAtReplica(txnId))
+        {
+            TxnId id = txnId;
+            commandStore.execute(ExecutionContext.unsequenced(id, "Replica Execute After Read"),
+                                 (Consumer<SafeCommandStore>) safeStore -> Commands.maybeReplicaExecuteAfterRead(safeStore, id), commandStore.agent());
+        }
     }
 
     protected void onOneSuccess(int storeId, @Nullable Ranges newUnavailable)
@@ -722,6 +734,23 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
     public boolean isPending()
     {
         return this.state == State.PENDING;
+    }
+
+    /**
+     * @return true iff we have yet to complete a read that must happen before the transaction executes
+     *         (so that replica execution must defer to us: see Commands#mustDeferReplicaExecution)
+     */
+    public boolean isPendingReadBeforeExecution()
+    {
+        return isPending() && readsBeforeExecution();
+    }
+
+    /**
+     * @return true iff we read a write transaction's keys before its writes are applied
+     */
+    private boolean readsBeforeExecution()
+    {
+        return txnId.is(Write) && executeOn().max.compareTo(SaveStatus.PreApplied) <= 0;
     }
 
     void cleanupWaitingOnExclusive(IntHashSet waitingOn)
