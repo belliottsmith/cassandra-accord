@@ -963,7 +963,7 @@ public class Commands
 
     private static boolean hasPendingReadBeforeExecution(SafeCommandStore safeStore, TxnId txnId)
     {
-        return safeStore.commandStore().listeners.anyComplexListener(txnId, listener -> listener instanceof ReadData && ((ReadData) listener).isPendingReadBeforeExecution());
+        return safeStore.commandStore().listeners.matchesAnyComplex(txnId, listener -> listener instanceof ReadData && ((ReadData) listener).isPendingReadBeforeExecution());
     }
 
     /**

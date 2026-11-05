@@ -304,7 +304,7 @@ public class ProtocolModifiers
     public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
 
     private static final SendStableMessages sendStableMessages = Configure.sendStableMessages;
-    public static boolean sendOnlyReadStableMessages(TxnId txnId, @Nullable Txn txn) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && !isReplicaExecutable(txnId, txn)); }
+    public static boolean sendOnlyReadStableMessages(TxnId txnId, @Nullable Txn txn) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && !possibleToExecuteAtReplica(txnId, txn)); }
     public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
     private static final boolean sendMinimal = Configure.sendMinimal;
@@ -343,7 +343,7 @@ public class ProtocolModifiers
 
         // TODO (expected): why do we check txn != null?
         // TODO (desired): for multi key transactions, the home shard executing does not imply other shards have; consider if/when this is safe for them
-        return txnId.is(SingleKey) && executeAtReplica(txnId, txn) && txn != null;
+        return txnId.is(SingleKey) && txn != null && executeAtReplica(txnId, txn);
     }
 
     private static final InformOfDurability informOfDurability = Configure.informOfDurability;
@@ -408,7 +408,7 @@ public class ProtocolModifiers
      * @return true if the transaction is of a kind that may be executed independently by each replica
      * (see {@link Configure#setPermitMultiKeyReplicaExecution}), irrespective of {@link ReplicaExecution}
      */
-    public static boolean isReplicaExecutable(TxnId txnId, @Nullable Txn txn)
+    public static boolean possibleToExecuteAtReplica(TxnId txnId, @Nullable Txn txn)
     {
         if (!txnId.is(Txn.Kind.Write))
             return false;
@@ -431,7 +431,7 @@ public class ProtocolModifiers
 
     public static boolean executeAtReplica(TxnId txnId, @Nullable Txn txn)
     {
-        if (!isReplicaExecutable(txnId, txn))
+        if (!possibleToExecuteAtReplica(txnId, txn))
             return false;
 
         switch (replicaExecution)

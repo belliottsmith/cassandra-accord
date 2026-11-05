@@ -464,7 +464,7 @@ public class DefaultLocalListeners implements LocalListeners
     }
 
     @Override
-    public boolean anyComplexListener(TxnId waitingOn, Predicate<? super ComplexListener> test)
+    public boolean matchesAnyComplex(TxnId waitingOn, Predicate<? super ComplexListener> test)
     {
         RegisteredComplexListeners registered = complexListeners.get(waitingOn);
         if (registered == null)

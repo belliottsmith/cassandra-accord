@@ -80,9 +80,9 @@ public interface LocalListeners
     Registered register(TxnId waitingOn, ComplexListener listener);
 
     /**
-     * @return true iff any {@link ComplexListener} registered against {@code waitingOn} satisfies {@code test}
+     * @return true iff any {@link ComplexListener} on {@code waitingOn} satisfies {@code test}
      */
-    boolean anyComplexListener(TxnId waitingOn, Predicate<? super ComplexListener> test);
+    boolean matchesAnyComplex(TxnId waitingOn, Predicate<? super ComplexListener> test);
 
     /**
      * Notify any listener waiting on {@code safeCommand}'s updated status.
