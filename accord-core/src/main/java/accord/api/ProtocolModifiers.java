@@ -237,6 +237,10 @@ public class ProtocolModifiers
          * The predicate is evaluated against both the complete {@link Txn} (by the coordinator) and the
          * {@link accord.primitives.PartialTxn} (by each replica), so it must depend only on properties preserved by slicing.
          * <p>
+         * TODO (required): UNSAFE, DO NOT ENABLE. Each replica derives the transaction's uniqueHlc from its own dependencies,
+         *   but this must be agreed globally (and propagated for later transactions to use): it may be raised by any key,
+         *   including those we do not execute. A different approach (e.g. via ExecuteTxnBacklog) is required.
+         * <p>
          * Note that a replica executing a multi key transaction computes {@link accord.primitives.Writes} only for the
          * keys it executes, and these may be propagated to (or recovered by) other replicas; so the {@link Write} must
          * not depend on the data read by the replica that computed it (beyond that of the keys it applies to), and each
