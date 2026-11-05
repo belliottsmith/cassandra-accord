@@ -53,24 +53,23 @@ public class Writes
         this.write = write;
     }
 
+    /**
+     * NOTE: ignores {@link #keys}, which is only the context against which {@link #write} is serialized, and may
+     * legitimately differ between equivalent Writes (e.g. once serialized with only the keys whose writes are not derivable)
+     */
     @Override
     public boolean equals(Object o)
     {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         Writes writes = (Writes) o;
-        return txnId.equals(writes.txnId) && executeAt.equals(writes.executeAt) && keys.equals(writes.keys) && Objects.equals(write, writes.write);
-    }
-
-    public boolean isEmpty()
-    {
-        return keys.isEmpty();
+        return txnId.equals(writes.txnId) && executeAt.equals(writes.executeAt) && Objects.equals(write, writes.write);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(txnId, executeAt, keys, write);
+        return Objects.hash(txnId, executeAt, write);
     }
 
     /**
