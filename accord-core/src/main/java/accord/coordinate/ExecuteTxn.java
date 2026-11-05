@@ -541,6 +541,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             tracing.trace(null, "Local Direct Success");
 
         // a multi key transaction executed locally may have produced only a subset of its writes, which we must not distribute
+        // (note: these Writes were computed locally by Txn.execute, so their keys are those of our local Update)
         if (replicaExecuteDistributedPersist() && (txn.update() == null || writes.keys.containsAll(txn.update().keys())))
         {
             executor.executeMaybeImmediately(() -> {

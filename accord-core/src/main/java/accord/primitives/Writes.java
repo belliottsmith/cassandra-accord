@@ -25,6 +25,7 @@ import java.util.Objects;
 import accord.api.Write;
 import accord.local.CommandStore;
 import accord.local.SafeCommandStore;
+import accord.utils.Invariants;
 import accord.utils.async.AsyncChain;
 import accord.utils.async.AsyncChains;
 
@@ -34,6 +35,13 @@ public class Writes
 {
     public final TxnId txnId;
     public final Timestamp executeAt;
+    /**
+     * The keys for which {@link #write} may carry data, i.e. the context against which {@link #write} is serialized.
+     * This is NOT necessarily the set of keys the transaction writes, as some (or all) of these writes may be
+     * derivable from the transaction definition (and so are not included in {@link #write}); a serialized Writes may
+     * include only those keys whose writes are not derivable. It MUST NOT be used to decide which keys to apply
+     * (see {@link #keysToApply}).
+     */
     public final Seekables<?, ?> keys;
     @Nullable public final Write write;
 
@@ -75,14 +83,17 @@ public class Writes
      */
     public Seekables<?, ?> keysToApply(@Nullable PartialTxn txn)
     {
-        if (txn == null || txn.update() == null)
+        if (write == null)
             return keys;
+
+        // we must know the definition to apply anything, as keys does not tell us which keys to apply
+        Invariants.require(txn != null && txn.update() != null, "Cannot apply %s without the transaction definition", this);
         return txn.update().keys();
     }
 
     public boolean appliesAny(@Nullable PartialTxn txn, Participants<?> executes)
     {
-        return keysToApply(txn).intersects(executes);
+        return write != null && !executes.isEmpty() && keysToApply(txn).intersects(executes);
     }
 
     public AsyncChain<Void> apply(SafeCommandStore safeStore, Participants<?> executes, PartialTxn txn)

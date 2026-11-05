@@ -66,7 +66,11 @@ class WritesTest
         Assertions.assertThat(executedByCoordinator.keysToApply(ours).overlapping(keys(2, 3).toParticipants()))
                   .isEqualTo(executedByCoordinator.keys.overlapping(keys(2, 3).toParticipants()));
 
-        // without a definition (or update) we can only fall back to the keys we were given
-        Assertions.assertThat(executedByOther.keysToApply(null)).isEqualTo(keys(1));
+        // Writes.keys may include only the keys whose writes are not derivable, so we refuse to apply without a definition
+        Assertions.assertThatThrownBy(() -> executedByOther.keysToApply(null)).isInstanceOf(IllegalStateException.class);
+        // but there is nothing to apply if there is no write
+        Writes noWrite = new Writes(txnId, txnId, keys(1), null);
+        Assertions.assertThat(noWrite.appliesAny(null, keys(1).toParticipants())).isFalse();
+        Assertions.assertThat(executedByOther.appliesAny(ours, Keys.EMPTY.toParticipants())).isFalse();
     }
 }
