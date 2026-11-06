@@ -68,8 +68,8 @@ class SaveStatusTest
         PreAcceptedPrivCoord,             // 31
         PreAcceptedPrivCoordRecovery,     // 32
         FastAcceptedPrivCoord,            // 33
-        AcceptedPrivCoord,          // 34
-        AcceptedPrivCoordRecovery,  // 35
+        AcceptedPrivCoord,                // 34
+        AcceptedPrivCoordRecovery,        // 35
     };
 
     @Test

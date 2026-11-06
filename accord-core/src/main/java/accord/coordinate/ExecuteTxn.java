@@ -91,6 +91,7 @@ import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
+import static accord.local.Commands.MaybeExecuteAdapter.DEFER_REPLICA_EXECUTION;
 import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.messages.Commit.Kind.StableSlowPath;
@@ -292,7 +293,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             }
         }
 
-        boolean sendOnlyReadStableMessages = flags.isAnyReadyToExecute() && sendOnlyReadStableMessages(txnId, txn);
+        boolean sendOnlyReadStableMessages = flags.isAnyReadyToExecute() && sendOnlyReadStableMessages(txnId);
         if (sendOnlyReadStableMessages && (all.size() == 1 || all.current().nodes().containsAll(all.nodes())))
             return;
 
@@ -375,7 +376,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     public void contact(Id to)
     {
         ExecuteFlags flags = this.flags.get(to);
-        boolean sendUnstable = !sendOnlyReadStableMessages(txnId, txn) || path == RECOVER || flags.contains(READY_TO_EXECUTE);
+        boolean sendUnstable = !sendOnlyReadStableMessages(txnId) || path == RECOVER || flags.contains(READY_TO_EXECUTE);
         if (sendUnstable) sendUnstableRead(to, flags);
         else sendStableRead(to, commitKind(to));
     }
@@ -472,7 +473,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 else
                 {
                     stable.informStableOnceQuorum();
-                    if (sendOnlyReadStableMessages(txnId, txn))
+                    if (sendOnlyReadStableMessages(txnId))
                     {
                         // send additional stable messages to record the transaction outcome
                         if (!candidates.isEmpty())
@@ -540,9 +541,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         if (tracing != null)
             tracing.trace(null, "Local Direct Success");
 
-        // a multi key transaction executed locally may have produced only a subset of its writes, which we must not distribute
-        // (note: these Writes were computed locally by Txn.execute, so their keys are those of our local Update)
-        if (replicaExecuteDistributedPersist() && (txn.update() == null || writes.keys.containsAll(txn.update().keys())))
+        if (replicaExecuteDistributedPersist())
         {
             executor.executeMaybeImmediately(() -> {
                 if (!trySetDone())
@@ -603,7 +602,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         @Override
         protected CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
         {
-            if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind(node.id()), true))
+            if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind(node.id()), DEFER_REPLICA_EXECUTION))
                 return CommitOrReadNack.Rejected;
 
             if (coordinatorBacklogExecution(ballot) && txnId.is(SingleKey) && txnId.is(Key))

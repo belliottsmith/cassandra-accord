@@ -63,35 +63,23 @@ import static accord.primitives.Status.Phase.PreAccept;
  */
 public class Known
 {
-    /*
-     * NOTE: {@link #encoded} is serialized as-is (to peers), so this layout must NEVER change; it may only be extended
-     * using bits above PRIVILEGED_VOTE, as with DEPS_EXTENSION. Unlike the other properties (which are encoded by ordinal,
-     * so may only have values appended), KnownDeps is encoded by {@link KnownDeps#id}, so that values may be inserted.
-     *
-     *   bits 0-1:   KnownRoute.ordinal()
-     *   bits 2-3:   Definition.ordinal()
-     *   bits 4-6:   KnownExecuteAt.ordinal()
-     *   bits 7-9:   KnownDeps.id & 0x7
-     *   bits 10-12: Outcome.ordinal()
-     *   bit  13:    PrivilegedVote.ordinal()
-     *   bit  14:    KnownDeps.id >>> 3 (DEPS_EXTENSION, added after the above; ignored by earlier versions)
-     */
     private static final int ROUTE_MASK = 0x3;
     private static final int DEFINITION_SHIFT = 2;
     private static final int DEFINITION_MASK = 0x3 << DEFINITION_SHIFT;
     private static final int EXECUTE_AT_SHIFT = 4;
     private static final int EXECUTE_AT_MASK = 0x7 << EXECUTE_AT_SHIFT;
     private static final int DEPS_SHIFT = 7;
-    private static final int DEPS_LOW_BITS = 3;
-    private static final int DEPS_LOW_MASK = ((1 << DEPS_LOW_BITS) - 1) << DEPS_SHIFT;
-    private static final int OUTCOME_SHIFT = 10;
+    private static final int DEPS_MASK = 0xf;
+    private static final int OUTCOME_SHIFT = 11;
     private static final int OUTCOME_MASK = 0x7 << OUTCOME_SHIFT;
-    private static final int PRIVILEGED_VOTE_SHIFT = 13;
+    private static final int PRIVILEGED_VOTE_SHIFT = 14;
     private static final int PRIVILEGED_VOTE_MASK = 1 << PRIVILEGED_VOTE_SHIFT;
-    private static final int DEPS_EXTENSION_SHIFT = 14;
-    private static final int DEPS_EXTENSION_MASK = 1 << DEPS_EXTENSION_SHIFT;
-    private static final int DEPS_MASK = DEPS_LOW_MASK | DEPS_EXTENSION_MASK;
-    static final int MAX_DEPS_ID = (1 << (DEPS_LOW_BITS + 1)) - 1;
+
+    private static final int SERIALIZE_LOW_MASK  =      0x07f;
+    private static final int SERIALIZE_HIGH_MASK = 0xfffff800;
+    private static final int SERIALIZE_DEPS_LOW_MASK =    0x7;
+    private static final int SERIALIZE_DEPS_HIGH_MASK =   0x8;
+    private static final int SERIALIZE_DEPS_HIGH_SHIFT = 14-3;
 
     static
     {
@@ -100,7 +88,6 @@ public class Known
         Invariants.require(KnownExecuteAt.VALUES.length <= 1 + (EXECUTE_AT_MASK >>> EXECUTE_AT_SHIFT));
         Invariants.require(Outcome.VALUES.length <= 1 + (OUTCOME_MASK >>> OUTCOME_SHIFT));
         Invariants.require(PrivilegedVote.values().length <= 2);
-        // KnownDeps ids are validated against MAX_DEPS_ID by KnownDeps
     }
 
     public static final Known Nothing = new Known(MaybeRoute, DefinitionUnknown, ExecuteAtUnknown, DepsUnknown, Unknown, NoVote);
@@ -139,15 +126,38 @@ public class Known
         return route.ordinal()
              | (definition.ordinal() << DEFINITION_SHIFT)
              | (executeAt.ordinal() << EXECUTE_AT_SHIFT)
-             | encodeDeps(deps)
+             | (deps.ordinal() << DEPS_SHIFT)
              | (outcome.ordinal() << OUTCOME_SHIFT)
              | (privilegedVote.ordinal() << PRIVILEGED_VOTE_SHIFT);
     }
 
-    private static int encodeDeps(KnownDeps deps)
+    public int serializeCompat()
     {
-        return ((deps.id << DEPS_SHIFT) & DEPS_LOW_MASK)
-             | ((deps.id >>> DEPS_LOW_BITS) << DEPS_EXTENSION_SHIFT);
+        return serializeCompatInternal(encoded);
+    }
+
+    public static Known deserializeCompat(int serialized)
+    {
+        return new Known(deserializeCompatInternal(serialized));
+    }
+
+    private static int serializeCompatInternal(int encoded)
+    {
+        int depsId = KnownDeps.ORDINAL_TO_ID[depsOrdinal(encoded)];
+        return    (encoded & SERIALIZE_LOW_MASK)
+               | ((encoded & SERIALIZE_HIGH_MASK) >>> 1)
+               | ((depsId & SERIALIZE_DEPS_LOW_MASK) << DEPS_SHIFT)
+               | ((depsId & SERIALIZE_DEPS_HIGH_MASK) << SERIALIZE_DEPS_HIGH_SHIFT);
+    }
+
+    private static int deserializeCompatInternal(int serialized)
+    {
+        int depsId = ((serialized >>> DEPS_SHIFT) & SERIALIZE_DEPS_LOW_MASK)
+                   | ((serialized >>> SERIALIZE_DEPS_HIGH_SHIFT) & SERIALIZE_DEPS_HIGH_MASK);
+        int depsOrdinal = KnownDeps.ID_TO_ORDINAL[depsId];
+        return   (serialized & SERIALIZE_LOW_MASK)
+               | (depsOrdinal << DEPS_SHIFT)
+               | ((serialized & (SERIALIZE_HIGH_MASK >>> 1)) << 1);
     }
 
     public Known atLeast(Known that)
@@ -279,7 +289,7 @@ public class Known
 
     public Known with(KnownDeps newDeps)
     {
-        return withEncoded((this.encoded & ~DEPS_MASK) | encodeDeps(newDeps));
+        return withEncoded((this.encoded & ~DEPS_MASK) | (newDeps.ordinal() << DEPS_SHIFT));
     }
 
     public Known with(PrivilegedVote newPrivilegedVote)
@@ -439,7 +449,6 @@ public class Known
 
     public void checkInvariants()
     {
-        Invariants.require(KnownDeps.isValidId(depsId()), "Invalid KnownDeps id %d", depsId());
         if (outcome().isInvalidated()) Invariants.require(deps() != DepsKnown && executeAt() != ExecuteAtKnown);
         else if (outcome().isOrWasApply()) Invariants.require(deps() != NoDeps && executeAt() != NoExecuteAt);
         Invariants.require(!isDefinitionKnown() || hasFullRoute());
@@ -525,43 +534,44 @@ public class Known
         return executeAtOrdinal() - that.executeAtOrdinal();
     }
 
-    /**
-     * NOTE: this is {@link KnownDeps#id}, NOT {@link KnownDeps#ordinal()}, so must not be used for comparisons
-     */
-    private int depsId()
+    private int depsOrdinal()
     {
-        return ((encoded & DEPS_LOW_MASK) >>> DEPS_SHIFT)
-             | ((encoded & DEPS_EXTENSION_MASK) >>> (DEPS_EXTENSION_SHIFT - DEPS_LOW_BITS));
+        return depsOrdinal(encoded);
+    }
+
+    private static int depsOrdinal(int encoded)
+    {
+        return (encoded >>> DEPS_SHIFT) & DEPS_MASK;
     }
 
     public KnownDeps deps()
     {
-        return KnownDeps.forId(depsId());
+        return KnownDeps.BY_ORDINAL[depsOrdinal()];
     }
 
     public boolean hasAnyDeps()
     {
-        return deps().hasPreAcceptedOrProposedOrDecidedDeps();
+        return TinyEnumSet.contains(KnownDeps.HAS_ANY, depsOrdinal());
     }
 
     public boolean is(KnownDeps deps)
     {
-        return depsId() == deps.id;
+        return depsOrdinal() == deps.ordinal();
     }
 
     public int compareTo(KnownDeps deps)
     {
-        return deps().compareTo(deps);
+        return depsOrdinal() - deps.ordinal();
     }
 
     public boolean equalDeps(Known that)
     {
-        return depsId() == that.depsId();
+        return depsOrdinal() == that.depsOrdinal();
     }
 
     public int compareDeps(Known that)
     {
-        return deps().compareTo(that.deps());
+        return depsOrdinal() - that.depsOrdinal();
     }
     
     private int outcomeOrdinal()
@@ -787,20 +797,11 @@ public class Known
         DepsProposed(3, Accept),
 
         /**
-         * As {@link #DepsProposed}, but known locally to be the proposal of the original (privileged) coordinator,
-         * i.e. we ARE the original coordinator and these are the dependencies we proposed (whether via the medium or
-         * slow path). Since we calculated these dependencies ourselves, they are known to be complete for this replica
-         * until executeAt (rather than only until TxnId).
-         * <p>
-         * This is a local distinction only, adopted by {@link SaveStatus#AcceptedPrivCoord} (and its Recovery
-         * counterpart), which report {@link SaveStatus#AcceptedSlowWithDefinition} to peers. The equivalent
-         * knowledge for a peer is {@link #DepsProposed}, NOT {@link #DepsProposedFixed}: the latter additionally implies
-         * that executeAt == TxnId, so that any transaction absent from the deps cannot be agreed to execute before us.
-         * <p>
-         * NOTE: the id is chosen so that its low bits are {@link #DepsProposed}'s id: a {@link Known} encoding
-         * this value is decoded as {@link #DepsProposed} by versions that predate {@link Known}'s DEPS_EXTENSION bit.
+         * Deps proposed by a privileged coordinator during the Accept phase, including the coordinator's own vote for
+         * dependencies up to executeAt. This permits the coordinator to take the fast quorum medium path
+         * (i.e. skipping Commit phase)
          */
-        DepsProposedFromCoordinator(11, Accept),
+        DepsProposedFromCoordinator(8, Accept),
 
         /**
          * A decision to execute the transaction at a given timestamp with certain dependencies is known to have been proposed,
@@ -828,28 +829,22 @@ public class Known
         NoDeps(7, Invalidate);
 
         private static final int HAS_ANY = TinyEnumSet.encode(DepsFromCoordinator, DepsProposed, DepsProposedFixed, DepsProposedFromCoordinator, DepsCommitted, DepsKnown);
-        private static final KnownDeps[] BY_ID;
+        private static final KnownDeps[] BY_ORDINAL = values();
+        private static final KnownDeps[] BY_ID = new KnownDeps[BY_ORDINAL.length];
+        private static final int[] ORDINAL_TO_ID = new int[BY_ORDINAL.length];
+        private static final int[] ID_TO_ORDINAL = new int[BY_ORDINAL.length];
+
         static
         {
-            KnownDeps[] values = values();
-            int maxId = 0;
-            for (KnownDeps deps : values)
-                maxId = Math.max(maxId, deps.id);
-            // ids must fit in Known's encoding
-            Invariants.require(maxId <= Known.MAX_DEPS_ID, "KnownDeps id %d cannot be encoded by Known", maxId);
-            BY_ID = new KnownDeps[maxId + 1];
-            for (KnownDeps deps : values)
+            for (KnownDeps deps : BY_ORDINAL)
             {
                 Invariants.require(BY_ID[deps.id] == null, "Duplicate KnownDeps id %d (%s, %s)", deps.id, deps, BY_ID[deps.id]);
                 BY_ID[deps.id] = deps;
+                ID_TO_ORDINAL[deps.id] = deps.ordinal();
+                ORDINAL_TO_ID[deps.ordinal()] = deps.id;
             }
         }
 
-        /**
-         * A stable identifier used for serialization (both standalone, and within {@link Known#encoded}); this is
-         * distinct from ordinal(), which defines the logical order of KnownDeps and may change between versions.
-         * This must NEVER change for a given KnownDeps. Ids need not be contiguous.
-         */
         public final int id;
         public final Status.Phase phase;
 
@@ -857,21 +852,6 @@ public class Known
         {
             this.id = id;
             this.phase = phase;
-        }
-
-        public static boolean isValidId(int id)
-        {
-            return id >= 0 && id < BY_ID.length && BY_ID[id] != null;
-        }
-
-        /**
-         * Lookup by the stable serialization {@link #id}.
-         */
-        public static KnownDeps forId(int id)
-        {
-            if (!isValidId(id))
-                throw new IllegalArgumentException("Unknown KnownDeps id " + id);
-            return BY_ID[id];
         }
 
         public boolean canProposeInvalidation()
@@ -889,10 +869,10 @@ public class Known
             switch (this)
             {
                 default: throw new UnhandledEnum(this);
-                case DepsCommitted:
-                case DepsProposed:
                 case DepsProposedFixed:
+                case DepsProposed:
                 case DepsProposedFromCoordinator:
+                case DepsCommitted:
                 case DepsKnown:
                     return true;
                 case DepsFromCoordinator:
@@ -908,8 +888,8 @@ public class Known
             switch (this)
             {
                 default: throw new UnhandledEnum(this);
-                case DepsProposed:
                 case DepsProposedFixed:
+                case DepsProposed:
                 case DepsProposedFromCoordinator:
                     return true;
                 case DepsCommitted:
@@ -976,6 +956,16 @@ public class Known
             KnownDeps max = c >= 0 ? this : that;
             KnownDeps min = c <= 0 ? this : that;
             return max != NoDeps || (min != DepsCommitted && min != DepsKnown);
+        }
+
+        public static KnownDeps forId(int id)
+        {
+            return BY_ID[id];
+        }
+
+        public static KnownDeps forOrdinal(int ordinal)
+        {
+            return BY_ORDINAL[ordinal];
         }
     }
 

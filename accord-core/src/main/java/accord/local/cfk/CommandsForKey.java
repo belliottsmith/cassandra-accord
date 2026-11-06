@@ -977,11 +977,12 @@ public class CommandsForKey extends CommandsForKeyUpdate
             for (SaveStatus saveStatus : SaveStatus.values())
             {
                 InternalStatus status = FROM_SAVE_STATUS[saveStatus.ordinal()];
-                Invariants.require(status != null || saveStatus.is(Status.NotDefined));
-                // the bound to which we consider dependencies complete must agree with the knowledge of the SaveStatus
-                if (status != null && status.hasDeps && saveStatus.known.deps().hasPreAcceptedOrProposedOrDecidedDeps())
-                    Invariants.require(status.depsKnownUntilExecuteAt == saveStatus.known.deps().isKnownUntilExecuteAt(),
-                                       "%s (%s) and %s disagree on whether deps are known until executeAt", saveStatus, saveStatus.known.deps(), status);
+                if (status == null) Invariants.require(saveStatus.is(Status.NotDefined));
+                else
+                {
+                    Invariants.require(status.hasDeps == saveStatus.known.hasAnyDeps(), "%s (%s) and %s disagree on whether deps are known", saveStatus, saveStatus.known.deps(), status);
+                    Invariants.require(status.depsKnownUntilExecuteAt == saveStatus.known.deps().isKnownUntilExecuteAt(), "%s (%s) and %s disagree on whether deps are known until executeAt", saveStatus, saveStatus.known.deps(), status);
+                }
             }
 
             SummaryStatus[] summaryStatuses = SummaryStatus.values();

@@ -35,28 +35,19 @@ public class Writes
 {
     public final TxnId txnId;
     public final Timestamp executeAt;
-    /**
-     * The keys for which {@link #write} may carry data, i.e. the context against which {@link #write} is serialized.
-     * This is NOT necessarily the set of keys the transaction writes, as some (or all) of these writes may be
-     * derivable from the transaction definition (and so are not included in {@link #write}); a serialized Writes may
-     * include only those keys whose writes are not derivable. It MUST NOT be used to decide which keys to apply
-     * (see {@link #keysToApply}).
-     */
-    public final Seekables<?, ?> keys;
+    @Deprecated
+    public final Seekables<?, ?> keys; // maintained for wire-compatibility with cassandra-6.0-alpha2 only;
     @Nullable public final Write write;
 
     public Writes(TxnId txnId, Timestamp executeAt, Seekables<?, ?> keys, @Nullable Write write)
     {
+        Invariants.require(write != null || keys.isEmpty());
         this.txnId = txnId;
         this.executeAt = executeAt;
         this.keys = keys;
         this.write = write;
     }
 
-    /**
-     * NOTE: ignores {@link #keys}, which is only the context against which {@link #write} is serialized, and may
-     * legitimately differ between equivalent Writes (e.g. once serialized with only the keys whose writes are not derivable)
-     */
     @Override
     public boolean equals(Object o)
     {
@@ -72,27 +63,18 @@ public class Writes
         return Objects.hash(txnId, executeAt, write);
     }
 
-    /**
-     * The keys we must apply. NOTE: these are derived from our own definition of the transaction, NOT {@link #keys},
-     * which describes only the keys for which these Writes were computed. A replica that executes a multi key
-     * transaction itself computes Writes only for the keys it executes, but these Writes may then be propagated to
-     * (or recovered by) other replicas, whose keys they do not include. Since any write that is derivable from the
-     * transaction definition is not included in {@link #write}, every replica may apply its own keys given its
-     * (necessarily complete for the keys it executes) {@link PartialTxn}.
-     */
-    public Seekables<?, ?> keysToApply(@Nullable PartialTxn txn)
+    public Seekables<?, ?> appliesTo(@Nullable PartialTxn txn)
     {
         if (write == null)
-            return keys;
+            return Keys.EMPTY;
 
-        // we must know the definition to apply anything, as keys does not tell us which keys to apply
         Invariants.require(txn != null && txn.update() != null, "Cannot apply %s without the transaction definition", this);
         return txn.update().keys();
     }
 
-    public boolean appliesAny(@Nullable PartialTxn txn, Participants<?> executes)
+    public boolean appliesToAny(@Nullable PartialTxn txn, Participants<?> executes)
     {
-        return write != null && !executes.isEmpty() && keysToApply(txn).intersects(executes);
+        return write != null && !executes.isEmpty() && appliesTo(txn).intersects(executes);
     }
 
     public AsyncChain<Void> apply(SafeCommandStore safeStore, Participants<?> executes, PartialTxn txn)
@@ -115,7 +97,7 @@ public class Writes
         if (write == null || executes.isEmpty())
             return AsyncChains.success(null);
 
-        Seekables<?, ?> keys = keysToApply(txn).overlapping(executes);
+        Seekables<?, ?> keys = appliesTo(txn).overlapping(executes);
         int count = keys.size();
         switch (count)
         {

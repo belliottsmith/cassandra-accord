@@ -41,6 +41,7 @@ import accord.primitives.TxnId;
 import accord.topology.Topologies;
 
 import static accord.api.ProtocolModifiers.loadKeysAsyncIfPermitted;
+import static accord.local.Commands.MaybeExecuteAdapter.DEFER_REPLICA_EXECUTION;
 import static accord.messages.MessageType.StandardMessage.STABLE_THEN_READ_REQ;
 import static accord.messages.ReadData.CommitOrReadNack.Kind.InsufficientEpochs;
 import static accord.primitives.SaveStatus.ReadyToExecute;
@@ -90,7 +91,7 @@ public class StableThenRead extends ReadData
         Route<?> route = this.route == null ? (Route)scope : this.route;
         StoreParticipants participants = StoreParticipants.execute(safeStore, route, txnId, minEpoch(), executeAtEpoch);
         SafeCommand safeCommand = safeStore.get(txnId, participants);
-        CommitOutcome outcome = Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, Ballot.ZERO, txnId, route, partialTxn, executeAt, partialDeps, kind, true);
+        CommitOutcome outcome = Commands.commit(safeStore, safeCommand, participants, kind.saveStatus, Ballot.ZERO, txnId, route, partialTxn, executeAt, partialDeps, kind, DEFER_REPLICA_EXECUTION);
         if (outcome == CommitOutcome.Rejected)
         {
             cancel();

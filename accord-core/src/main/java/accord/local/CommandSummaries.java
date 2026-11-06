@@ -468,8 +468,8 @@ public interface CommandSummaries
                     case DepsProposedFixed:
                         executeAt = txnId;
                         break;
-                    case DepsProposedFromCoordinator:
                     case DepsProposed:
+                    case DepsProposedFromCoordinator:
                         if (txnId.compareTo(primaryTxnId) < 0)
                             ifRelevant = MAYBE_SUPERSEDING;
                         // cannot assume executeAt is txnId for DepsProposed when not sync point,

@@ -50,7 +50,6 @@ import static accord.primitives.Known.KnownDeps.DepsCommitted;
 import static accord.primitives.Known.KnownDeps.DepsErased;
 import static accord.primitives.Known.KnownDeps.DepsFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
-import static accord.primitives.Known.KnownDeps.DepsProposed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFixed;
 import static accord.primitives.Known.KnownDeps.DepsProposedFromCoordinator;
 import static accord.primitives.Known.KnownDeps.DepsUnknown;
@@ -212,7 +211,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
                 b = tmp;
             }
 
-            if (a.known.compareTo(DepsProposed) <= 0 || a.known == DepsProposedFromCoordinator)
+            if (a.known.compareTo(DepsProposedFromCoordinator) <= 0)
                 return merge.apply(a, b);
             // note that it is *not* necessarily guaranteed that stable deps will be the same - only that they will imply the same relations once filtered
             // so it is not safe to test equality of deps when merging two stable deps, as one might include additional TxnId that will not impact execution

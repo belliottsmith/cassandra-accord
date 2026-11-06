@@ -75,6 +75,7 @@ public enum SaveStatus
     Uninitialised                   ( 0, Status.NotDefined),
     NotDefined                      ( 1, Status.NotDefined),
     PreAccepted                     ( 2, Status.PreAccepted),
+    // the privileged coordinator's own preaccept
     PreAcceptedPrivCoord            (31, SaveStatus.PreAccepted), // identical to PreAccepted but for coordinator; no need to plumb through self node id to know if we're the coordinator
     PreAcceptedPrivCoordRecovery    (32, SaveStatus.PreAccepted), // identical to PreAccepted but for coordinator when ballot is non-zero; no need to query promised ballot
     PreAcceptedWithVote             ( 3, Status.PreAccepted,                                                                                                    VotePreAccept),
@@ -90,15 +91,13 @@ public enum SaveStatus
     AcceptedInvalidateWithDefinition( 6, Status.AcceptedInvalidate,     FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),
 
     // TODO (expected): enrich with whether the proposal is a re-proposal of the original coordinator's or a fast path recovery (this may help future optimisations)
+    // the txnId==executeAt medium path via TrackStable
     AcceptedMedium                  ( 7, Status.AcceptedMedium),
     AcceptedMediumWithDefinition    ( 8, Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown),
     AcceptedMediumWithDefAndVote    ( 9, Status.AcceptedMedium,         FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposedFixed,  Unknown,        VotePreAccept),
     AcceptedSlow                    (10, Status.AcceptedSlow),
     AcceptedSlowWithDefinition      (11, Status.AcceptedSlow,           FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposed,       Unknown),
-    // The original (privileged) coordinator's own proposal, whether via the medium or slow path (the privileged coordinator
-    // only permits us to take the medium path with one fewer response). We know we are the coordinator without plumbing
-    // through our node id, and that our proposed deps are complete until executeAt. We report AcceptedSlowWithDefinition
-    // to peers, as we may not have proposed executeAt == TxnId, so the equivalent knowledge is DepsProposed (not DepsProposedFixed).
+    // the privileged coordinator's own accept, allowing the coordinator optimisation to apply to the fast quorum medium path
     AcceptedPrivCoord               (34, SaveStatus.AcceptedSlowWithDefinition, DepsProposedFromCoordinator),
     AcceptedPrivCoordRecovery       (35, SaveStatus.AcceptedSlowWithDefinition, DepsProposedFromCoordinator), // identical to AcceptedPrivCoord, but promised a non-zero ballot
     AcceptedSlowWithDefAndVote      (12, Status.AcceptedSlow,           FullRoute,  DefinitionKnown,    ExecuteAtProposed,  DepsProposed,       Unknown,        VotePreAccept),

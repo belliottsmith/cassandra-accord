@@ -53,24 +53,24 @@ class WritesTest
         // our definition of the transaction, as a replica of keys 2 and 3
         PartialTxn ours = txn.intersecting(keys(2, 3).toParticipants(), true);
 
-        Assertions.assertThat(executedByOther.keysToApply(ours)).isEqualTo(keys(2, 3));
-        Assertions.assertThat(executedByOther.appliesAny(ours, keys(2).toParticipants())).isTrue();
-        Assertions.assertThat(executedByOther.appliesAny(ours, keys(3).toParticipants())).isTrue();
-        Assertions.assertThat(executedByOther.appliesAny(ours, keys(4).toParticipants())).isFalse();
+        Assertions.assertThat(executedByOther.appliesTo(ours)).isEqualTo(keys(2, 3));
+        Assertions.assertThat(executedByOther.appliesToAny(ours, keys(2).toParticipants())).isTrue();
+        Assertions.assertThat(executedByOther.appliesToAny(ours, keys(3).toParticipants())).isTrue();
+        Assertions.assertThat(executedByOther.appliesToAny(ours, keys(4).toParticipants())).isFalse();
 
         // previously, we used the keys for which the Writes were computed, and so would apply nothing
         Assertions.assertThat(executedByOther.keys.intersects(keys(2, 3).toParticipants())).isFalse();
 
         // Writes computed by the coordinator (for all keys) are applied for the same keys either way
         Writes executedByCoordinator = new Writes(txnId, txnId, keys(1, 2, 3), new ListWrite(null));
-        Assertions.assertThat(executedByCoordinator.keysToApply(ours).overlapping(keys(2, 3).toParticipants()))
+        Assertions.assertThat(executedByCoordinator.appliesTo(ours).overlapping(keys(2, 3).toParticipants()))
                   .isEqualTo(executedByCoordinator.keys.overlapping(keys(2, 3).toParticipants()));
 
         // Writes.keys may include only the keys whose writes are not derivable, so we refuse to apply without a definition
-        Assertions.assertThatThrownBy(() -> executedByOther.keysToApply(null)).isInstanceOf(IllegalStateException.class);
+        Assertions.assertThatThrownBy(() -> executedByOther.appliesTo(null)).isInstanceOf(IllegalStateException.class);
         // but there is nothing to apply if there is no write
         Writes noWrite = new Writes(txnId, txnId, keys(1), null);
-        Assertions.assertThat(noWrite.appliesAny(null, keys(1).toParticipants())).isFalse();
-        Assertions.assertThat(executedByOther.appliesAny(ours, Keys.EMPTY.toParticipants())).isFalse();
+        Assertions.assertThat(noWrite.appliesToAny(null, keys(1).toParticipants())).isFalse();
+        Assertions.assertThat(executedByOther.appliesToAny(ours, Keys.EMPTY.toParticipants())).isFalse();
     }
 }

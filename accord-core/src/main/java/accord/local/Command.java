@@ -1554,8 +1554,8 @@ public abstract class Command extends MinimalWithConcreteDeps
                     break;
                 case DepsFromCoordinator:
                 case DepsProposedFixed:
-                case DepsProposedFromCoordinator:
                 case DepsProposed:
+                case DepsProposedFromCoordinator:
                 case DepsCommitted:
                 case DepsKnown:
                     Invariants.require(deps != null);

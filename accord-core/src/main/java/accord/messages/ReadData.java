@@ -63,7 +63,6 @@ import static accord.api.ProgressLog.BlockedUntil.HasStableDeps;
 import static accord.api.ProtocolModifiers.dataStoreDetectsFutureReads;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.fastWritesMayBypassSafeStore;
-import static accord.api.ProtocolModifiers.mayExecuteAtReplica;
 import static accord.coordinate.ExecuteFlag.HAS_UNIQUE_HLC;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
@@ -147,7 +146,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
     private Data data;
     private long uniqueHlc;
     private long stamp;
-    transient IntHashSet waitingOn, reading;
+    transient IntHashSet waitingOn, reading, deferredReplicaExecution;
     transient int waitingOnCount;
     transient Ranges unavailable;
     transient Int2ObjectHashMap<LocalListeners.Registered> listeners = new Int2ObjectHashMap<>();
@@ -387,41 +386,27 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         }
     }
 
-    protected final StoreAction actionForStatus(SaveStatus status)
+    protected final StoreAction actionFor(Command command)
     {
+        SaveStatus saveStatus = command.saveStatus;
         ExecuteOn executeOn = executeOn();
-        if (status.compareTo(executeOn.min) < 0) return StoreAction.WAIT;
-        if (status.compareTo(executeOn.max) > 0) return StoreAction.OBSOLETE;
+        if (saveStatus.compareTo(executeOn.min) < 0) return StoreAction.WAIT;
+        if (saveStatus.compareTo(executeOn.max) > 0 && unsafeToExecute(command)) return StoreAction.OBSOLETE;
         return StoreAction.EXECUTE;
     }
 
-    /**
-     * As {@link #actionForStatus}, except that a write we would otherwise consider OBSOLETE because it has already been
-     * executed (e.g. by a replica executing it independently, before our read could execute) may still reply as though
-     * we read before it executed, if we have nothing to read: our reply is then fully determined by the command,
-     * whose executeAt retains any uniqueHlc that we would otherwise have reported. Replying Redundant in this case
-     * may otherwise fail the coordinator's execution (e.g. if no other replica can serve the read).
-     */
-    protected final StoreAction actionFor(Command command)
+    private boolean unsafeToExecute(Command command)
     {
-        StoreAction action = actionForStatus(command.saveStatus());
-        if (action == StoreAction.OBSOLETE && mayReplyAsIfReadBeforeExecution(command))
-            return StoreAction.EXECUTE;
-        return action;
-    }
+        if (!txnId.is(Write))
+            return true;
 
-    private boolean mayReplyAsIfReadBeforeExecution(Command command)
-    {
-        if (!txnId.is(Write) || executeOn().max != SaveStatus.ReadyToExecute)
-            return false;
-
-        // we must know the executeAt (and uniqueHlc) we executed with
+        // we must collect uniqueHlc
         if (!command.hasBeen(Status.PreApplied) || command.hasBeen(Status.Truncated))
-            return false;
+            return true;
 
         PartialTxn txn = partialTxn != null ? partialTxn : command.partialTxn();
         Participants<?> executes = command.participants().executes();
-        return txn != null && executes != null && !txn.read().keys().intersects(executes);
+        return txn == null || executes == null || txn.read().keys().intersects(executes);
     }
 
     @Override
@@ -444,7 +429,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             StoreAction action = actionFor(command);
             switch (action)
             {
-                default: throw new AssertionError("Unhandled Action: " + action);
+                default: throw new UnhandledEnum(action);
                 case WAIT:
                     if (flags.contains(NO_WAIT) && saveStatus.compareTo(SaveStatus.Stable) >= 0)
                     {
@@ -627,6 +612,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             }
         }
 
+        boolean restoreReplicaExecution;
         Registered cancelSelf;
         Cancellable clear;
         synchronized(this)
@@ -641,17 +627,17 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             int storeId = commandStore.id();
             cancelSelf = listeners.remove(storeId);
             clear = onOneSuccessInternal(storeId, unavailable);
+            restoreReplicaExecution = deferredReplicaExecution != null && this.deferredReplicaExecution.contains(commandStore.id());
         }
         if (cancelSelf != null)
             cancelSelf.cancel();
         cleanup(clear);
 
-        // we may have deferred replica execution on this store until we had read (see Commands#mustDeferReplicaExecution)
-        if (readsBeforeExecution() && mayExecuteAtReplica(txnId))
+        if (restoreReplicaExecution)
         {
             TxnId id = txnId;
             commandStore.execute(ExecutionContext.unsequenced(id, "Replica Execute After Read"),
-                                 (Consumer<SafeCommandStore>) safeStore -> Commands.maybeReplicaExecuteAfterRead(safeStore, id), commandStore.agent());
+                                 (Consumer<SafeCommandStore>) safeStore -> Commands.maybeReplicaExecute(safeStore, id), commandStore.agent());
         }
     }
 
@@ -736,21 +722,22 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         return this.state == State.PENDING;
     }
 
-    /**
-     * @return true iff we have yet to complete a read that must happen before the transaction executes
-     *         (so that replica execution must defer to us: see Commands#mustDeferReplicaExecution)
-     */
-    public boolean isPendingReadBeforeExecution()
+    // if we're waiting to read the command store, refuse replica execution until we complete, after which we can attempt to re-trigger the execution
+    public boolean deferReplicaExecution(CommandStore commandStore)
     {
-        return isPending() && readsBeforeExecution();
-    }
+        if (!isPending())
+            return false;
 
-    /**
-     * @return true iff we read a write transaction's keys before its writes are applied
-     */
-    private boolean readsBeforeExecution()
-    {
-        return txnId.is(Write) && executeOn().max.compareTo(SaveStatus.PreApplied) <= 0;
+        synchronized (this)
+        {
+            if (!waitingOn.contains(commandStore.id()))
+                return false;
+
+            if (deferredReplicaExecution == null)
+                deferredReplicaExecution = new IntHashSet();
+            deferredReplicaExecution.add(commandStore.id());
+            return true;
+        }
     }
 
     void cleanupWaitingOnExclusive(IntHashSet waitingOn)
