@@ -79,7 +79,7 @@ public class GetMaxConflict extends RouteRequest.WithUnsynced<GetMaxConflict.Get
     @Override
     public GetMaxConflictOk reduce(GetMaxConflictOk reply1, GetMaxConflictOk reply2)
     {
-        return new GetMaxConflictOk(Timestamp.max(reply1.maxConflict, reply2.maxConflict), Math.max(reply1.latestEpoch, reply2.latestEpoch));
+        return new GetMaxConflictOk(Timestamp.mergeMax(reply1.maxConflict, reply2.maxConflict), Math.max(reply1.latestEpoch, reply2.latestEpoch));
     }
 
     @Override

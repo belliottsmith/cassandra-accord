@@ -564,7 +564,7 @@ public class TopologyManager
                     {
                         if (abort = active.isEmpty())
                         {
-                            while (this.pending.minEpoch() <= pending.epoch)
+                            while (!this.pending.isEmpty() && this.pending.minEpoch() <= pending.epoch)
                                 this.pending.removeFirst(this.pending.minEpoch());
                             update = !this.pending.isEmpty() && this.pending.atIndex(0).topology() != null;
                         }

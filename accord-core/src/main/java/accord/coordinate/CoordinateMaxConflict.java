@@ -106,7 +106,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onSuccessInternal(Node.Id from, int fromIndex, GetMaxConflictOk reply)
     {
-        maxConflict = Timestamp.max(reply.maxConflict, maxConflict);
+        maxConflict = Timestamp.mergeMax(reply.maxConflict, maxConflict);
         executionEpoch = Math.max(executionEpoch, reply.latestEpoch);
 
         if (tracker.recordSuccess(from) == Success)

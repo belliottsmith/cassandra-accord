@@ -105,7 +105,7 @@ class PendingEpochs
     void remoteReadyToCoordinate(Node.Id node, long epoch)
     {
         Invariants.requireArgument(epoch > 0);
-        PendingEpoch pending = getOrCreateIfPermitted(epoch);
+        PendingEpoch pending = getIfExistsOrCreateIfPermitted(epoch);
         if (pending != null)
             pending.remoteReadyToCoordinate(node);
     }
@@ -116,7 +116,7 @@ class PendingEpochs
      */
     Ranges closed(Ranges ranges, long epoch)
     {
-        PendingEpoch pending = getOrCreateIfPermitted(epoch);
+        PendingEpoch pending = getIfExistsOrCreateIfPermitted(epoch);
         if (pending != null)
             return pending.closed(ranges);
         return ranges;
@@ -128,7 +128,7 @@ class PendingEpochs
      */
     Ranges retired(Ranges ranges, long epoch)
     {
-        PendingEpoch pending = getOrCreateIfPermitted(epoch);
+        PendingEpoch pending = getIfExistsOrCreateIfPermitted(epoch);
         if (pending != null)
             return pending.retired(ranges);
         return ranges;
@@ -149,6 +149,17 @@ class PendingEpochs
     long minEpoch()
     {
         return isEmpty() ? 0 : epochs[start].epoch;
+    }
+
+    /**
+     * As getOrCreateIfPermitted, but also returns an existing epoch that is no longer permitted because it is being
+     * activated, so that any state we record is copied to its ActiveEpoch on publication.
+     */
+    private PendingEpoch getIfExistsOrCreateIfPermitted(long epoch)
+    {
+        if (!isPermitted(epoch) && !isEmpty() && epoch >= minEpoch() && epoch <= maxEpoch())
+            return atIndex((int) (epoch - minEpoch()));
+        return getOrCreateIfPermitted(epoch);
     }
 
     PendingEpoch getOrCreateIfPermitted(long epoch)

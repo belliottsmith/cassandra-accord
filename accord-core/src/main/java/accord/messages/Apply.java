@@ -312,7 +312,8 @@ public class Apply extends RouteRequest<ApplyReply>
         @Override
         public boolean isFinal()
         {
-            return this != Insufficient;
+            // as with CommitOrReadNack, insufficient replies are not final so that the replica remains accounted for
+            return kind != Kind.Insufficient && kind != InsufficientEpochs;
         }
 
         public final long minEpoch()

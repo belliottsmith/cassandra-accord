@@ -91,7 +91,7 @@ public class Shard
         if (hardRemoved.size() >= maxFailures)
         {
             int healthy = rf - hardRemoved.size();
-            int absoluteMaxFailures = rf - (slowQuorumSize - 1); // cannot have more failures than this without breaking original quorum
+            int absoluteMaxFailures = slowQuorumSize - 1; // cannot have more failures than this without breaking original quorum
             int newMaxFailures = maxToleratedFailures(healthy) + hardRemoved.size(); // new 'healthy' quorum can support this many max failures
             // update maxFailures:
             //  - if we have hard removed more nodes than absoluteMaxFailures then we have broken our guarantees and want to make some progress with remaining nodes
