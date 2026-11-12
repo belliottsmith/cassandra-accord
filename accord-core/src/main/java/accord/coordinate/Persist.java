@@ -121,7 +121,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                 break;
             case Insufficient:
                 Invariants.expect(applyKind != Maximal, "Received Insufficient reply from %s, but already sent Maximal", from);
-                node.send(from, factory.create(Maximal, from, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)), tracing);
+                resend(from, factory.create(Maximal, from, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
                 break;
 
             case InsufficientEpochs:
@@ -129,7 +129,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                 Topologies topologies = tracker.topologies();
                 try { topologies = node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), ALL); }
                 catch (TopologyException e) { node.agent().onException(e); }
-                node.send(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)), tracing);
+                resend(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
                 break;
         }
     }

@@ -176,14 +176,12 @@ public class HomeDurableBeforeNoDriverTest
             assertTrue(o.anyReadyToExecute, "precondition: node 3 never reached ReadyToExecute: " + o);
             assertTrue(replica.topology().current().rangesForNode(id(3)).contains(o.route.homeKey()), "precondition: node 3 is not a home-shard replica");
 
-            // durability round from node 1: ExclusiveSyncPoint over all ranges, executed (applied at nodes 1,2) then SetShardDurable
+            // durability round from node 1: ExclusiveSyncPoint over all ranges, executed (applied at nodes 1,2);
+            // its execution reports the shard durable at a quorum, which reaches node 3 as SetShardDurable is not lost
             Ranges ranges = coordinator.topology().current().ranges();
             SyncPoint syncPoint = getUninterruptibly(CoordinateSyncPoint.exclusive(coordinator, ranges), 10, TimeUnit.SECONDS);
             ExecuteSyncPoint.DurabilityResults results = ExecuteSyncPoint.coordinate(coordinator, syncPoint, 1);
             getUninterruptibly(results.onDone(), 15, TimeUnit.SECONDS);
-            // report the shard durable at a quorum, as the durability round should
-            for (int i = 1 ; i <= 3 ; ++i)
-                coordinator.send(id(i), new SetShardDurable(syncPoint, accord.primitives.Status.Durability.HasOutcome.Quorum), null);
 
             Route<?> route = o.route;
             deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);

@@ -283,6 +283,42 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         node.send(to, send, tracing);
     }
 
+    /**
+     * Replace a request whose reply (e.g. a non-final nack) will not be followed by another, tracking the replacement's
+     * reply and cancelling the original callback so that it cannot report a timeout. Must be invoked on our executor.
+     */
+    void resend(Node.Id to, Request send)
+    {
+        int toIndex = nodes.find(to);
+        Invariants.require(toIndex >= 0, "%s", this);
+        if (permitLocalDelivery() && to.equals(node.id()))
+        {
+            // a local delivery has no callback we can cancel, so send one-way
+            node.send(to, send, tracing);
+            return;
+        }
+
+        // a final reply has already cleared any callback
+        if (expectingReply.get(toIndex))
+        {
+            Object cancel = replyState[toIndex];
+            if (cancel != null)
+                ((Cancellable) cancel).cancel();
+        }
+
+        expectingReply.set(toIndex);
+        boolean wasUnsafeToReply = unsafeToReply;
+        unsafeToReply = true;
+        try
+        {
+            replyState[toIndex] = node.send(to, send, executor, this, tracing);
+        }
+        finally
+        {
+            unsafeToReply = wasUnsafeToReply;
+        }
+    }
+
     @Override
     public final void onSuccess(Node.Id from, Reply reply)
     {

@@ -61,6 +61,8 @@ public class CleanupTest
     private static final TxnId TXN_ID = new TxnId(1, 100, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
     private static final Timestamp EXECUTE_AT = Timestamp.fromValues(1, 150, new Node.Id(1));
     private static final TxnId ABOVE = new TxnId(1, 200, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, Node.Id.NONE);
+    // GC point after TXN_ID but before EXECUTE_AT, so the data store's unique-HLC bound is satisfied by EXECUTE_AT
+    private static final TxnId GC_AFTER_TXN_BEFORE_EXECUTE_AT = new TxnId(1, 120, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, Node.Id.NONE);
 
     @Test
     public void mixedLogFaultRetainsTheRecord()
@@ -136,9 +138,40 @@ public class CleanupTest
         Assertions.assertThat(cleanup(FULL, redundantBefore, SaveStatus.Stable)).isEqualTo(Cleanup.NO);
     }
 
+    /**
+     * A write GC'd everywhere, except that the data store's unique HLCs require its record be retained (with its
+     * route) until its applyAt is GC'd too. FULL input with no participants has nothing to retain, so expunges.
+     * PARTIAL input without participants knows nothing about the participants of the full record, so must not
+     * decide any cleanup the full record might not (see CommandChangePartialCleanupTest).
+     */
+    @Test
+    public void partialInputIsNotMoreAggressiveThanFullForExpunge()
+    {
+        RedundantBefore redundantBefore = gcBounds();
+        DurableBefore durableBefore = DurableBefore.create(Ranges.of(LEFT, RIGHT), ABOVE, ABOVE);
+
+        // FULL: the record has no participants, so there is nothing left to answer for and it goes altogether
+        Assertions.assertThat(cleanup(FULL, null, redundantBefore, SaveStatus.Applied, Durability.Universal, durableBefore))
+                  .isEqualTo(Cleanup.EXPUNGE);
+
+        // PARTIAL: we cannot establish the above
+        Assertions.assertThat(cleanup(PARTIAL, null, redundantBefore, SaveStatus.Applied, Durability.Universal, durableBefore))
+                  .isEqualTo(Cleanup.NO);
+    }
+
     private static SomeStatus with(SomeStatus a, SomeStatus b)
     {
         return new SomeStatus(a.encoded | b.encoded);
+    }
+
+    /**
+     * GC bounds that satisfy the data store's unique-HLC requirement for {@link #EXECUTE_AT} without reaching the
+     * NONE/EXPUNGE summary bound, so that the expunge decision rests on the participants alone.
+     */
+    private static RedundantBefore gcBounds()
+    {
+        return RedundantBefore.merge(entry(LEFT, GC_BEFORE_AND_LOCALLY_DURABLE, GC_AFTER_TXN_BEFORE_EXECUTE_AT),
+                                     entry(RIGHT, GC_BEFORE_AND_LOCALLY_DURABLE, GC_AFTER_TXN_BEFORE_EXECUTE_AT));
     }
 
     private static RedundantBefore bounds(SomeStatus left, SomeStatus right)
@@ -148,14 +181,18 @@ public class CleanupTest
 
     private static RedundantBefore entry(Range range, SomeStatus status)
     {
+        return entry(range, status, ABOVE);
+    }
+
+    private static RedundantBefore entry(Range range, SomeStatus status, TxnId bound)
+    {
         // SomeStatus.NONE describes a range we own with nothing redundant, which must be represented -
         // an absent entry would be NOT_OWNED
         if (status == SomeStatus.NONE)
             return RedundantBefore.create(Ranges.of(range), TxnId.NONE, SomeStatus.NONE);
 
         // a GC_BEFORE bound must be a shard bound
-        TxnId bound = status.is(RedundantStatus.Property.GC_BEFORE) ? ABOVE.addFlag(Timestamp.Flag.SHARD_BOUND) : ABOVE;
-        return RedundantBefore.create(Ranges.of(range), bound, status);
+        return RedundantBefore.create(Ranges.of(range), status.is(RedundantStatus.Property.GC_BEFORE) ? bound.addFlag(Timestamp.Flag.SHARD_BOUND) : bound, status);
     }
 
     private static Cleanup cleanup(Cleanup.Input input, RedundantBefore redundantBefore, SaveStatus saveStatus)
@@ -165,6 +202,11 @@ public class CleanupTest
 
     private static Cleanup cleanup(Cleanup.Input input, RedundantBefore redundantBefore, SaveStatus saveStatus, Durability durability)
     {
-        return Cleanup.shouldCleanup(input, TXN_ID, EXECUTE_AT, saveStatus, durability, PARTICIPANTS, redundantBefore, DurableBefore.EMPTY);
+        return cleanup(input, PARTICIPANTS, redundantBefore, saveStatus, durability, DurableBefore.EMPTY);
+    }
+
+    private static Cleanup cleanup(Cleanup.Input input, StoreParticipants participants, RedundantBefore redundantBefore, SaveStatus saveStatus, Durability durability, DurableBefore durableBefore)
+    {
+        return Cleanup.shouldCleanup(input, TXN_ID, EXECUTE_AT, saveStatus, durability, participants, redundantBefore, durableBefore);
     }
 }

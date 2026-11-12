@@ -409,8 +409,12 @@ public enum Cleanup
         return EXPUNGE;
     }
 
+    /**
+     * PARTIAL input cannot show there is nothing left to answer for, and must never be cleaned up more aggressively
+     * than FULL input, so is retained.
+     */
     private static Cleanup expungeIfFull(Input input, TxnId txnId)
     {
-        return input.isPartial() ? TRUNCATE : EXPUNGE;
+        return input.isPartial() ? NO : EXPUNGE;
     }
 }

@@ -274,7 +274,7 @@ public class ExecuteSyncPoint extends AbstractCoordination<Route<Range>, Durabil
                 node.topology().onEpochRetired(scope.toRanges(), syncPoint.syncId);
                 node.send(tracker.topologies(), UNREADABLE, new SetShardDurable(syncPoint, Universal), tracing);
             }
-            else if (result.min.remote == SyncRemote.Quorum)
+            else if (result.min.remote.compareTo(SyncRemote.Quorum) >= 0)
             {
                 node.send(tracker.topologies(), UNREADABLE, new SetShardDurable(syncPoint, Quorum), tracing);
             }
