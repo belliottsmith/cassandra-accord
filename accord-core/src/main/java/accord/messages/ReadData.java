@@ -406,9 +406,20 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         if (!command.hasBeen(Status.PreApplied) || command.hasBeen(Status.Truncated))
             return true;
 
-        PartialTxn txn = partialTxn != null ? partialTxn : command.partialTxn();
+        PartialTxn txn = definition(command);
         Participants<?> executes = command.participants().executes();
         return txn == null || executes == null || txn.read().keys().intersects(executes);
+    }
+
+    /**
+     * Prefer the command's own definition: it incorporates any definition we were sent, whereas the definition we were
+     * sent may be only a slice (e.g. {@link Commit.WithTxn#HasNewlyOwnedTxnRanges}) containing none of the keys we read.
+     * The definition we were sent is only needed if the command has none.
+     */
+    private @Nullable PartialTxn definition(Command command)
+    {
+        PartialTxn txn = command.partialTxn();
+        return txn != null ? txn : partialTxn;
     }
 
     @Override
@@ -553,7 +564,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         // note: we DO NOT use stillExecutes() here, as we do not know what the remote replica requires
         StoreParticipants participants = command.participants();
         Participants<?> executes = nonNull(participants.executes());
-        PartialTxn read = partialTxn != null ? partialTxn : command.partialTxn();
+        PartialTxn read = definition(command);
         if (executes != participants.stillExecutes() && !txnId.isSystemTxn())
         {
             // if stillExecutes has been filtered, we may have also filtered

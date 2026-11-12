@@ -92,15 +92,9 @@ public class Pruning
             @Override
             public LoadingPruned insert(TxnId insert)
             {
-                TxnId[] witnessedBy = this.witnessedBy;
+                TxnId[] witnessedBy = witnessedBy(insert);
                 if (insert.is(UNSTABLE))
-                {
                     insert = insert.withoutNonIdentityFlags();
-                    // TODO (desired): this is a bit ugly - maybe we should save all prunedIds in byId by default?
-                    if (witnessedByUnstable == null)
-                        witnessedByUnstable = new TxnId[] { witnessedBy[0].addFlag(UNSTABLE) };
-                    witnessedBy = witnessedByUnstable;
-                }
                 inserted.add(insert);
                 return new LoadingPruned(insert, witnessedBy, isVisible);
             }
@@ -108,7 +102,19 @@ public class Pruning
             @Override
             public LoadingPruned merge(LoadingPruned replacing, TxnId update)
             {
-                return new LoadingPruned(update, SortedArrays.linearUnion(replacing.witnessedBy, witnessedBy, cachedTxnIds()), replacing.isVisible | isVisible);
+                return new LoadingPruned(replacing, SortedArrays.linearUnion(replacing.witnessedBy, witnessedBy(update), cachedTxnIds()), replacing.isVisible | isVisible);
+            }
+
+            // an UNSTABLE dependency is recorded as witnessed by an UNSTABLE witness
+            private TxnId[] witnessedBy(TxnId dep)
+            {
+                if (!dep.is(UNSTABLE))
+                    return witnessedBy;
+
+                // TODO (desired): this is a bit ugly - maybe we should save all prunedIds in byId by default?
+                if (witnessedByUnstable == null)
+                    witnessedByUnstable = new TxnId[] { witnessedBy[0].addFlag(UNSTABLE) };
+                return witnessedByUnstable;
             }
         }
 

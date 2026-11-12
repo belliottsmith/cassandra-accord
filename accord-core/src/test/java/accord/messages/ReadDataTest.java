@@ -100,8 +100,9 @@ class ReadDataTest
         TxnId txnId = node.nextTxnIdWithDefaultFlags(keys, Txn.Kind.Write, Key);
 
         AsyncResults.SettableResult<Data> readResult = new AsyncResults.SettableResult<>();
+        List<Object> readKeys = Collections.synchronizedList(new ArrayList<>());
 
-        Read read = mockRead(keys, readResult);
+        Read read = mockRead(keys, readResult, readKeys);
         Query query = Mockito.mock(Query.class);
         Update update = Mockito.mock(Update.class);
         Mockito.when(update.intersecting(any())).thenReturn(update);
@@ -110,22 +111,23 @@ class ReadDataTest
         Txn txn = new Txn.InMemory(keys, read, query, update);
         PartialTxn partialTxn = txn.intersecting(RANGES, true);
 
-        fn.accept(new State(node, sink, txnId, partialTxn, readResult));
+        fn.accept(new State(node, sink, txnId, txn, partialTxn, readResult, readKeys));
     }
 
-    private Read mockRead(Keys keys, AsyncResults.SettableResult<Data> readResult)
+    private Read mockRead(Keys keys, AsyncResults.SettableResult<Data> readResult, List<Object> readKeys)
     {
         Read read = Mockito.mock(Read.class);
-        Mockito.when(read.intersecting(any())).thenAnswer(i -> mockRead(keys.overlapping((Unseekables) i.getArgument(0)), readResult));
+        Mockito.when(read.intersecting(any())).thenAnswer(i -> mockRead(keys.overlapping((Unseekables) i.getArgument(0)), readResult, readKeys));
         Mockito.when(read.merge(any())).thenReturn(read);
         Mockito.when(read.keys()).thenReturn((Seekables)keys);
         Mockito.when(read.read(any(), any(), any())).thenAnswer(new Answer<AsyncChain<Data>>()
         {
             private final boolean called = false;
             @Override
-            public AsyncChain<Data> answer(InvocationOnMock ignore) throws Throwable
+            public AsyncChain<Data> answer(InvocationOnMock invocation) throws Throwable
             {
                 if (called) throw illegalState("Multiple calls");
+                readKeys.add(invocation.getArgument(1));
                 return readResult.chain();
             }
         });
@@ -219,6 +221,34 @@ class ReadDataTest
         });
     }
 
+    /**
+     * A StableFastPath commit sends only the slice of the txn for ranges the replica newly owns since txnId.epoch(),
+     * which may contain none of the keys it reads. The replica must read using its own (complete) definition,
+     * rather than reading nothing and replying ReadOk with no data.
+     */
+    @Test
+    public void stableFastPathWithSlicedDefinitionReadsAllKeys()
+    {
+        test(state -> {
+            state.forEach(store -> check(store.chain(ExecutionContext.unsequenced(state.txnId, "Test"), safe -> {
+                CheckedCommands.preaccept(safe, state.txnId, state.partialTxn, state.route);
+                CheckedCommands.accept(safe, state.txnId, Ballot.ZERO, state.partialRoute, state.executeAt, state.deps);
+            })));
+
+            // a slice containing none of the keys we read
+            PartialTxn sliced = state.txn.intersecting(Ranges.single(IntKey.range(50, 60)), true);
+            Assertions.assertThat(sliced.keys().isEmpty()).isTrue();
+
+            ReplyContext replyContext = Mockito.mock(ReplyContext.class);
+            StableThenRead read = StableThenRead.SerializerSupport.create(state.txnId, state.keys.toParticipants(), Commit.Kind.StableFastPath,
+                                                                          state.txnId.epoch(), state.executeAt, sliced, state.deps, state.route);
+            read.process(state.node, state.node.id(), replyContext);
+            state.readResult.setSuccess(Mockito.mock(Data.class));
+
+            Assertions.assertThat(state.readKeys).containsExactlyInAnyOrder(state.keys.get(0), state.keys.get(1));
+        });
+    }
+
     private static List<CommandStore> stores(State state)
     {
         List<CommandStore> stores = new ArrayList<>(2);
@@ -251,6 +281,7 @@ class ReadDataTest
         private final Node node;
         private final ReplySink sink;
         private final TxnId txnId;
+        private final Txn txn;
         private final PartialTxn partialTxn;
         private final Keys keys;
         private final RoutingKey key;
@@ -259,12 +290,14 @@ class ReadDataTest
         private final Timestamp executeAt;
         private final PartialDeps deps;
         private final AsyncResults.SettableResult<Data> readResult;
+        private final List<Object> readKeys;
 
-        State(Node node, ReplySink sink, TxnId txnId, PartialTxn partialTxn, AsyncResults.SettableResult<Data> readResult)
+        State(Node node, ReplySink sink, TxnId txnId, Txn txn, PartialTxn partialTxn, AsyncResults.SettableResult<Data> readResult, List<Object> readKeys)
         {
             this.node = node;
             this.sink = sink;
             this.txnId = txnId;
+            this.txn = txn;
             this.partialTxn = partialTxn;
             this.keys = (Keys) partialTxn.keys();
             this.key = keys.get(0).toUnseekable();
@@ -273,6 +306,7 @@ class ReadDataTest
             this.executeAt = txnId;
             this.deps = PartialDeps.builder(partialRoute, true).build();
             this.readResult = readResult;
+            this.readKeys = readKeys;
         }
 
         void readyToExecute(CommandStore store)

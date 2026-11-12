@@ -211,8 +211,11 @@ abstract class HomeState extends BaseTxnState
             {
                 if (tracing != null)
                     tracing.trace(safeStore.commandStore(), "DurableBefore records %s; terminating home state", min);
-                safeCommand.incidentalUpdate(command.updateDurability(command.durability().mergeMax(Durability.get(None, min, min, true))));
+                command = safeCommand.incidentalUpdate(command.updateDurability(command.durability().mergeMax(Durability.get(None, min, min, true))));
                 setHomeDone(owner);
+                // incidentalUpdate does not notify the progress log, so fetch the outcome here if we need it
+                owner.maybeFetch(safeStore, command, (TxnState) this);
+                maybeRemove(owner);
                 return;
             }
         }

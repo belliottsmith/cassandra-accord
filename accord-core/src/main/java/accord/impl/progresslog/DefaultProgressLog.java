@@ -348,7 +348,7 @@ public class DefaultProgressLog implements ProgressLog, Consumer<SafeCommandStor
         return state;
     }
 
-    private TxnState maybeFetch(SafeCommandStore safeStore, Command after, TxnState state)
+    TxnState maybeFetch(SafeCommandStore safeStore, Command after, TxnState state)
     {
         if (after.hasBeen(PreApplied))
             return state;

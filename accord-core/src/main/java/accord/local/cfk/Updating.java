@@ -373,12 +373,9 @@ class Updating
             {
                 if (plainTxnId.witnesses(d))
                 {
-                    if (d.is(UNSTABLE))
-                    {
-                        if (d.compareTo(depsKnownBefore) < 0 && (manages(d) || d.compareTo(prunedBefore) > 0))
-                            missing = append(missing, missingCount++, d, cachedTxnIds());
-                        d = d.withoutNonIdentityFlags();
-                    }
+                    // retain UNSTABLE so loadPruned may record it; it is removed from additions by removeNonIdentityFlags
+                    if (d.is(UNSTABLE) && d.compareTo(depsKnownBefore) < 0 && (manages(d) || d.compareTo(prunedBefore) > 0))
+                        missing = append(missing, missingCount++, d, cachedTxnIds());
                     additions = append(additions, additionCount++, d, cachedTxnIds());
                 }
                 else
@@ -399,12 +396,9 @@ class Updating
                 TxnId d = deps.cur();
                 if (plainTxnId.witnesses(d))
                 {
-                    if (d.is(UNSTABLE))
-                    {
-                        if (d.compareTo(depsKnownBefore) < 0 && (manages(d) || d.compareTo(prunedBefore) > 0))
-                            missing = append(missing, missingCount++, d, cachedTxnIds());
-                        d = d.withoutNonIdentityFlags();
-                    }
+                    // retain UNSTABLE so loadPruned may record it; it is removed from additions by removeNonIdentityFlags
+                    if (d.is(UNSTABLE) && d.compareTo(depsKnownBefore) < 0 && (manages(d) || d.compareTo(prunedBefore) > 0))
+                        missing = append(missing, missingCount++, d, cachedTxnIds());
                     additions = append(additions, additionCount++, d, cachedTxnIds());
                 }
                 deps.advance();

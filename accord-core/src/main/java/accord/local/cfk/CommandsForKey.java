@@ -1548,14 +1548,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             if (!txn.is(testKind)) continue;
             if (!txn.isManaged()) continue;
 
-            while (nextPruned != null && nextPruned.compareTo(txn) < 0)
-            {
-                if (nextPruned.isVisible && nextPruned.is(testKind))
-                    visitor.visit(p1, p2, NOT_DIRECTLY_WITNESSED, NotDurable, key, nextPruned.plainTxnId());
-
-                if (loadingPruned.hasNext()) nextPruned = loadingPruned.next();
-                else nextPruned = null;
-            }
+            nextPruned = visitLoadingPrunedBefore(txn, nextPruned, loadingPruned, testKind, visitor, p1, p2);
 
             switch (txn.status())
             {
@@ -1622,6 +1615,9 @@ public class CommandsForKey extends CommandsForKeyUpdate
             visitor.visit(p1, p2, txn.summaryStatus(), txn.durability(), key, txn.plainTxnId());
         }
 
+        // visit any remaining loadingPruned that were not reached by a matching byId entry above
+        visitLoadingPrunedBefore(startedBefore, nextPruned, loadingPruned, testKind, visitor, p1, p2);
+
         if (end <= prunedBeforeById)
         {
             // In the event we have pruned transactions that may execute before us, we take the earliest future dependency we can in their place.
@@ -1645,6 +1641,23 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
     }
 
+    /**
+     * Visit the visible {@code loadingPruned} entries before {@code before}, starting with {@code next}
+     * @return the first entry not visited, or null if none remain
+     */
+    private <P1, P2> LoadingPruned visitLoadingPrunedBefore(Timestamp before, @Nullable LoadingPruned next, Iterator<LoadingPruned> loadingPruned,
+                                                            Kinds testKind, ActiveCommandVisitor<P1, P2> visitor, P1 p1, P2 p2)
+    {
+        while (next != null && next.compareTo(before) < 0)
+        {
+            if (next.isVisible && next.is(testKind))
+                visitor.visit(p1, p2, NOT_DIRECTLY_WITNESSED, NotDurable, key, next.plainTxnId());
+
+            next = loadingPruned.hasNext() ? loadingPruned.next() : null;
+        }
+        return next;
+    }
+
     public boolean hasUniqueHlcAndIsReadyToExecute(TxnId txnId, Timestamp executeAt, Deps deps)
     {
         if (txnId.isWrite() && executeAt.hlc() <= maxUniqueHlc)
@@ -1654,7 +1667,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             executeAt = Timestamp.MAX;
 
         DepRelationList list = deps.keyDeps.txnIdsWithFlags(key);
-        int i = list.size() - 1, j = byId.length - 1;
+        int i = list.size() - 1, j = byId.length;
         i: while (i >= 0)
         {
             TxnId d = list.get(i);
