@@ -59,6 +59,7 @@ import accord.utils.async.Cancellable;
 
 import static accord.local.CommandSummaries.SummaryStatus.ACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.APPLIED;
+import static accord.local.CommandSummaries.SummaryStatus.COMMITTED;
 import static accord.local.CommandSummaries.SummaryStatus.NOT_DIRECTLY_WITNESSED;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.messages.BeginRecovery.RecoverReply.Kind.Ok;
@@ -255,6 +256,8 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
         return new RecoverOk(
         txnId, ok1.status, ok1.accepted, timestamp,
         deps, earlierWait, earlierNoWait, laterNoVote,
+        // a node's fast path vote is node-wide: PreAccept merges witnessedAt across our CommandStores into one reply, which the
+        // coordinator counts for every shard we replicate; so a reject for any shard was a reject for all, and we report it as such
         ok1.selfAcceptsFastPath & ok2.selfAcceptsFastPath,
         Participants.merge(ok1.coordinatorAcceptsFastPath, (Participants)ok2.coordinatorAcceptsFastPath),
         ok1.supersedingRejects | ok2.supersedingRejects,
@@ -389,8 +392,11 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                 {
                     default: throw new UnhandledEnum(dep);
                     case IS_PROPOSED_OR_STABLE_DEP:
+                        // TODO (expected): unlike NOT_ELIGIBLE, we do not report INVALIDATED as simpleNoWait; confirm whether we should
                         if (status == STABLE || status == APPLIED)
                             ensureSimpleNoWait().add(keyOrRange, testTxnId);
+                        else if ((status == ACCEPTED || status == COMMITTED) && testExecuteAt.compareTo(txnId) > 0)
+                            ensureSimpleWait().add(keyOrRange, testTxnId); // not yet stable, and may execute after us: wait for it to decide its deps
                         break;
 
                     case IS_NOT_PROPOSED_OR_STABLE_DEP:

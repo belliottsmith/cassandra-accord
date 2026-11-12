@@ -82,10 +82,10 @@ public enum SaveStatus
     PreAcceptedWithDeps             ( 4, Status.PreAccepted,            FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsFromCoordinator,    Unknown,    VotePreAccept),
     FastAcceptedPrivCoord           (33, SaveStatus.PreAccepted), // a special status for multi shard transactions using privileged coordinator optimisation
 
-    // note: this status means we have durably cleared any Accepted that may have been inflight, but we must retain DepsFromCoordinator for deciding if a fast path decision may have been taken
-    // note: AcceptedInvalidate(s), PreNotAccepted(s) and NotAccepted(s) clear any proposed Deps.
+    // note: AcceptedInvalidate(s) clear any proposed Deps and any DepsFromCoordinator.
     // This means voters recovering an earlier transaction will not consider the record when excluding the possibility of another transaction's fast-path commit.
-    // This is safe, because any Accept that may override the Pre/NotAccepted will construct new Deps that must now witness the recovering transaction.
+    // This is safe, because AcceptedInvalidate is only proposed once a quorum has promised and the proposer has ruled out a fast-path commit,
+    // and any Accept that may override it will construct new Deps that must now witness the recovering transaction.
 
     AcceptedInvalidate              ( 5, Status.AcceptedInvalidate),
     AcceptedInvalidateWithDefinition( 6, Status.AcceptedInvalidate,     FullRoute,  DefinitionKnown,    ExecuteAtUnknown,   DepsUnknown,        Unknown),

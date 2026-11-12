@@ -166,7 +166,7 @@ public class CoordinateSyncPoint<R> extends CoordinatePreAccept<R>
                 withFlags = txnId.addFlag(HLC_BOUND);
             Deps deps = Deps.merge(oks.valuesAsNullableList(), oks.domainSize(), List::get, ok -> ok.deps);
             node.agent().coordinatorEvents().onPreAccepted(txnId);
-            if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
+            if (hasMediumPathAccepted())
                 adapter.propose(node, executor, topologies, scope, Accept.Kind.MEDIUM, Ballot.ZERO, txnId, txn, withFlags, deps, finishAndTakeCallback());
             else
                 adapter.propose(node, executor, topologies, scope, Accept.Kind.SLOW, Ballot.ZERO, txnId, txn, txnId, deps, finishAndTakeCallback());

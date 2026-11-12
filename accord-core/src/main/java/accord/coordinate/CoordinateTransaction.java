@@ -123,7 +123,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
     void onPreAccepted(Topologies topologies, SortedListMap<Node.Id, PreAcceptOk> oks)
     {
         Timestamp executeAt = oks.foldlNonNullValues((ok, prev) -> mergeMaxAndFlags(ok.witnessedAt, prev), Timestamp.NONE);
-        if (executeAt.is(REJECTED) && !(topologies.size() == 1 && (tracker.hasFastPathAccepted() || tracker.hasMediumPathAccepted())))
+        if (executeAt.is(REJECTED) && !(topologies.size() == 1 && (tracker.hasFastPathAccepted() || hasMediumPathAccepted())))
         {
             // we special case having fast or medium path accepted with only the latest topology because this is compatible with
             // the behaviour on PreAccept that does not calculate Deps if we are a voting replica and mark REJECTED;
@@ -164,7 +164,7 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
                 return;
             }
         }
-        else if (tracker.hasMediumPathAccepted() && txnId.hasMediumPath())
+        else if (hasMediumPathAccepted())
         {
             Deps deps = mergeFastOrMediumDeps(oks);
             if (deps != null)

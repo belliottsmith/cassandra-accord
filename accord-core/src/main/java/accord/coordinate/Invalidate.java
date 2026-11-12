@@ -198,8 +198,8 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
                     Status witnessedByInvalidation = maxNotTruncated.maxKnowledgeStatus.status;
                     if (!witnessedByInvalidation.hasBeen(AcceptedMedium))
                     {
-                        Invariants.require(tracker.all(InvalidationShardTracker::isPromised));
-                        if (!scope.containsAll(fullRoute))
+                        // a shard may be final via a truncated decision without a promise, in which case we cannot relay what we witnessed
+                        if (!scope.containsAll(fullRoute) || !tracker.all(InvalidationShardTracker::isPromised))
                             witnessedByInvalidation = null;
                     }
                     PrepareRecovery.recover(node, executor, txnId, NotKnownToBeInvalid, fullRoute, witnessedByInvalidation, reportTo, finishAndTakeCallback());

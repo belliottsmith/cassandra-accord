@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 
 import accord.api.RoutingKey;
 import accord.impl.IntKey;
+import accord.local.Node;
 import accord.utils.AccordGens;
 
 import static accord.utils.Property.qt;
@@ -44,6 +45,31 @@ class DepsTest
             validateMaxTxnId(deps);
             validateIntersects(deps);
         });
+    }
+
+    @Test
+    void isStableDep()
+    {
+        TxnId dep = new TxnId(1, 10, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        TxnId absent = new TxnId(1, 20, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        TxnId later = new TxnId(1, 30, Txn.Kind.Write, Routable.Domain.Key, new Node.Id(1));
+        RoutingKey k1 = IntKey.routing(1), k2 = IntKey.routing(2);
+        Deps stable;
+        try (Deps.Builder builder = new Deps.Builder(true))
+        {
+            builder.add(k1, dep);
+            stable = builder.build();
+        }
+        Deps unstable = stable.markUnstableBefore(later);
+
+        assertThat(stable.isStableDep(dep, RoutingKeys.of(k1))).isTrue();
+        assertThat(stable.isStableDep(dep, RoutingKeys.of(k1, k2))).isFalse();
+        assertThat(stable.isStableDep(absent, RoutingKeys.of(k1))).isFalse();
+        assertThat(unstable.isStableDep(dep, RoutingKeys.of(k1))).isFalse();
+
+        // nothing to witness, so nothing to reject
+        assertThat(stable.isStableDep(absent, RoutingKeys.EMPTY)).isTrue();
+        assertThat(unstable.isStableDep(dep, RoutingKeys.EMPTY)).isTrue();
     }
 
     private static void validateEquals(Deps deps)

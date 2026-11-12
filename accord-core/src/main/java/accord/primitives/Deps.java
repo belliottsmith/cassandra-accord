@@ -327,6 +327,19 @@ public class Deps
         return !applyToIndex(index, KeyOrRangeDeps::txnIdWithFlags).is(UNSTABLE);
     }
 
+    /**
+     * @return true iff {@code txnId} is a stable dependency for all of {@code participants} (so true if there are none)
+     */
+    public boolean isStableDep(TxnId txnId, Unseekables<?> participants)
+    {
+        if (participants.isEmpty())
+            return true;
+
+        int index = indexOf(txnId);
+        // TODO (desired): don't construct participants
+        return index >= 0 && isStable(index) && participants(index).containsAll(participants);
+    }
+
     private <T> T applyToIndex(int index, IndexedFunction<KeyOrRangeDeps, T> apply)
     {
         int keyDepsLimit = keyDeps.txnIdCount();

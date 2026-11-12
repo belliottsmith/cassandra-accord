@@ -170,6 +170,12 @@ abstract class CoordinatePreAccept<T> extends AbstractCoordinatePreAccept<T, Pre
 
     abstract void onPreAccepted(Topologies topologies, SortedListMap<Id, PreAcceptOk> oks);
 
+    // the tracker counts medium path votes regardless of whether txnId permits the medium path
+    boolean hasMediumPathAccepted()
+    {
+        return txnId.hasMediumPath() && tracker.hasMediumPathAccepted();
+    }
+
     @Override
     public AbstractTracker<?> tracker()
     {

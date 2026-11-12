@@ -310,6 +310,7 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
             return updateDurability(safeStore, safeCommand, participants);
         }
 
+        Ballot defineAt = Ballot.ZERO;
         switch (propagate.status)
         {
             default: throw UnhandledEnum.invalid(propagate);
@@ -355,13 +356,20 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
                 if (!found.definition().isKnown())
                     break;
 
+                // precommit may have raised our promise, which would reject a Ballot.ZERO preaccept;
+                // executeAt is decided so this is not a vote, and we may define the command at our promise
+                Command precommitted = safeCommand.current();
+                if (precommitted.executeAt() != null)
+                    defineAt = precommitted.promised();
+
             case PreAccepted:
-                // only preaccept if we coordinate the transaction
+                // only define if we coordinate the transaction
                 if (safeStore.ranges().coordinates(txnId).intersects(scope) && Route.isFullRoute(scope))
                 {
                     if (tracing != null)
                         tracing.trace(safeStore.commandStore(), "Pre-accepting");
-                    Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false);
+                    if (defineAt.equals(Ballot.ZERO)) Commands.preaccept(safeStore, safeCommand, participants, txnId, partialTxn, null, false);
+                    else Commands.recover(safeStore, safeCommand, participants, txnId, partialTxn, defineAt);
                 }
                 break;
         }

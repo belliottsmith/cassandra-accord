@@ -21,6 +21,7 @@ package accord.local;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.NavigableMap;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 import javax.annotation.Nonnull;
@@ -429,7 +430,9 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
     {
         SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
         SaveStatus newSaveStatus = updated.saveStatus();
-        if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition().isKnown() && !force)
+        // a re-Accept may propose a later executeAt without changing status, so we must also compare executeAt
+        if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition().isKnown() && !force
+            && Objects.equals(prev.executeAt(), updated.executeAt()))
             return;
 
         TxnId txnId = updated.txnId();

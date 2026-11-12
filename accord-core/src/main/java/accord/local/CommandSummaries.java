@@ -363,7 +363,7 @@ public interface CommandSummaries
             if (cmd.participants == null)
                 return null;
 
-            return ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants.touches(), cmd, (c, find, intersecting) -> isDep(c.partialDeps(), find, intersecting));
+            return ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants.touches(), cmd, (c, find, intersecting) -> c.partialDeps().isStableDep(find, intersecting));
         }
 
         public final boolean isMaybeRelevant(TxnId txnId)
@@ -506,7 +506,7 @@ public interface CommandSummaries
 
         public final Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable PartialDeps partialDeps)
         {
-            return ifRelevant(txnId, executeAt, saveStatus, durability, touches, partialDeps, SummaryLoader::isDep);
+            return ifRelevant(txnId, executeAt, saveStatus, durability, touches, partialDeps, PartialDeps::isStableDep);
         }
 
         public final <P> Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable P deps, TriPredicate<P, TxnId, Unseekables<?>> depTester)
@@ -525,12 +525,12 @@ public interface CommandSummaries
 
         public final <P> Summary get(Relevance relevance, Command cmd)
         {
-            return get(relevance, cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants().stillTouches(), cmd.partialDeps(), SummaryLoader::isDep);
+            return get(relevance, cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants().stillTouches(), cmd.partialDeps(), PartialDeps::isStableDep);
         }
 
         public final <P> Summary get(Relevance relevance, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable PartialDeps partialDeps)
         {
-            return get(relevance, txnId, executeAt, saveStatus, durability, touches, partialDeps, SummaryLoader::isDep);
+            return get(relevance, txnId, executeAt, saveStatus, durability, touches, partialDeps, PartialDeps::isStableDep);
         }
 
         public final <P> Summary get(Relevance relevance, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable P deps, TriPredicate<P, TxnId, Unseekables<?>> depTester)
@@ -564,15 +564,6 @@ public interface CommandSummaries
                 case ACTIVE:
             }
             return construct(txnId, executeAt, saveStatus.summary, durability, isDep, relevance, touches);
-
-        }
-
-        private static boolean isDep(PartialDeps deps, TxnId find, Unseekables<?> intersecting)
-        {
-            int index = deps.indexOf(find);
-            // TODO (desired): don't construct participants, pass intersecting as parameter
-            return index >= 0 && deps.isStable(index)
-                   && deps.participants(index).containsAll(intersecting);
 
         }
 

@@ -132,6 +132,10 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
             if (!e.local.ranges.containsAll(routables) || !e.local.foldl(routables, this, true))
                 return Unoptimised;
 
+            // as merge, nor across multiple keys (which foldl does not reveal, as it visits each shard once)
+            if (routables.size() > 1)
+                return Unoptimised;
+
             return e.local.foldl(routables, (s, v, i) -> merge(v, s.bestFastPath()), null);
         }
 
@@ -173,7 +177,7 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
     }
 
-    static class SupportsPrivilegedFastPath extends TopologyCollector<Boolean, Routables<?>, Boolean, RuntimeException> implements IndexedBiFunction<Shard, Boolean, Boolean>
+    static class SupportsPrivilegedFastPath extends TopologyCollector<Boolean, Routables<?>, Boolean, RuntimeException> implements IndexedBiFunction<Shard, Integer, Integer>
     {
         final Node.Id self;
 
@@ -197,7 +201,13 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         @Override
         public Boolean one(ActiveEpoch e, Routables<?> routables)
         {
-            return e.local.ranges.containsAll(routables) && e.local.foldl(routables, this, true);
+            if (!e.local.ranges.containsAll(routables))
+                return false;
+
+            // the number of shards, or -1 if we are missing from the fast path of any
+            int shards = e.local.foldl(routables, this, 0);
+            // as BestFastPath, we cannot safely support fast decisions across multiple keys or local shards
+            return shards >= 0 && shards <= 1 && routables.size() <= 1;
         }
 
         @Override
@@ -225,9 +235,9 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
         }
 
         @Override
-        public Boolean apply(Shard shard, Boolean prev, int index)
+        public Integer apply(Shard shard, Integer count, int index)
         {
-            return prev && shard.isInFastPath(self);
+            return count < 0 || !shard.isInFastPath(self) ? -1 : count + 1;
         }
     }
 

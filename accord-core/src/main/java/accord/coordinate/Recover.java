@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 import accord.api.ExclusiveAsyncExecutor;
@@ -437,8 +438,10 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
 
         boolean coordinatorInRecoveryQuorum = oks.get(txnId.node) != null;
         Participants<?> extraCoordVotes = extraCoordinatorVotes(txnId, coordinatorInRecoveryQuorum, okList);
-        Participants<?> extraRejects = Deps.merge(okList, okList.size(), List::get, ok -> ok.supersedingCoordRejects)
-                                           .intersecting(scope, id -> !oks.containsKey(id.node));
+        // a later privileged coordinator that did not witness us implies a reject only if it is a fast path elector in our epoch
+        Deps supersedingCoordRejects = Deps.merge(okList, okList.size(), List::get, ok -> ok.supersedingCoordRejects);
+        Predicate<Shard> extraRejects = shard -> supersedingCoordRejects.intersecting(scope, id -> !oks.containsKey(id.node) && shard.isInFastPath(id.node))
+                                                                        .intersects(shard.range);
         InferredFastPath fastPath;
         if (txnId.hasPrivilegedCoordinator() && coordinatorInRecoveryQuorum) fastPath = Reject;
         else if (txnId.isSyncPoint()) fastPath = Reject;

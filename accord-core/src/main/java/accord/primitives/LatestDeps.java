@@ -195,8 +195,20 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
             this.coordinatedDeps = coordinatedDeps;
         }
 
+        /**
+         * The coordinatedDeps of {@code v1}, plus those of {@code v2} if it has DepsFromCoordinator, so that an entry of a
+         * higher phase (e.g. an interrupted recovery's DepsProposed) does not discard the original coordinator's deps.
+         * DepsProposedFixed deps are fixed by the medium path, a distinct path from the coordinator's, so are not merged.
+         */
+        static @Nullable Deps mergeCoordinatedDeps(AbstractEntry v1, AbstractEntry v2)
+        {
+            if (v2.known != DepsFromCoordinator || v2.coordinatedDeps == null || v1.known == DepsProposedFixed)
+                return v1.coordinatedDeps;
+            return v1.coordinatedDeps == null ? v2.coordinatedDeps : v1.coordinatedDeps.with(v2.coordinatedDeps);
+        }
+
         // merge's first parameter should be the one with higher phase or ballot (as appropriate);
-        // the second parameter will be used only for merging any localDeps
+        // the second parameter is used only for merging any localDeps, and coordinatedDeps if DepsFromCoordinator
         static <T extends AbstractEntry> T reduce(T a, T b, BiFunction<T, T, T> merge)
         {
             if (a.known == DepsErased || b.known == DepsErased)
@@ -204,6 +216,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
             int c = a.known.phase.compareTo(b.known.phase);
             if (c == 0 && a.known.phase.tieBreakWithBallot) c = a.ballot.compareTo(b.ballot);
+            if (c == 0) c = a.known.compareTo(b.known); // e.g. so DepsFromCoordinator supersedes DepsUnknown regardless of order
             if (c < 0)
             {
                 T tmp = a;
@@ -232,7 +245,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
         static LatestEntry reduce(LatestEntry a, LatestEntry b)
         {
-            return reduce(a, b, (v1, v2) -> new LatestEntry(v1.known, v1.ballot, v1.coordinatedDeps,
+            return reduce(a, b, (v1, v2) -> new LatestEntry(v1.known, v1.ballot, mergeCoordinatedDeps(v1, v2),
                                                             v1.localDeps == null ? v2.localDeps
                                                                                  : v2.localDeps == null ? v1.localDeps
                                                                                                         : v1.localDeps.with(v2.localDeps)));
@@ -397,7 +410,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
             static MergeEntry reduce(MergeEntry a, MergeEntry b)
             {
-                return reduce(a, b, (v1, v2) -> new MergeEntry(v1.known, v1.ballot, v1.coordinatedDeps,
+                return reduce(a, b, (v1, v2) -> new MergeEntry(v1.known, v1.ballot, mergeCoordinatedDeps(v1, v2),
                                                                ImmutableList.<Deps>builder().addAll(v1.merge).addAll(v2.merge).build()));
             }
         }

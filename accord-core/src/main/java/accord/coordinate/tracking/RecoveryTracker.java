@@ -18,6 +18,7 @@
 
 package accord.coordinate.tracking;
 
+import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 import accord.coordinate.Recover.InferredFastPath;
@@ -71,8 +72,8 @@ public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoverySha
         public boolean fastPathReliesOnUnwitnessedCoordinatorVote(TxnId recoverId, @Nullable Participants<?> selfCoordVotes)
         {
             int mustContainCoord = shard.fastQuorumSize(recoverId) + fastPathRejects + (selfCoordVotes == null || selfCoordVotes.intersects(shard.range) ? 0 : 1);
-            Invariants.require(mustContainCoord <= shard.nodes.size());
-            return mustContainCoord == shard.nodes.size();
+            Invariants.require(mustContainCoord <= shard.fastPathElectorateSize);
+            return mustContainCoord == shard.fastPathElectorateSize;
         }
     }
 
@@ -93,7 +94,10 @@ public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoverySha
         return recordResponse(this, from, RecoveryShardTracker::onFailure, from);
     }
 
-    public InferredFastPath inferFastPathDecision(TxnId txnId, @Nullable Participants<?> extraSelfVotes, @Nullable Participants<?> extraRejects)
+    /**
+     * @param extraRejects shards for which we may infer a fast path reject on behalf of some fast path elector that did not reply
+     */
+    public InferredFastPath inferFastPathDecision(TxnId txnId, @Nullable Participants<?> extraSelfVotes, @Nullable Predicate<Shard> extraRejects)
     {
         // a fast path decision must have recorded itself to a fast quorum in an earlier epoch
         // but the fast path votes may be taken from the proposal epoch only.
@@ -112,7 +116,7 @@ public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoverySha
                 extraAccept += delta;
                 extraReject += (1 - delta);
             }
-            if (extraRejects != null && extraRejects.intersects(shardTracker.shard.range))
+            if (extraRejects != null && extraRejects.test(shardTracker.shard))
                 extraReject++;
             if (shardTracker.shard.rejectsFastPath(txnId, shardTracker.fastPathRejects + extraReject))
                 return Reject;
