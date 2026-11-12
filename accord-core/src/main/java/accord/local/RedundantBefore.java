@@ -582,12 +582,26 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             return TxnId.nonNullOrMax(max, get.apply(bounds));
         }
 
+        /**
+         * A range stale until at least {@code txnId} must be bootstrapped again, after which {@code txnId} is
+         * pre-bootstrap; so, like pre-bootstrap transactions, {@code txnId} no longer touches the range.
+         */
+        boolean isStale(TxnId txnId)
+        {
+            return staleUntilAtLeast != null && txnId.compareTo(staleUntilAtLeast) <= 0;
+        }
+
+        private boolean isUnreadyOrStale(TxnId txnId)
+        {
+            return is(txnId, UNREADY) || isStale(txnId);
+        }
+
         static Participants<?> withoutLostAtExecutionOrUnready(Bounds bounds, @Nonnull Participants<?> execute, TxnId txnId, EpochSupplier executeAt)
         {
             if (bounds == null)
                 return execute;
 
-            if (bounds.endEpoch <= executeAt.epoch() || bounds.is(txnId, UNREADY))
+            if (bounds.endEpoch <= executeAt.epoch() || bounds.isUnreadyOrStale(txnId))
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;
@@ -598,7 +612,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (bounds == null)
                 return execute;
 
-            if (bounds.is(txnId, UNREADY) || bounds.isLocallyRetired())
+            if (bounds.isUnreadyOrStale(txnId) || bounds.isLocallyRetired())
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;
@@ -611,7 +625,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
 
             boolean outOfBounds = executeAt == null ? bounds.outOfBounds(txnId) : bounds.outOfBounds(txnId, executeAt);
             Invariants.expect(!outOfBounds, "Trying to apply withoutRedundantAnd_Unready to %s for a range we don't own (%s), suggesting we computed ownership without an up-to-date epoch", txnId, bounds);
-            if (outOfBounds || bounds.is(txnId, SHARD_APPLIED, UNREADY))
+            if (outOfBounds || (bounds.is(txnId, SHARD_APPLIED) && bounds.isUnreadyOrStale(txnId)))
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;
@@ -626,7 +640,7 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
             if (bounds.is(txnId, SHARD_APPLIED)
                 && ((bounds.endEpoch <= txnId.epoch() && bounds.isLocallyRetired())
                     || (executeAtIfKnown != null && executeAtIfKnown.epoch() < bounds.startEpoch)
-                    || bounds.is(txnId, UNREADY)))
+                    || bounds.isUnreadyOrStale(txnId)))
                 return execute.without(Ranges.of(bounds.range));
 
             return execute;

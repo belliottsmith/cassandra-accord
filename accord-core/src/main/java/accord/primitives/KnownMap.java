@@ -27,13 +27,11 @@ import javax.annotation.Nullable;
 import accord.api.RoutingKey;
 import accord.utils.ReducingRangeMap;
 
-import static accord.api.ProtocolModifiers.isRangeEndInclusive;
-import static accord.api.ProtocolModifiers.isRangeStartInclusive;
 import static accord.primitives.Known.Definition.DefinitionErased;
 import static accord.primitives.Known.Definition.DefinitionKnown;
 import static accord.primitives.Known.KnownDeps.DepsErased;
 import static accord.primitives.Known.KnownDeps.DepsKnown;
-import static accord.utils.SortedArrays.Search.FAST;
+import static accord.primitives.Routables.Slice.Minimal;
 
 public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
 {
@@ -286,49 +284,17 @@ public class KnownMap extends ReducingRangeMap<KnownMap.MinAndMaxKnown>
         return prev.reduce(bounds.max);
     }
 
-    // TODO (expected): test this
+    /**
+     * The participants of {@code expect} for which we have received a reply demonstrating at least {@code required}.
+     * Participants no reply covers only benefit from the knowledge that is valid for all participants.
+     */
     public Participants<?> knownFor(Known required, Participants<?> expect)
     {
-        return foldlWithBounds(expect, (known, prev, start, end) -> {
-            if (known == null || !required.isSatisfiedBy(known.max))
-            {
-                if (start != null && end != null)
-                    return prev.without(Ranges.of(start.rangeFactory().newAntiRange(start, end)));
+        if (required.isSatisfiedBy(validForAll))
+            return expect;
 
-                if (start == null && end == null)
-                    return prev.slice(0, 0);
-
-                if (start == null)
-                {
-                    int i = prev.find(end, FAST);
-                    if (i < 0)
-                        return prev.slice(-1 - i, prev.size());
-
-                    if (prev.domain() == Routable.Domain.Key)
-                        return prev.slice(i + (isRangeEndInclusive() ? 1 : 0), prev.size());
-
-                    Range r = prev.get(i).asRange();
-                    prev = prev.slice(i, prev.size());
-                    if (!r.end().equals(end))
-                        prev = prev.with((Participants)Ranges.of(r.newRange(r.end(), end)));
-                }
-                else
-                {
-                    int i = prev.find(start, FAST);
-                    if (i < 0)
-                        return prev.slice(0, -1 - i);
-
-                    if (prev.domain() == Routable.Domain.Key)
-                        return prev.slice(0, i + (isRangeStartInclusive() ? 0 : 1));
-
-                    Range r = prev.get(i).asRange();
-                    prev = prev.slice(0, i);
-                    if (!r.start().equals(start))
-                        prev = prev.with((Participants)Ranges.of(r.newRange(r.start(), start)));
-                }
-            }
-            return prev;
-        }, expect, i -> false);
+        // note: with(validForAll) has already merged validForAll into every value
+        return expect.slice(matchingRanges(known -> required.isSatisfiedBy(known.max)), Minimal);
     }
 
     public static class Builder extends AbstractBoundariesBuilder<RoutingKey, MinAndMaxKnown, KnownMap>

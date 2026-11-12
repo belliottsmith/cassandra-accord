@@ -79,7 +79,11 @@ public final class ActiveEpoch
         this.quorumReady = addedRanges;
     }
 
-    ActiveEpoch(Node.Id node, Topology all, SimpleBitSet shardQuorumReady, SimpleBitSet receivedNodeReady, QuorumTracker quorumReadyTracker, Ranges addedRanges, Ranges removedRanges, EpochReady epochReady, Ranges quorumReady, Ranges closed, Ranges retired)
+    /**
+     * Rebuild an epoch for a rewritten (e.g. hard removal adjusted) topology, replaying the ready reports received
+     * so far into a new tracker so readiness is judged against the new quorum.
+     */
+    ActiveEpoch(Node.Id node, Topology all, SimpleBitSet shardQuorumReady, SimpleBitSet receivedNodeReady, TopologySorter sorter, Ranges addedRanges, Ranges removedRanges, EpochReady epochReady, Ranges quorumReady, Ranges closed, Ranges retired)
     {
         this.self = node;
         this.all = Invariants.requireArgument(all, !all.isSubset());
@@ -87,13 +91,23 @@ public final class ActiveEpoch
         this.local = all.forNode(node).trim();
         this.shardQuorumReady = shardQuorumReady;
         this.receivedNodeReady = receivedNodeReady;
-        this.quorumReadyTracker = quorumReadyTracker;
+        this.quorumReadyTracker = all.isEmpty() ? null : new QuorumTracker(new Topologies.Single(sorter, all));
         this.addedRanges = addedRanges;
         this.removedRanges = removedRanges;
         this.epochReady = epochReady;
         this.quorumReady = quorumReady;
         this.closed = closed;
         this.retired = retired;
+        replayNodeReady();
+    }
+
+    private void replayNodeReady()
+    {
+        if (quorumReadyTracker == null)
+            return;
+
+        for (int i = receivedNodeReady.nextSetBit(0) ; i >= 0 ; i = receivedNodeReady.nextSetBit(i + 1))
+            recordReady(all.nodes.get(i));
     }
 
     boolean isQuorumReady()
@@ -144,6 +158,16 @@ public final class ActiveEpoch
             return false;
 
         receivedNodeReady.set(index);
+        recordReady(node);
+        return true;
+    }
+
+    private void recordReady(Node.Id node)
+    {
+        // the (smaller) quorum that now applies assumes hard removed replicas have failed, so their reports do not count
+        if (all.hardRemoved.contains(node))
+            return;
+
         if (quorumReadyTracker.recordSuccess(node) == Success)
         {
             quorumReady = all.ranges.mergeTouching();
@@ -160,7 +184,6 @@ public final class ActiveEpoch
                 }
             }
         }
-        return true;
     }
 
     // returns those ranges that weren't already closed, so that they can be propagated to lower epochs

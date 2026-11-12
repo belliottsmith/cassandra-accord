@@ -449,7 +449,7 @@ public class TopologyManager
                             Topology newGlobal = next[i].all.withHardRemoved(topology.hardRemoved, cache);
                             if (newGlobal != e.all)
                             {
-                                next[i] = new ActiveEpoch(node.id(), newGlobal, e.shardQuorumReady, e.receivedNodeReady, e.quorumReadyTracker,
+                                next[i] = new ActiveEpoch(node.id(), newGlobal, e.shardQuorumReady, e.receivedNodeReady, sorter.get(newGlobal),
                                                           e.addedRanges, e.removedRanges, e.epochReady(), e.quorumReady(), e.closed(), e.retired());
                             }
                         }

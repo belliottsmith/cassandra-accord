@@ -90,15 +90,7 @@ public class Shard
         this.privilegedWithDepsFastQuorumSize = Shorts.checkedCast(privilegedWithDepsFastQuorumSize(rf, fastPathElectorateSize, recoveryQuorumSize));
         if (hardRemoved.size() >= maxFailures)
         {
-            int healthy = rf - hardRemoved.size();
-            int absoluteMaxFailures = slowQuorumSize - 1; // cannot have more failures than this without breaking original quorum
-            int newMaxFailures = maxToleratedFailures(healthy) + hardRemoved.size(); // new 'healthy' quorum can support this many max failures
-            // update maxFailures:
-            //  - if we have hard removed more nodes than absoluteMaxFailures then we have broken our guarantees and want to make some progress with remaining nodes
-            //  - otherwise we take the minimum of:
-            //    - the number of failures supported by the new quorum
-            //    - or the maximum number of failures that would prevent quorums from intersecting with some quorum achieved prior to the hard removals
-            maxFailures = Shorts.checkedCast(Math.max(hardRemoved.size(), Math.min(absoluteMaxFailures, newMaxFailures)));
+            maxFailures = Shorts.checkedCast(maxFailures(rf, hardRemoved.size()));
             recoveryQuorumSize = slowQuorumSize = Shorts.checkedCast(rf - maxFailures);
         }
         this.slowQuorumSize = slowQuorumSize;
@@ -294,6 +286,26 @@ public class Shard
     {
         Invariants.requireArgument(electorate >= recoveryQuorum);
         return Math.max((d + electorate + rf - recoveryQuorum + 1)/2, (rf/2) + 1);
+    }
+
+    /**
+     * The number of failures a shard of {@code rf} replicas tolerates once {@code hardRemoved} of them have been hard
+     * removed (this includes the hard removed replicas themselves).
+     */
+    public static int maxFailures(int rf, int hardRemoved)
+    {
+        int maxFailures = maxToleratedFailures(rf);
+        if (hardRemoved < maxFailures)
+            return maxFailures;
+
+        int healthy = rf - hardRemoved;
+        int absoluteMaxFailures = slowQuorumSize(rf) - 1; // cannot have more failures than this without breaking original quorum
+        int newMaxFailures = maxToleratedFailures(healthy) + hardRemoved; // new 'healthy' quorum can support this many max failures
+        // - if we have hard removed more nodes than absoluteMaxFailures then we have broken our guarantees and want to make some progress with remaining nodes
+        // - otherwise we take the minimum of:
+        //   - the number of failures supported by the new quorum
+        //   - or the maximum number of failures that would prevent quorums from intersecting with some quorum achieved prior to the hard removals
+        return Math.max(hardRemoved, Math.min(absoluteMaxFailures, newMaxFailures));
     }
 
     @VisibleForImplementation

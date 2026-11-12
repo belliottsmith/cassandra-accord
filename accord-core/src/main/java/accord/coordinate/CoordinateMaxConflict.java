@@ -56,10 +56,10 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     Timestamp maxConflict;
     long executionEpoch;
 
-    private CoordinateMaxConflict(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, long executionEpoch, BiConsumer<? super Timestamp, Throwable> callback)
+    private CoordinateMaxConflict(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, long executionEpoch, Timestamp maxConflict, BiConsumer<? super Timestamp, Throwable> callback)
     {
         super(node, executor, topologies, route, TxnId.NONE, callback);
-        this.maxConflict = Timestamp.NONE;
+        this.maxConflict = maxConflict;
         this.executionEpoch = executionEpoch;
         this.tracker = new QuorumTracker(topologies);
     }
@@ -86,7 +86,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
             long epoch = active.maxEpoch(Long.MIN_VALUE, ActiveEpoch::all, keysOrRanges);
             FullRoute<?> route = node.computeRoute(epoch, keysOrRanges, active);
             Topologies topologies = active.withUnsyncedEpochs(route, epoch, epoch, ALL);
-            coordinate = new CoordinateMaxConflict(node, node.someExclusiveExecutor(), topologies, route, epoch, callback);
+            coordinate = new CoordinateMaxConflict(node, node.someExclusiveExecutor(), topologies, route, epoch, Timestamp.NONE, callback);
         }
         catch (Throwable t)
         {
@@ -136,7 +136,34 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onPreAccepted()
     {
+        if (executionEpoch > topologies.currentEpoch())
+        {
+            queryNewEpoch(executionEpoch);
+            return;
+        }
         finishWithSuccess(maxConflict);
+    }
+
+    /**
+     * A replica told us a newer epoch has been established. Any transaction we must respect may have been agreed by a
+     * quorum of a newer epoch that does not intersect the quorum of the epoch we queried, so query the quorums of every
+     * epoch in between too, carrying forward what we have found so far.
+     */
+    private void queryNewEpoch(long epoch)
+    {
+        BiConsumer<? super Timestamp, Throwable> callback = finishAndTakeCallback();
+        CoordinateMaxConflict coordinate;
+        try
+        {
+            Topologies next = node.topology().active().withUnsyncedEpochs(scope, topologies.currentEpoch() + 1, epoch, ALL);
+            coordinate = new CoordinateMaxConflict(node, executor, next, scope, epoch, maxConflict, callback);
+        }
+        catch (Throwable t)
+        {
+            callback.accept(null, t);
+            return;
+        }
+        coordinate.start();
     }
 
     @Nonnull

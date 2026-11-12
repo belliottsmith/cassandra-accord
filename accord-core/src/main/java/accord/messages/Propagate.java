@@ -259,6 +259,9 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
                 return null;
             }
 
+            // we may have marked some ranges stale, which the command no longer touches
+            participants = participants.filter(UPDATE, safeStore, txnId, executeAtIfKnown);
+
             if (command.known().is(DepsKnown))
             {
                 // keep the deps we already have
@@ -343,7 +346,12 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
             case Stable:
                 if (tracing != null)
                     tracing.trace(safeStore.commandStore(), "Committing as stable");
-                confirm(Commands.commit(safeStore, safeCommand, participants, Stable, acceptedOrCommitted, txnId, participants.route(), partialTxn, executeAtIfKnown, stableDeps, null));
+                if (!confirm(Commands.commit(safeStore, safeCommand, participants, Stable, acceptedOrCommitted, txnId, participants.route(), partialTxn, executeAtIfKnown, stableDeps, null)))
+                {
+                    // we could not commit locally, so report no progress; a later attempt will retry
+                    updateFetchResult(Nothing, participants.owns());
+                    return updateDurability(safeStore, safeCommand, participants);
+                }
                 break;
 
             case Committed:
@@ -498,6 +506,7 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
                 tracing.trace(safeStore.commandStore(), "Has participants %s that could not be fetched and the shard(s) have been marked universally durable. We have marked ourselves stale, and will apply the remaining ranges.", stale);
 
             safeStore.commandStore().markShardStale(safeStore, executeAtIfKnown == null ? txnId : executeAtIfKnown, stale.toRanges(), true);
+            // the command no longer touches the stale ranges, so we can apply the remaining ranges
             if (!stale.containsAll(stillTouches) || !stale.containsAll(stillOwnsOrMayExecute))
                 return required;
         }
@@ -549,14 +558,21 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
             tracing.trace(null, "Failed propagate: %s", failure);
     }
 
-    private static void confirm(Commands.CommitOutcome outcome)
+    /**
+     * @return true iff the commit was applied locally; otherwise the command is unchanged and must be retried
+     */
+    private static boolean confirm(Commands.CommitOutcome outcome)
     {
         switch (outcome)
         {
-            default: throw illegalState("Unknown outcome: " + outcome);
+            default: throw UnhandledEnum.invalid(outcome);
             case Redundant:
             case Success:
-                return;
+                return true;
+            case InsufficientEpochs:
+            case Rejected:
+                // retryable nacks, as Commit reports them
+                return false;
             case Insufficient: throw illegalState("Should have enough information");
         }
     }
