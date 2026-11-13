@@ -27,6 +27,7 @@ import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
 import accord.api.ExclusiveAsyncExecutor;
+import accord.api.ProtocolModifiers.Faults;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
@@ -440,7 +441,7 @@ public class Recover extends AbstractCoordination<FullRoute<?>, Outcome, Recover
         Participants<?> extraCoordVotes = extraCoordinatorVotes(txnId, coordinatorInRecoveryQuorum, okList);
         // a later privileged coordinator that did not witness us implies a reject only if it is a fast path elector in our epoch
         Deps supersedingCoordRejects = Deps.merge(okList, okList.size(), List::get, ok -> ok.supersedingCoordRejects);
-        Predicate<Shard> extraRejects = shard -> supersedingCoordRejects.intersecting(scope, id -> !oks.containsKey(id.node) && shard.isInFastPath(id.node))
+        Predicate<Shard> extraRejects = shard -> supersedingCoordRejects.intersecting(scope, id -> !oks.containsKey(id.node) && (Faults.recoverRejectsForNonElector || shard.isInFastPath(id.node)))
                                                                         .intersects(shard.range);
         InferredFastPath fastPath;
         if (txnId.hasPrivilegedCoordinator() && coordinatorInRecoveryQuorum) fastPath = Reject;

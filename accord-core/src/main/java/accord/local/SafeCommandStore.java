@@ -432,7 +432,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         SaveStatus newSaveStatus = updated.saveStatus();
         // a re-Accept may propose a later executeAt without changing status, so we must also compare executeAt
         if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition().isKnown() && !force
-            && Objects.equals(prev.executeAt(), updated.executeAt()))
+            && (ProtocolModifiers.Faults.reacceptKeepsMaxConflicts || Objects.equals(prev.executeAt(), updated.executeAt())))
             return;
 
         TxnId txnId = updated.txnId();

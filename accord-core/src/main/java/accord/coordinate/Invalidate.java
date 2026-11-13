@@ -21,6 +21,7 @@ package accord.coordinate;
 import java.util.function.BiConsumer;
 
 import accord.api.ExclusiveAsyncExecutor;
+import accord.api.ProtocolModifiers.Faults;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.InvalidationTracker;
 import accord.coordinate.tracking.InvalidationTracker.InvalidationShardTracker;
@@ -199,6 +200,8 @@ public class Invalidate extends AbstractCoordination<Participants<?>, Outcome, I
                     if (!witnessedByInvalidation.hasBeen(AcceptedMedium))
                     {
                         // a shard may be final via a truncated decision without a promise, in which case we cannot relay what we witnessed
+                        if (Faults.invalidateRequiresPromises)
+                            Invariants.require(tracker.all(InvalidationShardTracker::isPromised));
                         if (!scope.containsAll(fullRoute) || !tracker.all(InvalidationShardTracker::isPromised))
                             witnessedByInvalidation = null;
                     }

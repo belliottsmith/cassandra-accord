@@ -23,6 +23,7 @@ import java.util.function.BiConsumer;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.api.VisibleForImplementation;
 import accord.coordinate.tracking.AbstractTracker;
 import accord.coordinate.tracking.QuorumTracker;
@@ -106,7 +107,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onSuccessInternal(Node.Id from, int fromIndex, GetMaxConflictOk reply)
     {
-        maxConflict = Timestamp.mergeMax(reply.maxConflict, maxConflict);
+        maxConflict = Faults.maxConflictEpochMajorMerge ? Timestamp.max(reply.maxConflict, maxConflict) : Timestamp.mergeMax(reply.maxConflict, maxConflict);
         executionEpoch = Math.max(executionEpoch, reply.latestEpoch);
 
         if (tracker.recordSuccess(from) == Success)
@@ -136,7 +137,7 @@ public class CoordinateMaxConflict extends AbstractCoordinatePreAccept<Timestamp
     @Override
     void onPreAccepted()
     {
-        if (executionEpoch > topologies.currentEpoch())
+        if (executionEpoch > topologies.currentEpoch() && !Faults.maxConflictIgnoresNewerEpoch)
         {
             queryNewEpoch(executionEpoch);
             return;

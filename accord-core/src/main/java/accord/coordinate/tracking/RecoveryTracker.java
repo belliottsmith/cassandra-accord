@@ -21,6 +21,7 @@ package accord.coordinate.tracking;
 import java.util.function.Predicate;
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.coordinate.Recover.InferredFastPath;
 import accord.coordinate.tracking.QuorumTracker.AbstractQuorumShardTracker;
 import accord.local.Node;
@@ -72,8 +73,9 @@ public class RecoveryTracker extends AbstractTracker<RecoveryTracker.RecoverySha
         public boolean fastPathReliesOnUnwitnessedCoordinatorVote(TxnId recoverId, @Nullable Participants<?> selfCoordVotes)
         {
             int mustContainCoord = shard.fastQuorumSize(recoverId) + fastPathRejects + (selfCoordVotes == null || selfCoordVotes.intersects(shard.range) ? 0 : 1);
-            Invariants.require(mustContainCoord <= shard.fastPathElectorateSize);
-            return mustContainCoord == shard.fastPathElectorateSize;
+            int electorate = Faults.recoverCoordVoteWaitUsesRf ? shard.nodes.size() : shard.fastPathElectorateSize;
+            Invariants.require(mustContainCoord <= electorate);
+            return mustContainCoord == electorate;
         }
     }
 

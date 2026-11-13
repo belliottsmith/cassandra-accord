@@ -18,6 +18,7 @@
 
 package accord.topology;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.api.TopologySorter;
 import accord.local.Node;
 import accord.primitives.Routables;
@@ -207,7 +208,7 @@ abstract class TopologyCollector<C, K, T, E extends Exception>
             // the number of shards, or -1 if we are missing from the fast path of any
             int shards = e.local.foldl(routables, this, 0);
             // as BestFastPath, we cannot safely support fast decisions across multiple keys or local shards
-            return shards >= 0 && shards <= 1 && routables.size() <= 1;
+            return shards >= 0 && ((shards <= 1 && routables.size() <= 1) || Faults.privilegedMultiShard);
         }
 
         @Override

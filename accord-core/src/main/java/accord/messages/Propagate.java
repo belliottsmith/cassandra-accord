@@ -571,6 +571,8 @@ public class Propagate extends MapReduceConsumeCommandStores<Route<?>, Void>
                 return true;
             case InsufficientEpochs:
             case Rejected:
+                if (ProtocolModifiers.Faults.propagateThrowsOnRetryableCommit)
+                    throw illegalState("Unknown outcome: " + outcome);
                 // retryable nacks, as Commit reports them
                 return false;
             case Insufficient: throw illegalState("Should have enough information");

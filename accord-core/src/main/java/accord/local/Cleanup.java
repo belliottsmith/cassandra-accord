@@ -21,6 +21,7 @@ package accord.local;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.primitives.FullRoute;
 import accord.primitives.Participants;
 import accord.primitives.Route;
@@ -415,6 +416,6 @@ public enum Cleanup
      */
     private static Cleanup expungeIfFull(Input input, TxnId txnId)
     {
-        return input.isPartial() ? NO : EXPUNGE;
+        return input.isPartial() ? (Faults.partialCleanupTruncates ? TRUNCATE : NO) : EXPUNGE;
     }
 }

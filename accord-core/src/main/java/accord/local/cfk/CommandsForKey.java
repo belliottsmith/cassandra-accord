@@ -29,6 +29,7 @@ import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
 import accord.api.ViolationHandler;
 import accord.api.ViolationHandler.ViolationHandlerHolder;
@@ -1616,7 +1617,8 @@ public class CommandsForKey extends CommandsForKeyUpdate
         }
 
         // visit any remaining loadingPruned that were not reached by a matching byId entry above
-        visitLoadingPrunedBefore(startedBefore, nextPruned, loadingPruned, testKind, visitor, p1, p2);
+        if (!Faults.visitSkipsTrailingLoadingPruned)
+            visitLoadingPrunedBefore(startedBefore, nextPruned, loadingPruned, testKind, visitor, p1, p2);
 
         if (end <= prunedBeforeById)
         {
@@ -1667,7 +1669,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
             executeAt = Timestamp.MAX;
 
         DepRelationList list = deps.keyDeps.txnIdsWithFlags(key);
-        int i = list.size() - 1, j = byId.length;
+        int i = list.size() - 1, j = Faults.readyToExecuteSkipsNewest ? byId.length - 1 : byId.length;
         i: while (i >= 0)
         {
             TxnId d = list.get(i);

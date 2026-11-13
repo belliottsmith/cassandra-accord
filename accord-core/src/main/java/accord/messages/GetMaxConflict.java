@@ -20,6 +20,7 @@ package accord.messages;
 
 import javax.annotation.Nonnull;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.local.Node;
 import accord.local.SafeCommandStore;
 import accord.primitives.FullRoute;
@@ -79,7 +80,8 @@ public class GetMaxConflict extends RouteRequest.WithUnsynced<GetMaxConflict.Get
     @Override
     public GetMaxConflictOk reduce(GetMaxConflictOk reply1, GetMaxConflictOk reply2)
     {
-        return new GetMaxConflictOk(Timestamp.mergeMax(reply1.maxConflict, reply2.maxConflict), Math.max(reply1.latestEpoch, reply2.latestEpoch));
+        Timestamp maxConflict = Faults.maxConflictEpochMajorMerge ? Timestamp.max(reply1.maxConflict, reply2.maxConflict) : Timestamp.mergeMax(reply1.maxConflict, reply2.maxConflict);
+        return new GetMaxConflictOk(maxConflict, Math.max(reply1.latestEpoch, reply2.latestEpoch));
     }
 
     @Override

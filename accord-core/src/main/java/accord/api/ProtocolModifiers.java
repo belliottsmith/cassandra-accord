@@ -532,29 +532,94 @@ public class ProtocolModifiers
         static class Spec
         {
             // note that {txn,syncPoint}DiscardPreAcceptDeps faults expect filterDuplicateDependenciesFromAcceptReply to be off
-            final boolean txnInstability, txnDiscardPreAcceptDeps;
-            final boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
+            boolean txnInstability, txnDiscardPreAcceptDeps;
+            boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
 
-            Spec(boolean txnInstability, boolean txnDiscardPreAcceptDeps, boolean syncPointInstability, boolean syncPointDiscardPreAcceptDeps)
+            // the following reintroduce fixed bugs, to verify that a burn test detects them
+            // a re-Accept at a later executeAt without a status change does not raise maxConflicts
+            boolean reacceptKeepsMaxConflicts;
+            // recovery infers a fast path reject from a later privileged coordinator that is not a fast path elector in our epoch
+            boolean recoverRejectsForNonElector;
+            // recovery only waits on a later privileged coordinator's vote if the fast quorum includes every replica, not every elector
+            boolean recoverCoordVoteWaitUsesRf;
+            // LatestDeps keeps the left entry on a PreAccept-phase tie, so may drop DepsFromCoordinator depending on reply order
+            boolean latestDepsTieKeepsLeft;
+            // Invalidate requires a promise from every shard even when a shard is final only by virtue of a truncated decision
+            boolean invalidateRequiresPromises;
+            // max conflicts are merged using epoch-major Timestamp.max, so the highest hlc may be dropped
+            boolean maxConflictEpochMajorMerge;
+            // CoordinateMaxConflict does not query the quorums of a newer epoch reported by a replica
+            boolean maxConflictIgnoresNewerEpoch;
+            // Persist treats an InsufficientEpochs Apply reply as final and resends untracked, so stops accounting for the replica
+            boolean persistInsufficientEpochsIsFinal;
+            // TopologyManager drains retired pending epochs without checking PendingEpochs is non-empty
+            boolean retiredDrainIgnoresEmpty;
+            // CommandsForKey.hasUniqueHlcAndIsReadyToExecute never examines the newest byId entry
+            boolean readyToExecuteSkipsNewest;
+            // CommandsForKey.visit(startedBefore) omits visible loadingPruned entries not followed by a byId entry
+            boolean visitSkipsTrailingLoadingPruned;
+            // partial journal compaction may TRUNCATE (dropping the outcome) a record that full compaction would retain
+            boolean partialCleanupTruncates;
+            // Propagate throws on InsufficientEpochs or Rejected commit outcomes, rather than retrying
+            boolean propagateThrowsOnRetryableCommit;
+            // Node.nextTxnId(Txn, FastPath, MediumPath) grants a privileged coordinator fast path across multiple keys or local shards
+            boolean privilegedMultiShard;
+            // LatestDeps keeps only the coordinatedDeps of the entry that wins a reduction, dropping those of a DepsFromCoordinator entry
+            boolean latestDepsDropsCoordinatorDeps;
+            // BeginRecovery does not wait on an earlier, proposed but not stable, dependency that may execute after us
+            boolean recoverSkipsUnstableEarlierDep;
+
+            /**
+             * Enable the faults named (comma separated) in {@code accord.faults}
+             */
+            Spec()
             {
-                this.txnInstability = txnInstability;
-                this.txnDiscardPreAcceptDeps = txnDiscardPreAcceptDeps;
-                this.syncPointInstability = syncPointInstability;
-                this.syncPointDiscardPreAcceptDeps = syncPointDiscardPreAcceptDeps;
+                for (String name : System.getProperty("accord.faults", "").split(","))
+                {
+                    name = name.trim();
+                    if (name.isEmpty())
+                        continue;
+
+                    try { Spec.class.getDeclaredField(name).setBoolean(this, true); }
+                    catch (NoSuchFieldException | IllegalAccessException e) { throw new IllegalArgumentException("Unknown fault: " + name, e); }
+                }
             }
         }
 
         static
         {
-            Spec spec = new Spec(false, false, false, false);
+            Spec spec = new Spec();
             txnInstability = spec.txnInstability;
             txnDiscardPreAcceptDeps = spec.txnDiscardPreAcceptDeps;
             syncPointInstability = spec.syncPointInstability;
             syncPointDiscardPreAcceptDeps = spec.syncPointDiscardPreAcceptDeps;
+            reacceptKeepsMaxConflicts = spec.reacceptKeepsMaxConflicts;
+            recoverRejectsForNonElector = spec.recoverRejectsForNonElector;
+            recoverCoordVoteWaitUsesRf = spec.recoverCoordVoteWaitUsesRf;
+            latestDepsTieKeepsLeft = spec.latestDepsTieKeepsLeft;
+            invalidateRequiresPromises = spec.invalidateRequiresPromises;
+            maxConflictEpochMajorMerge = spec.maxConflictEpochMajorMerge;
+            maxConflictIgnoresNewerEpoch = spec.maxConflictIgnoresNewerEpoch;
+            persistInsufficientEpochsIsFinal = spec.persistInsufficientEpochsIsFinal;
+            retiredDrainIgnoresEmpty = spec.retiredDrainIgnoresEmpty;
+            readyToExecuteSkipsNewest = spec.readyToExecuteSkipsNewest;
+            visitSkipsTrailingLoadingPruned = spec.visitSkipsTrailingLoadingPruned;
+            partialCleanupTruncates = spec.partialCleanupTruncates;
+            propagateThrowsOnRetryableCommit = spec.propagateThrowsOnRetryableCommit;
+            privilegedMultiShard = spec.privilegedMultiShard;
+            latestDepsDropsCoordinatorDeps = spec.latestDepsDropsCoordinatorDeps;
+            recoverSkipsUnstableEarlierDep = spec.recoverSkipsUnstableEarlierDep;
         }
 
         public static final boolean txnInstability, txnDiscardPreAcceptDeps;
         public static final boolean syncPointInstability, syncPointDiscardPreAcceptDeps;
+        public static final boolean reacceptKeepsMaxConflicts, recoverRejectsForNonElector, recoverCoordVoteWaitUsesRf;
+        public static final boolean latestDepsTieKeepsLeft, invalidateRequiresPromises;
+        public static final boolean maxConflictEpochMajorMerge, maxConflictIgnoresNewerEpoch;
+        public static final boolean persistInsufficientEpochsIsFinal, retiredDrainIgnoresEmpty;
+        public static final boolean readyToExecuteSkipsNewest, visitSkipsTrailingLoadingPruned;
+        public static final boolean partialCleanupTruncates, propagateThrowsOnRetryableCommit, privilegedMultiShard;
+        public static final boolean latestDepsDropsCoordinatorDeps, recoverSkipsUnstableEarlierDep;
 
         public static boolean discardPreAcceptDeps(TxnId txnId)
         {

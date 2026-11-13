@@ -34,6 +34,7 @@ import accord.coordinate.tracking.SimpleTracker;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.api.ExclusiveAsyncExecutor;
+import accord.api.ProtocolModifiers.Faults;
 import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
 import accord.messages.InformDurable;
@@ -129,7 +130,9 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                 Topologies topologies = tracker.topologies();
                 try { topologies = node.topology().active().preciseEpochs(scope, reply.minEpoch(), tracker.topologies().currentEpoch(), ALL); }
                 catch (TopologyException e) { node.agent().onException(e); }
-                resend(from, factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from)));
+                Apply maximal = factory.create(Maximal, from, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(from));
+                if (Faults.persistInsufficientEpochsIsFinal) node.send(from, maximal, tracing);
+                else resend(from, maximal);
                 break;
         }
     }

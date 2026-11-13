@@ -33,6 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import accord.api.AsyncExecutor;
+import accord.api.ProtocolModifiers;
 import accord.api.TopologyListener;
 import accord.api.Timeouts;
 import accord.api.TopologyService;
@@ -564,7 +565,7 @@ public class TopologyManager
                     {
                         if (abort = active.isEmpty())
                         {
-                            while (!this.pending.isEmpty() && this.pending.minEpoch() <= pending.epoch)
+                            while ((ProtocolModifiers.Faults.retiredDrainIgnoresEmpty || !this.pending.isEmpty()) && this.pending.minEpoch() <= pending.epoch)
                                 this.pending.removeFirst(this.pending.minEpoch());
                             update = !this.pending.isEmpty() && this.pending.atIndex(0).topology() != null;
                         }

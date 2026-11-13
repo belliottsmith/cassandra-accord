@@ -32,6 +32,7 @@ import javax.annotation.Nullable;
 
 import com.google.common.collect.ImmutableList;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.api.RoutingKey;
 import accord.coordinate.CollectLatestDeps;
 import accord.coordinate.CoordinationAdapter;
@@ -202,7 +203,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
          */
         static @Nullable Deps mergeCoordinatedDeps(AbstractEntry v1, AbstractEntry v2)
         {
-            if (v2.known != DepsFromCoordinator || v2.coordinatedDeps == null || v1.known == DepsProposedFixed)
+            if (v2.known != DepsFromCoordinator || v2.coordinatedDeps == null || v1.known == DepsProposedFixed || Faults.latestDepsDropsCoordinatorDeps)
                 return v1.coordinatedDeps;
             return v1.coordinatedDeps == null ? v2.coordinatedDeps : v1.coordinatedDeps.with(v2.coordinatedDeps);
         }
@@ -216,7 +217,7 @@ public class LatestDeps extends ReducingRangeMap<LatestDeps.LatestEntry>
 
             int c = a.known.phase.compareTo(b.known.phase);
             if (c == 0 && a.known.phase.tieBreakWithBallot) c = a.ballot.compareTo(b.ballot);
-            if (c == 0) c = a.known.compareTo(b.known); // e.g. so DepsFromCoordinator supersedes DepsUnknown regardless of order
+            if (c == 0 && !Faults.latestDepsTieKeepsLeft) c = a.known.compareTo(b.known); // e.g. so DepsFromCoordinator supersedes DepsUnknown regardless of order
             if (c < 0)
             {
                 T tmp = a;

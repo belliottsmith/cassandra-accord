@@ -22,6 +22,7 @@ import java.util.Collection;
 
 import javax.annotation.Nullable;
 
+import accord.api.ProtocolModifiers.Faults;
 import accord.api.Result;
 import accord.local.Command;
 import accord.local.CommandSummaries;
@@ -395,7 +396,7 @@ public class BeginRecovery extends RouteRequest.WithUnsynced<BeginRecovery.Recov
                         // TODO (expected): unlike NOT_ELIGIBLE, we do not report INVALIDATED as simpleNoWait; confirm whether we should
                         if (status == STABLE || status == APPLIED)
                             ensureSimpleNoWait().add(keyOrRange, testTxnId);
-                        else if ((status == ACCEPTED || status == COMMITTED) && testExecuteAt.compareTo(txnId) > 0)
+                        else if ((status == ACCEPTED || status == COMMITTED) && testExecuteAt.compareTo(txnId) > 0 && !Faults.recoverSkipsUnstableEarlierDep)
                             ensureSimpleWait().add(keyOrRange, testTxnId); // not yet stable, and may execute after us: wait for it to decide its deps
                         break;
 
