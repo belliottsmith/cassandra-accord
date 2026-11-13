@@ -27,6 +27,7 @@ import javax.annotation.Nullable;
 
 import accord.impl.CommandChange;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.CommandStores.PreviouslyOwned;
 import accord.local.DurableBefore;
@@ -62,7 +63,17 @@ public interface Journal
     default List<? extends Supplier<CommandChange.Builder>> debugCommand(int commandStoreId, TxnId txnId) { throw new UnsupportedOperationException(); }
     MinimalCommand loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
     MinimalCommand.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore);
-    void saveCommand(int store, CommandUpdate value, Runnable onFlush);
+    void saveCommand(CommandStore store, CommandUpdate value, Runnable onFlush);
+
+    /**
+     * @return true iff every record written for {@code store} so far is durable
+     */
+    boolean isDurable(CommandStore store);
+
+    /**
+     * Invoke {@code onDurable} once every record written for {@code store} so far is durable (immediately if it is)
+     */
+    void onDurable(CommandStore store, Runnable onDurable);
 
     List<? extends TopologyUpdate> loadTopologies();
     // TODO (required): saveTopology should be synchronous, or we should at least await durability before updating in memory topology
@@ -73,7 +84,7 @@ public interface Journal
     NavigableMap<Timestamp, Ranges> loadSafeToRead(int store);
     CommandStores.RangesForEpoch loadRangesForEpoch(int store);
     Ranges loadPermanentlyUnsafeToRead(int store);
-    void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush);
+    void saveStoreState(CommandStore store, FieldUpdates fieldUpdates, Runnable onFlush);
 
     Persister<DurableBefore, DurableBefore> durableBeforePersister();
 

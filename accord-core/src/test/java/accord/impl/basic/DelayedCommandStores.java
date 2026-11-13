@@ -468,7 +468,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
 
                 Command before = safe.original();
                 Command after = safe.current();
-                commandStore.journal.saveCommand(commandStore.id(), new CommandUpdate(before, after), () -> {});
+                commandStore.journal.saveCommand(commandStore, new CommandUpdate(before, after), () -> {});
                 commandStore.onWrite(safe.current());
             });
             super.postExecute();
@@ -479,7 +479,7 @@ public class DelayedCommandStores extends InMemoryCommandStores.SingleThread
         {
             Journal.FieldUpdates fieldUpdates = fieldUpdates();
             if (fieldUpdates != null)
-                commandStore.journal.saveStoreState(commandStore.id(), fieldUpdates, () -> {});
+                commandStore.journal.saveStoreState(commandStore, fieldUpdates, () -> {});
             super.persistFieldUpdates();
         }
 

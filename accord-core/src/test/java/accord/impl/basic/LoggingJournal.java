@@ -29,6 +29,7 @@ import java.util.NavigableMap;
 
 import accord.api.Journal;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
 import accord.local.MinimalCommand;
@@ -106,9 +107,9 @@ public class LoggingJournal implements Journal
     }
 
     @Override
-    public void saveCommand(int store, CommandUpdate update, Runnable onFlush)
+    public void saveCommand(CommandStore store, CommandUpdate update, Runnable onFlush)
     {
-        log("%d: %s\n", store, update.after);
+        log("%d: %s\n", store.id(), update.after);
         delegate.saveCommand(store, update, onFlush);
     }
 
@@ -177,9 +178,21 @@ public class LoggingJournal implements Journal
         return delegate.durableBeforePersister();
     }
 
-    public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
+    public void saveStoreState(CommandStore store, FieldUpdates fieldUpdates, Runnable onFlush)
     {
-        log("%d: %s", store, fieldUpdates);
+        log("%d: %s", store.id(), fieldUpdates);
         delegate.saveStoreState(store, fieldUpdates, onFlush);
+    }
+
+    @Override
+    public boolean isDurable(CommandStore store)
+    {
+        return delegate.isDurable(store);
+    }
+
+    @Override
+    public void onDurable(CommandStore store, Runnable onDurable)
+    {
+        delegate.onDurable(store, onDurable);
     }
 }

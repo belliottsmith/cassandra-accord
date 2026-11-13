@@ -232,8 +232,9 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public void saveCommand(int commandStoreId, CommandUpdate update, Runnable onFlush)
+    public void saveCommand(CommandStore store, CommandUpdate update, Runnable onFlush)
     {
+        int commandStoreId = store.id();
         Diff diff;
         if ((diff = toDiff(update)) == null)
         {
@@ -248,6 +249,19 @@ public class InMemoryJournal implements Journal
 
         if (onFlush!= null)
             onFlush.run();
+    }
+
+    // every write runs its onFlush inline, so is durable once written
+    @Override
+    public boolean isDurable(CommandStore store)
+    {
+        return true;
+    }
+
+    @Override
+    public void onDurable(CommandStore store, Runnable onDurable)
+    {
+        onDurable.run();
     }
 
     @Override
@@ -333,8 +347,9 @@ public class InMemoryJournal implements Journal
     }
 
     @Override
-    public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)
+    public void saveStoreState(CommandStore commandStore, FieldUpdates fieldUpdates, Runnable onFlush)
     {
+        int store = commandStore.id();
         FieldUpdates fieldStates = this.fieldStates.computeIfAbsent(store, s -> {
             FieldUpdates init = new FieldUpdates();
             init.newRedundantBefore = RedundantBefore.EMPTY;

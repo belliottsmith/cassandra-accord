@@ -53,6 +53,7 @@ import accord.impl.progresslog.DefaultProgressLogs;
 import accord.impl.DefaultRemoteListeners;
 import accord.impl.SizeOfIntersectionSorter;
 import accord.local.Command;
+import accord.local.CommandStore;
 import accord.local.CommandStores;
 import accord.local.DurableBefore;
 import accord.local.MinimalCommand;
@@ -394,7 +395,9 @@ public class Cluster implements Scheduler
         @Override public Command loadCommand(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
         @Override public MinimalCommand loadMinimal(int commandStoreId, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
         @Override public MinimalCommand.MinimalWithDeps loadMinimalWithDeps(int store, TxnId txnId, RedundantBefore redundantBefore, DurableBefore durableBefore) { throw new IllegalStateException("Not impelemented"); }
-        @Override public void saveCommand(int store, CommandUpdate value, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
+        @Override public void saveCommand(CommandStore store, CommandUpdate value, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
+        @Override public boolean isDurable(CommandStore store) { return true; } // writes nothing
+        @Override public void onDurable(CommandStore store, Runnable onDurable) { onDurable.run(); }
         @Override public List<TopologyUpdate> loadTopologies() { throw new IllegalStateException("Not impelemented"); }
         @Override public void saveTopology(TopologyUpdate topologyUpdate, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
         @Override public void purge(CommandStores commandStores, EpochSupplier minEpoch)  { throw new IllegalStateException("Not impelemented"); }
@@ -405,6 +408,6 @@ public class Cluster implements Scheduler
         @Override public CommandStores.RangesForEpoch loadRangesForEpoch(int store) { throw new IllegalStateException("Not impelemented"); }
         @Override public Ranges loadPermanentlyUnsafeToRead(int store) { throw new IllegalStateException("Not implemented"); }
         @Override public PersistentField.Persister<DurableBefore, DurableBefore> durableBeforePersister() { throw new IllegalStateException("Not impelemented"); }
-        @Override public void saveStoreState(int store, FieldUpdates fieldUpdates, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
+        @Override public void saveStoreState(CommandStore store, FieldUpdates fieldUpdates, Runnable onFlush)  { throw new IllegalStateException("Not impelemented"); }
     }
 }
