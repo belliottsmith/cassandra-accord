@@ -31,6 +31,7 @@ import org.assertj.core.api.Assertions;
 
 import static accord.utils.Property.qt;
 
+@SlowTest
 class SearchableRangeListTest
 {
     @Test

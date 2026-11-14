@@ -33,10 +33,12 @@ import org.junit.jupiter.api.Test;
 import accord.impl.IntKey;
 import accord.local.Node;
 import accord.primitives.Routable.Domain;
+import accord.utils.SlowTest;
 
 import static accord.primitives.Txn.Kind.Write;
 import static org.assertj.core.api.Assertions.assertThat;
 
+@SlowTest
 public class RangeDepsTest
 {
     static class GenerateRanges

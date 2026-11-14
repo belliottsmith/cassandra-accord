@@ -56,6 +56,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.topology.Shard;
 import accord.topology.Topology;
+import accord.utils.IsolatedJvmTest;
 import accord.utils.QueueScheduler;
 import accord.utils.RandomSource;
 import accord.utils.RandomTestRunner;
@@ -75,6 +76,8 @@ import static accord.local.durability.DurabilityService.SyncLocal.Self;
 import static accord.local.durability.DurabilityService.SyncReadable.UnknownReadable;
 import static accord.primitives.Routables.Slice.Minimal;
 
+// uses BurnTestBase, which configures ProtocolModifiers
+@IsolatedJvmTest
 public class DurabilityQueueTest
 {
     static class Submission

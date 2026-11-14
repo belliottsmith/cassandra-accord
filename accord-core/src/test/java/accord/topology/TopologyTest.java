@@ -175,7 +175,8 @@ public class TopologyTest
                 {
                     assertThat(subset.forNode(node))
                     .isEqualTo(trimmed.forNode(node))
-                    .isRangesEqualTo(subset.rangesForNode(node))
+                    // rangesForNode is shared with the superset topology, so restrict it to the subset
+                    .isRangesEqualTo(subset.rangesForNode(node).overlapping(subset.ranges()))
                     .isRangesEqualTo(trimmed.rangesForNode(node));
                 }
             }
@@ -187,7 +188,8 @@ public class TopologyTest
         for (Node.Id node : topology.nodes())
         {
             Topology subset = topology.forNode(node);
-            assertThat(subset).isRangesEqualTo(topology.rangesForNode(node));
+            // rangesForNode is shared with any superset topology, so restrict it to this topology
+            assertThat(subset).isRangesEqualTo(topology.rangesForNode(node).overlapping(topology.ranges()));
 
             assertThat(topology.mapReduceOn(node, 0, (p1, p2, p3, idx) -> System.identityHashCode(topology.get(idx)), 0, 0, 0, Integer::sum, 0))
                     .isEqualTo(subset.shards().stream().mapToInt(System::identityHashCode).sum())

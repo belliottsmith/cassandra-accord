@@ -150,6 +150,63 @@ task allTestJar(type: Jar) {
     with jar
 }
 
-test {
+// Test selection (comma separated lists), e.g.
+//   ./gradlew :accord-core:test -PexcludeTags=slow
+//   ./gradlew :accord-core:test -PexcludeTests='*FuzzTest,accord.burn.*'
+//   ./gradlew :accord-core:quickTest                 // test, excluding @SlowTest
+// Long-running, rarely touched tests are marked @accord.utils.SlowTest (tag "slow").
+//
+// Tests that configure ProtocolModifiers (fixed per JVM on first use) are marked @accord.utils.IsolatedJvmTest
+// (tag "isolated-jvm") and run by isolatedJvmTest, which forks a JVM per class and finalizes test/quickTest.
+// If --tests is given they instead run in the selected task, so select them individually.
+def csvProperty = { String name ->
+    project.hasProperty(name) ? project.property(name).toString().split(',').collect { it.trim() }.findAll { !it.isEmpty() } : []
+}
+def commandLineTestFilter = gradle.startParameter.taskNames.any { it == '--tests' || it.startsWith('--tests=') }
+
+tasks.withType(Test).configureEach {
     maxHeapSize = '4g'
+    useJUnitPlatform {
+        includeTags(*csvProperty('includeTags'))
+        excludeTags(*csvProperty('excludeTags'))
+    }
+    filter {
+        csvProperty('excludeTests').each { excludeTestsMatching it }
+    }
+}
+
+def isolatedJvmTest = tasks.register('isolatedJvmTest', Test) {
+    description = 'Runs the tests that require their own JVM (see @accord.utils.IsolatedJvmTest).'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    forkEvery = 1
+    useJUnitPlatform {
+        includeTags 'isolated-jvm'
+    }
+}
+
+def sharedJvmTests = { Test task ->
+    if (!commandLineTestFilter)
+    {
+        task.useJUnitPlatform {
+            excludeTags 'isolated-jvm'
+        }
+        task.finalizedBy isolatedJvmTest
+    }
+}
+
+tasks.named('test', Test) {
+    sharedJvmTests(it)
+}
+
+tasks.register('quickTest', Test) {
+    description = 'Runs the tests, excluding those tagged "slow" (see @accord.utils.SlowTest).'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        excludeTags 'slow'
+    }
+    sharedJvmTests(it)
 }

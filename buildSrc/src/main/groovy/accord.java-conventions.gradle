@@ -39,7 +39,7 @@ checkstyle {
   configDirectory = file("${rootProject.projectDir}/.build/checkstyle")
 }
 
-test {
+tasks.withType(Test).configureEach {
     useJUnitPlatform()
     // Use max(cpu/2, 1) workers to run tests
     // see https://docs.gradle.org/current/userguide/performance.html

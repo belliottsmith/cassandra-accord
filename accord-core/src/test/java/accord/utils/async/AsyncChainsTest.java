@@ -39,7 +39,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import static accord.utils.Invariants.illegalState;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class AsyncChainsTest
 {
@@ -315,10 +314,28 @@ public class AsyncChainsTest
             assertWillSeeFailure(start.get().map(i -> i.toString()).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
             assertWillSeeFailure(start.get().flatMap(i -> AsyncChains.success(i)).flatMap(ignore -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
 
-            assertThatThrownBy(() -> start.get().begin((s, f) -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
-            assertThatThrownBy(() -> start.get().map(i -> i.toString()).begin((s, f) -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
-            assertThatThrownBy(() -> start.get().flatMap(i -> AsyncChains.success(i)).begin((s, f) -> {throw new UserFailure();})).isInstanceOf(UserFailure.class);
+            assertTerminalFailureSurfaces(() -> start.get().begin((s, f) -> {throw new UserFailure();}));
+            assertTerminalFailureSurfaces(() -> start.get().map(i -> i.toString()).begin((s, f) -> {throw new UserFailure();}));
+            assertTerminalFailureSurfaces(() -> start.get().flatMap(i -> AsyncChains.success(i)).begin((s, f) -> {throw new UserFailure();}));
         }
+    }
+
+    /**
+     * A throwing terminal callback must not be swallowed: it either propagates to the caller, or (when invoked
+     * as an {@link AsyncResult} listener, which is exception safe) is reported to the uncaught exception handler.
+     */
+    private static void assertTerminalFailureSurfaces(Runnable begin)
+    {
+        Thread thread = Thread.currentThread();
+        Thread.UncaughtExceptionHandler old = thread.getUncaughtExceptionHandler();
+        AtomicReference<Throwable> reported = new AtomicReference<>();
+        Throwable thrown = null;
+        thread.setUncaughtExceptionHandler((ignore, failure) -> reported.set(failure));
+        try { begin.run(); }
+        catch (Throwable t) { thrown = t; }
+        finally { thread.setUncaughtExceptionHandler(old); }
+
+        org.assertj.core.api.Assertions.assertThat(thrown != null ? thrown : reported.get()).isInstanceOf(UserFailure.class);
     }
 
     private static class UserFailure extends RuntimeException

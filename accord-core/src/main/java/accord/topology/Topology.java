@@ -326,6 +326,12 @@ public class Topology
             return Topology.EMPTY.withEpoch(epoch);
 
         SortedArrayList<Id> nodeIds = new SortedArrayList<>(new Id[] { node });
+        if (isSubset())
+        {
+            // nodeLookup is shared with the superset, so restrict the node's shards to those in this subset
+            NodeInfo subsetInfo = info.forSubset(supersetIndexes);
+            return new Topology(global(), epoch, shards, ranges, removed, hardRemoved, stale, nodeIds, nodeLookup, subsetInfo.ranges, subsetInfo.supersetIndexes);
+        }
         return new Topology(global(), epoch, shards, ranges, removed, hardRemoved, stale, nodeIds, nodeLookup, info.ranges, info.supersetIndexes);
     }
 

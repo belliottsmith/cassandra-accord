@@ -101,7 +101,8 @@ class CoordinateSyncPointTest
 
     private static TxnId awaitApplied(Node node, Range removed)
     {
-        var await = CoordinateSyncPoint.exclusive(node, new TxnId(1, node.now(), 0, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
+        // the mock clock does not advance, so use a unique hlc to avoid re-coordinating an already applied sync point
+        var await = CoordinateSyncPoint.exclusive(node, new TxnId(1, node.uniqueNow(), 0, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, node.id()), Ranges.single(removed))
                                        .flatMap(syncPoint ->
                                                         // the test uses an executor that runs everything right away, so this gets called outside the CommandStore
                                                {

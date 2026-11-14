@@ -30,6 +30,7 @@ import accord.utils.SortedArrays.SortedArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@SlowTest
 public class SortedListSetTest
 {
     @Test

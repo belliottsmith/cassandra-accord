@@ -19,36 +19,25 @@
 
 package accord.local.durability;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 
 import accord.local.Node;
+import accord.messages.Request;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 // this file was authored by LLM
 class GlobalDurabilityTest
 {
-    private static void startGlobalSync(GlobalDurability durability) throws Exception
-    {
-        Method method = GlobalDurability.class.getDeclaredMethod("startGlobalSync");
-        method.setAccessible(true);
-        method.invoke(durability);
-    }
-
-    private static int inflight(GlobalDurability durability) throws Exception
-    {
-        Field field = GlobalDurability.class.getDeclaredField("inflight");
-        field.setAccessible(true);
-        return field.getInt(durability);
-    }
-
     @Test
-    void failedLaunchRefundsReservedPermits() throws Exception
+    void failedSelectionDoesNotLeakInflight()
     {
         GlobalDurability durability = new GlobalDurability(mock(Node.class));
         AtomicInteger attempts = new AtomicInteger();
@@ -58,10 +47,30 @@ class GlobalDurabilityTest
             throw new IllegalStateException("injected launch failure");
         });
 
-        startGlobalSync(durability);
-        assertEquals(0, inflight(durability));
-        startGlobalSync(durability);
+        durability.startGlobalSync();
+        assertEquals(0, durability.inflight());
+        durability.startGlobalSync();
         assertEquals(2, attempts.get(), "second cycle must not be suppressed");
-        assertEquals(0, inflight(durability));
+        assertEquals(0, durability.inflight());
+    }
+
+    @Test
+    void failedSendRefundsInflight()
+    {
+        Node node = mock(Node.class);
+        doThrow(new IllegalStateException("injected send failure"))
+            .when(node).send(any(Node.Id.class), any(Request.class), any(), any(), any());
+
+        GlobalDurability durability = new GlobalDurability(node);
+        durability.setMaxConcurrency(2);
+        durability.setSelectSendTo(topology -> new Node.Id(1));
+        durability.setSelectReadFrom(topology -> new Node.Id(2));
+
+        // the send to node 1 fails before the read from node 2 is attempted; both must be released
+        durability.startGlobalSync();
+        assertEquals(0, durability.inflight());
+        durability.startGlobalSync();
+        assertEquals(0, durability.inflight());
+        verify(node, times(2)).send(any(Node.Id.class), any(Request.class), any(), any(), any());
     }
 }

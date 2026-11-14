@@ -29,6 +29,7 @@ import org.assertj.core.api.Assertions;
 import static accord.utils.ArrayBuffers.*;
 import static accord.utils.Property.qt;
 
+@SlowTest
 public class ArrayBuffersTest
 {
     public interface TestCase<T>

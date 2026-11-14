@@ -38,6 +38,7 @@ import java.util.stream.LongStream;
 import static accord.utils.Property.qt;
 import static org.assertj.core.api.Assertions.assertThat;
 
+@SlowTest
 public class GenTest {
     @Test
     public void randomNextInt()

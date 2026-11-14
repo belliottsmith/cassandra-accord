@@ -55,6 +55,7 @@ import org.slf4j.LoggerFactory;
 
 import accord.impl.IntHashKey;
 import accord.local.Node.Id;
+import accord.utils.SlowTest;
 
 import static accord.utils.Gens.lists;
 import static accord.utils.Property.qt;
@@ -62,6 +63,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 // TODO (testing): test Keys with no contents, "without", "with" where TxnId and Keys are the same, but Key -> [TxnId] does not match;
 //  ensure high code coverage
+@SlowTest
 public class KeyDepsTest
 {
     private static final Logger logger = LoggerFactory.getLogger(KeyDepsTest.class);

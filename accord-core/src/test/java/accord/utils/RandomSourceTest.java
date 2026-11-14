@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 
 import static accord.utils.RandomTestRunner.test;
 
+@SlowTest
 public class RandomSourceTest
 {
     private static final Logger logger = LoggerFactory.getLogger(RandomSourceTest.class);

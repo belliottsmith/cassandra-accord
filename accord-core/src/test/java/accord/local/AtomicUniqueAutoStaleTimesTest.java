@@ -233,9 +233,11 @@ public class AtomicUniqueAutoStaleTimesTest
      * two buckets is determined by the midpoint of the leaf's [lb, ub] range; for the two
      * boundary leaves (0+1 and 14+15) {@code lb}/{@code ub} are linearly extrapolated below 0
      * / above NODE_MASK, which inflates the outermost buckets relative to their inner siblings
-     * when the data is saturated at the range's extremes. We therefore assert:
+     * when the data is saturated at the range's extremes. The top bucket is reserved for
+     * {@code uniqueStaleReserved}, so the top leaf always routes to bucket 14. We therefore assert:
      *   - each of the 8 leaf-pairs receives ~1/8 of traffic (tight tolerance), AND
-     *   - no individual bucket is starved or runaway (loose tolerance).
+     *   - no individual bucket is starved or runaway (loose tolerance), AND
+     *   - the reserved bucket receives nothing.
      */
     @Test
     public void bucketEquidistribution()
@@ -272,13 +274,19 @@ public class AtomicUniqueAutoStaleTimesTest
                           .isCloseTo(leafExpected, Offset.offset(leafTol));
             }
 
-            // (2) per-bucket sanity: no bucket is starved or exploded. Inner buckets sit close
-            //     to the per-bucket expectation (n/16); the four boundary buckets (0, 1, 14, 15)
-            //     are looser due to the documented lb/ub extrapolation effect.
+            // (2) the reserved top bucket is never used, so bucket 14 receives the whole top leaf (checked above)
+            int reserved = BUCKETS - 1;
+            Assertions.assertThat(hits[reserved])
+                      .as("reserved bucket[%d] distribution=%s", reserved, Arrays.toString(hits))
+                      .isZero();
+
+            // (3) per-bucket sanity: no bucket is starved or exploded. Inner buckets sit close
+            //     to the per-bucket expectation (n/16); the boundary buckets (0, 1) are looser
+            //     due to the documented lb extrapolation effect.
             double bucketExpected = n / (double) BUCKETS;
-            for (int i = 0; i < BUCKETS; i++)
+            for (int i = 0; i < reserved - 1; i++)
             {
-                boolean boundary = (i <= 1) || (i >= BUCKETS - 2);
+                boolean boundary = i <= 1;
                 double tol = (boundary ? 0.75 : 0.25) * bucketExpected;
                 Assertions.assertThat((double) hits[i])
                           .as("bucket[%d]%s hits=%d expected~%.0f distribution=%s",

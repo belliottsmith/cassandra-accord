@@ -26,6 +26,7 @@ import java.util.function.Function;
 
 import javax.annotation.Nullable;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -199,7 +200,8 @@ public class GlobalDurability
         }
     }
 
-    private void startGlobalSync()
+    @VisibleForTesting
+    void startGlobalSync()
     {
         Node.Id sendTo = null, readFrom = null;
         try
@@ -295,5 +297,11 @@ public class GlobalDurability
     public synchronized void setMaxConcurrency(int newMaxConcurrency)
     {
         this.maxConcurrency = newMaxConcurrency;
+    }
+
+    @VisibleForTesting
+    synchronized int inflight()
+    {
+        return inflightSend.size() + inflightRead.size();
     }
 }

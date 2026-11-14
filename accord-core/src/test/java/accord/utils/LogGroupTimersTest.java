@@ -32,6 +32,7 @@ import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
+@SlowTest
 public class LogGroupTimersTest
 {
     @Test

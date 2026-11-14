@@ -25,8 +25,6 @@ import accord.primitives.TxnId;
 import accord.primitives.Unseekables;
 import accord.utils.IndexedBiFunction;
 
-import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithDeps;
-import static accord.primitives.TxnId.FastPath.PrivilegedCoordinatorWithoutDeps;
 import static accord.primitives.TxnId.FastPath.Unoptimised;
 
 abstract class TopologyCollector<C, K, T, E extends Exception>

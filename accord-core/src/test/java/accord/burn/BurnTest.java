@@ -26,9 +26,12 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 import accord.utils.DefaultRandom;
+import accord.utils.IsolatedJvmTest;
 
 import static accord.utils.Invariants.illegalArgument;
 
+// BurnTestBase configures ProtocolModifiers
+@IsolatedJvmTest
 public class BurnTest extends BurnTestBase
 {
     @Test

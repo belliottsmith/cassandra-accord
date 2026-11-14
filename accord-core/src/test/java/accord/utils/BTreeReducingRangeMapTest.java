@@ -48,6 +48,7 @@ import static java.lang.Integer.MIN_VALUE;
 // TODO (desired): test start inclusive ranges
 // TODO (required): better test mergeMax behaviour - burn test discovered a rare seed where this caused a fault,
 //  and minimal changes to this test class did not detect it
+@SlowTest
 public class BTreeReducingRangeMapTest
 {
     static class Entry extends ReducingBTree.Entry<Entry>

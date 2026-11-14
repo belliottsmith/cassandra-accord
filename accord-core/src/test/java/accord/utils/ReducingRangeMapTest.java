@@ -50,6 +50,7 @@ import static java.lang.Integer.MAX_VALUE;
 import static java.lang.Integer.MIN_VALUE;
 
 // TODO (desired): test start inclusive ranges
+@SlowTest
 public class ReducingRangeMapTest
 {
     static final ReducingRangeMap<Timestamp> EMPTY = new ReducingRangeMap<>();
