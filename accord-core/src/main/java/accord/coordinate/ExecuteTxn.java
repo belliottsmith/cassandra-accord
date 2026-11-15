@@ -202,6 +202,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     private Data data;
     private long uniqueHlc;
     private boolean isPrivilegedVoteCommitting;
+    private boolean pausedForClaim;
 
     ExecuteTxn(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
@@ -228,6 +229,24 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void startOnceInitialised()
     {
+        if (ballot.equals(Ballot.ZERO))
+        {
+            Result result = node.executeBacklogSink().takeRemoteSuccess(txnId);
+            if (result != null)
+            {
+                // a backlog executor has already executed this transaction
+                onExternalSuccess(result);
+                return;
+            }
+
+            if (node.executeBacklogSink().consumeClaim(txnId))
+            {
+                // a backlog executor has told us it will execute this transaction
+                pauseForClaim();
+                return;
+            }
+        }
+
         node.agent().coordinatorEvents().onExecuting(txnId, ballot, stableDeps, path);
         Node.Id self = node.id();
         if (permitCoordinatorLocalExecution() && tryIfUniversal(self))
@@ -530,13 +549,93 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         executor.executeMaybeImmediately(() -> {
             if (!trySetDone())
+            {
+                // we may have paused in response to a BacklogClaim since this result was delivered
+                if (pausedForClaim)
+                    node.executeBacklogSink().onRemoteSuccess(txnId, result, true);
                 return;
+            }
 
             stable.setDone();
             BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
             if (callback != null)
                 callback.accept(result, null);
         });
+    }
+
+    /**
+     * A backlog executor has told us it intends to execute this transaction (see {@link accord.messages.BacklogClaim}),
+     * so pause our own attempt, awaiting a {@link accord.messages.RemoteSuccess} (or resuming if none arrives promptly).
+     * TODO (expected): consider not pausing if we have already received our reads
+     */
+    public void onClaimed()
+    {
+        executor.executeMaybeImmediately(() -> {
+            if (!isDone())
+                pauseForClaim();
+        });
+    }
+
+    private void pauseForClaim()
+    {
+        // we must not abandon the privileged coordinator fast path, as it requires we update our own state machine first
+        if (isPrivilegedVoteCommitting || !ballot.equals(Ballot.ZERO))
+            return;
+
+        BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
+        if (callback == null || !trySetDone())
+            return;
+
+        stable.setDone();
+        pausedForClaim = true;
+        if (tracing != null)
+            tracing.trace(null, "Paused for BacklogClaim");
+        node.executeBacklogSink().pause(txnId, new Paused(callback));
+    }
+
+    /**
+     * The state needed to complete our client's request if the backlog executor succeeds, or to resume our own
+     * execution if it does not
+     */
+    class Paused implements ExecuteTxnBacklog.Paused
+    {
+        final BiConsumer<? super Result, Throwable> callback;
+
+        Paused(BiConsumer<? super Result, Throwable> callback)
+        {
+            this.callback = callback;
+        }
+
+        @Override
+        public TxnId txnId()
+        {
+            return txnId;
+        }
+
+        @Override
+        public void onRemoteSuccess(Result result)
+        {
+            executor.executeMaybeImmediately(() -> callback.accept(result, null));
+        }
+
+        @Override
+        public void onLocalExecution(Timestamp applyAt, Writes writes, Result result)
+        {
+            // equivalent to onLocalDirectSuccess
+            executor.executeMaybeImmediately(() -> {
+                if (replicaExecuteDistributedPersist()) adapter().persist(node, executor, allTopologies, route, ballot, persistFlags(), txnId, txn, applyAt, stableDeps, writes, result, callback);
+                else callback.accept(result, null);
+            });
+        }
+
+        @Override
+        public void resume()
+        {
+            executor.executeMaybeImmediately(() -> {
+                new ExecuteTxn(node, executor, allTopologies, route, ballot, path, flags, txnId, txn, executeAt, stableDeps, sendDeps, callback)
+                .start();
+            });
+        }
     }
 
     public void onRemoteSuccess(Result result)

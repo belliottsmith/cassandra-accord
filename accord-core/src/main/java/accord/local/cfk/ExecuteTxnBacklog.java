@@ -24,9 +24,14 @@ import javax.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import accord.api.LocalListeners;
+import accord.api.ProtocolModifiers;
 import accord.api.ProgressLog.BlockedUntil;
+import accord.api.Result;
 import accord.api.RoutingKey;
+import accord.api.Timeouts;
 import accord.coordinate.ExecuteBacklogTxn;
+import accord.coordinate.ExecuteTxn;
 import accord.coordinate.NotReady;
 import accord.coordinate.Redundant;
 import accord.local.Command;
@@ -36,6 +41,7 @@ import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.CommandsForKey.TxnInfo;
+import accord.messages.BacklogClaim;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -47,8 +53,11 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.primitives.Writes;
 
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionClaims;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionMultiKey;
+import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.primitives.Routable.Domain.Key;
@@ -56,6 +65,8 @@ import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
+import static accord.messages.MessageType.StandardMessage.READ_REQ;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -79,7 +90,24 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * otherwise (if enabled by {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionMultiKey()})
  * {@link ExecuteBacklogTxn} collects them from the replicas it reads from.
  * <p>
- * TODO (expected): notify/yield to competing coordinators and backlog executors (see EXECUTE_BACKLOG_PLAN.md)
+ * <p>
+ * If enabled ({@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionClaims()}) we tell a transaction's
+ * original coordinator that we intend to execute it ({@link BacklogClaim}), so that it may pause its own attempt,
+ * awaiting our {@link accord.messages.RemoteSuccess} (and resuming if none arrives promptly). Having claimed a
+ * transaction we are obligated to execute it, i.e. we wait for it to become ready rather than abandon our attempt.
+ * We claim:
+ * <ul>
+ *   <li>a multi-key transaction once every replica we read from has reported it is ready (see {@link ExecuteBacklogTxn});</li>
+ *   <li>any other transaction once we have received all of our reads, before we persist it;</li>
+ *   <li>the next single key transaction queued behind the one we are executing, before we persist the latter
+ *       (as it will be ready to execute once we have done so), so that its coordinator learns of our claim
+ *       before its own reads complete.</li>
+ * </ul>
+ * The original coordinator side of this protocol is also implemented here: received claims are recorded
+ * (for coordinators that have not yet reached execution), executions paused, and results retained (for coordinators
+ * that receive our RemoteSuccess before reaching execution).
+ * <p>
+ * TODO (expected): yield to nearby live coordinators (see EXECUTE_BACKLOG_PLAN.md)
  */
 public class ExecuteTxnBacklog implements NotifySink
 {
@@ -118,15 +146,31 @@ public class ExecuteTxnBacklog implements NotifySink
      */
     public static boolean hasBacklogAfter(CommandsForKey cfk, Timestamp executeAt)
     {
+        return nextBacklog(cfk, executeAt) != null;
+    }
+
+    /**
+     * @return the next transaction to execute after {@code executeAt} if it is STABLE and eligible for backlog execution
+     */
+    private static @Nullable TxnInfo nextBacklog(CommandsForKey cfk, Timestamp executeAt)
+    {
         int i = cfk.unappliedCommittedIndexOf(executeAt);
         if (i < 0) i = -1 - i;
         else ++i;
 
         if (i >= cfk.committedSize())
-            return false;
+            return null;
 
         TxnInfo next = cfk.committedByExecuteAt(i);
-        return next.is(STABLE) && mayExecute(next);
+        return next.is(STABLE) && mayExecute(next) ? next : null;
+    }
+
+    /**
+     * @return true iff we should tell the original coordinator of {@code txnId} that we intend to execute it
+     */
+    private boolean mayClaim(TxnId txnId, Ballot promised)
+    {
+        return coordinatorBacklogExecutionClaims() && !txnId.node.equals(node.id()) && promised.equals(Ballot.ZERO);
     }
 
     /**
@@ -153,18 +197,25 @@ public class ExecuteTxnBacklog implements NotifySink
         if (!mayExecute(txnId) || txnId.node.equals(node.id()))
             return;
 
-        // if nothing eligible is queued behind this transaction then the backlog is exhausted once it is executed,
-        // so stop listening on this key; a later coordinator may decide to install us again
+        TxnId claimAhead = null;
         SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(key);
         if (safeCfk != null && safeCfk.overrideSink() == this)
         {
             CommandsForKey cfk = safeCfk.current();
             TxnInfo info = cfk.get(txnId);
-            if (info != null && !hasBacklogAfter(cfk, info.executeAt))
-                safeCfk.overrideSink(null);
+            if (info != null)
+            {
+                TxnInfo next = nextBacklog(cfk, info.executeAt);
+                // if nothing eligible is queued behind this transaction then the backlog is exhausted once it is executed,
+                // so stop listening on this key; a later coordinator may decide to install us again
+                if (next == null) safeCfk.overrideSink(null);
+                // if a single key transaction is queued behind this one then once we have executed this transaction it
+                // will be ready to execute, so we may claim it (see ExecuteBacklogTxn)
+                else if (next.is(SingleKey) && mayClaim(next, Ballot.ZERO)) claimAhead = next.plainTxnId();
+            }
         }
 
-        execute(safeStore.commandStore(), txnId);
+        execute(safeStore.commandStore(), txnId, claimAhead);
     }
 
     @Override
@@ -173,33 +224,55 @@ public class ExecuteTxnBacklog implements NotifySink
         DefaultNotifySink.INSTANCE.waitingOn(safeStore, txn, key, waitingOnStatus, blockedUntil, notifyCfk);
     }
 
-    private void execute(CommandStore commandStore, TxnId txnId)
+    private void execute(CommandStore commandStore, TxnId txnId, @Nullable TxnId claimAhead)
     {
-        if (!tryMarkActive(txnId))
-            return;
+        if (tryMarkActive(txnId))
+            executeActive(commandStore, txnId, claimAhead);
+    }
 
+    private void executeActive(CommandStore commandStore, TxnId txnId, @Nullable TxnId claimAhead)
+    {
         commandStore.execute(ExecutionContext.unsequenced(txnId, "Load for ExecuteBacklog"), safeStore -> {
-            if (!tryExecute(safeStore, txnId))
-                active.remove(txnId);
+            tryExecuteOrRelease(safeStore, txnId, claimAhead);
         }, (success, fail) -> {
             if (fail != null)
             {
-                active.remove(txnId);
+                release(txnId);
                 node.agent().onException(fail);
             }
         });
     }
 
+    private void tryExecuteOrRelease(SafeCommandStore safeStore, TxnId txnId, @Nullable TxnId claimAhead)
+    {
+        if (!tryExecute(safeStore, txnId, claimAhead))
+            release(txnId);
+    }
+
+    private void release(TxnId txnId)
+    {
+        active.remove(txnId);
+        obligations.remove(txnId);
+    }
+
     /**
-     * @return true if we have started execution
+     * @return true if we have started execution (or, if we are obligated, are waiting to)
      */
-    private boolean tryExecute(SafeCommandStore safeStore, TxnId txnId)
+    private boolean tryExecute(SafeCommandStore safeStore, TxnId txnId, @Nullable TxnId claimAhead)
     {
         SafeCommand safeCommand = safeStore.ifInitialised(txnId);
         if (safeCommand == null)
             return false;
 
         Command command = safeCommand.current();
+        boolean obligated = isObligated(txnId);
+        if (obligated && command.saveStatus().compareTo(ReadyToExecute) < 0)
+        {
+            // we have claimed this transaction, so must wait for it to be ready rather than abandon it
+            safeStore.register(txnId, new ReadyListener(txnId));
+            return true;
+        }
+
         if (!isCandidate(command))
             return false;
 
@@ -219,7 +292,13 @@ public class ExecuteTxnBacklog implements NotifySink
             txn = command.partialTxn().reconstitute(route);
             deps = command.partialDeps().reconstitute(route);
         }
-        start(txnId, route, txn, executeAt, deps, ballot, promised);
+        Runnable beforePersist = null;
+        if (claimAhead != null)
+        {
+            CommandStore commandStore = safeStore.commandStore();
+            beforePersist = () -> claimAhead(claimAhead, commandStore);
+        }
+        start(txnId, route, txn, executeAt, deps, ballot, promised, obligated, beforePersist);
         return true;
     }
 
@@ -252,23 +331,287 @@ public class ExecuteTxnBacklog implements NotifySink
         return prev == null || (now - prev > ACTIVE_EXPIRES_AFTER_NANOS && active.replace(txnId, prev, now));
     }
 
-    private void start(TxnId txnId, FullRoute<?> route, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, Ballot ballot, Ballot promised)
+    private void start(TxnId txnId, FullRoute<?> route, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, Ballot ballot, Ballot promised, boolean obligated, @Nullable Runnable beforePersist)
     {
         if (logger.isTraceEnabled())
-            logger.trace("{}: executing backlog{}", txnId, txn == null ? ", collecting definition" : "");
+            logger.trace("{}: executing backlog{}{}", txnId, txn == null ? ", collecting definition" : "", obligated ? ", as claimed" : "");
 
+        boolean mayClaim = !obligated && mayClaim(txnId, promised);
         node.withEpochAtLeast(executeAt.epoch(), null, (ignore, fail) -> {
-            active.remove(txnId);
+            release(txnId);
             node.agent().onException(fail);
         }, () -> {
-            ExecuteBacklogTxn.execute(node, route, ballot, txnId, txn, executeAt, deps, (result, fail) -> {
-                active.remove(txnId);
+            ExecuteBacklogTxn.execute(node, route, ballot, txnId, txn, executeAt, deps, obligated, mayClaim, beforePersist, (result, fail) -> {
+                release(txnId);
                 if (logger.isTraceEnabled())
-                    logger.trace("{}: executed backlog with outcome {}", txnId, fail == null ? "success" : fail.getClass().getSimpleName());
+                    logger.trace("{}: executed backlog with outcome {} on {}", txnId, fail == null ? "success" : fail.getClass().getSimpleName(), node.id());
 
                 if (fail == null) node.reportLocalExecution(txnId, route, promised, null, null, result);
                 else if (!(fail instanceof NotReady) && !(fail instanceof Redundant)) node.agent().onException(fail);
             });
         });
+    }
+
+    /*
+     * BacklogClaim handling
+     */
+
+    /**
+     * An execution paused because a backlog executor claimed it (see {@code ExecuteTxn.onClaimed})
+     */
+    public interface Paused
+    {
+        TxnId txnId();
+        void onRemoteSuccess(Result result);
+        void onLocalExecution(Timestamp applyAt, Writes writes, Result result);
+        void resume();
+    }
+
+    private class PausedEntry implements Timeouts.Timeout
+    {
+        final Paused paused;
+        Timeouts.RegisteredTimeout timeout;
+
+        PausedEntry(Paused paused)
+        {
+            this.paused = paused;
+        }
+
+        @Override
+        public void timeout()
+        {
+            if (ExecuteTxnBacklog.this.paused.remove(paused.txnId(), this))
+            {
+                if (logger.isTraceEnabled())
+                    logger.trace("{}: resuming execution paused for BacklogClaim on {}", paused.txnId(), node.id());
+                paused.resume();
+            }
+        }
+
+        @Override
+        public int stripe()
+        {
+            return paused.txnId().hashCode();
+        }
+    }
+
+    // claims we have received but have not (yet) found an execution to pause, mapped to their expiry (per Node#elapsed)
+    private final ConcurrentHashMap<TxnId, Long> receivedClaims = new ConcurrentHashMap<>();
+    // executions we have paused in response to a claim
+    private final ConcurrentHashMap<TxnId, PausedEntry> paused = new ConcurrentHashMap<>();
+    // transactions we have claimed, and so are obligated to execute, mapped to their expiry (per Node#elapsed)
+    private final ConcurrentHashMap<TxnId, Long> obligations = new ConcurrentHashMap<>();
+    // results reported to us (as original coordinator) before we began (or paused) execution
+    private final ConcurrentHashMap<TxnId, RemoteSuccessEntry> remoteSuccesses = new ConcurrentHashMap<>();
+
+    private static class RemoteSuccessEntry
+    {
+        final Result result;
+        final long expiresAt;
+
+        RemoteSuccessEntry(Result result, long expiresAt)
+        {
+            this.result = result;
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    private long claimExpiresAt(TxnId txnId)
+    {
+        return node.agent().selfExpiresAt(txnId, READ_REQ, MICROSECONDS);
+    }
+
+    private static void prune(ConcurrentHashMap<TxnId, Long> expiries, long now)
+    {
+        if (expiries.size() >= PRUNE_ACTIVE_AT_SIZE)
+            expiries.values().removeIf(expiresAt -> expiresAt <= now);
+    }
+
+    /**
+     * We (as a replica) have executed {@code txnId} ourselves (see {@link ProtocolModifiers#executeAtReplica}),
+     * so if we have paused our execution (as original coordinator) for a BacklogClaim, we may complete it
+     */
+    public void onLocalExecution(TxnId txnId, Timestamp applyAt, Writes writes, Result result)
+    {
+        if (paused.isEmpty())
+            return;
+
+        PausedEntry entry = paused.remove(txnId);
+        if (entry == null)
+            return;
+
+        if (entry.timeout != null)
+            entry.timeout.cancel();
+        if (logger.isTraceEnabled())
+            logger.trace("{}: completing execution paused for BacklogClaim on local execution", txnId);
+        entry.paused.onLocalExecution(applyAt, writes, result);
+    }
+
+    /**
+     * @return the result of a RemoteSuccess received for {@code txnId} before we began (or paused) execution, if any
+     */
+    public @Nullable Result takeRemoteSuccess(TxnId txnId)
+    {
+        if (remoteSuccesses.isEmpty())
+            return null;
+        RemoteSuccessEntry entry = remoteSuccesses.remove(txnId);
+        return entry == null || entry.expiresAt <= node.elapsed(MICROSECONDS) ? null : entry.result;
+    }
+
+    private boolean isObligated(TxnId txnId)
+    {
+        Long expiresAt = obligations.get(txnId);
+        return expiresAt != null && expiresAt > node.elapsed(MICROSECONDS);
+    }
+
+    /**
+     * Tell the original coordinator of {@code txnId} that we intend to execute it; we are then obligated to do so,
+     * i.e. we will wait for it to become ready rather than abandon our attempt.
+     */
+    public void claim(TxnId txnId, String reason)
+    {
+        prune(obligations, node.elapsed(MICROSECONDS));
+        obligations.put(txnId, claimExpiresAt(txnId));
+        if (logger.isTraceEnabled())
+            logger.trace("{}: claiming for backlog execution ({}) on {}", txnId, reason, node.id());
+        node.send(txnId.node, new BacklogClaim(txnId), null);
+    }
+
+    /**
+     * Claim a transaction that will be ready to execute once the transaction we are executing has applied,
+     * and prepare to execute it once it is ready
+     */
+    private void claimAhead(TxnId txnId, CommandStore commandStore)
+    {
+        // only claim the transaction if we will try to execute it (i.e. nobody else on this node is)
+        if (!tryMarkActive(txnId))
+            return;
+
+        claim(txnId, "ahead");
+        executeActive(commandStore, txnId, null);
+    }
+
+    /**
+     * A backlog executor has told us (as original coordinator) that it intends to execute {@code txnId}
+     */
+    public void onClaimed(TxnId txnId, Node.Id from)
+    {
+        boolean[] found = new boolean[1];
+        node.coordinations().forEach(txnId, coordination -> {
+            if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+            {
+                found[0] = true;
+                ((ExecuteTxn) coordination).onClaimed();
+            }
+        });
+
+        if (logger.isTraceEnabled())
+            logger.trace("{}: received BacklogClaim from {} {}", txnId, from, found[0] ? "while executing" : "while not executing");
+        if (!found[0])
+        {
+            prune(receivedClaims, node.elapsed(MICROSECONDS));
+            receivedClaims.put(txnId, claimExpiresAt(txnId));
+        }
+    }
+
+    /**
+     * @return true iff we have received a (live) claim for {@code txnId} that has not yet been acted upon
+     */
+    public boolean consumeClaim(TxnId txnId)
+    {
+        Long expiresAt = receivedClaims.remove(txnId);
+        return expiresAt != null && expiresAt > node.elapsed(MICROSECONDS);
+    }
+
+    public void pause(TxnId txnId, Paused pause)
+    {
+        Result result = takeRemoteSuccess(txnId);
+        if (result != null)
+        {
+            pause.onRemoteSuccess(result);
+            return;
+        }
+
+        if (logger.isTraceEnabled())
+            logger.trace("{}: pausing execution for BacklogClaim on {}", txnId, node.id());
+        PausedEntry entry = new PausedEntry(pause);
+        PausedEntry prev = paused.put(txnId, entry);
+        if (prev != null && prev.timeout != null)
+            prev.timeout.cancel();
+        entry.timeout = node.timeouts().registerAt(entry, claimExpiresAt(txnId), MICROSECONDS);
+    }
+
+    /**
+     * @param reported whether some coordination was waiting for this result
+     */
+    public void onRemoteSuccess(TxnId txnId, Result result, boolean reported)
+    {
+        PausedEntry entry = paused.remove(txnId);
+        if (entry == null)
+        {
+            // when using claims, a backlog executor may complete a transaction before we (as original coordinator)
+            // reach the execution phase, so retain the result in case we do so
+            if (!reported && coordinatorBacklogExecutionClaims())
+            {
+                long now = node.elapsed(MICROSECONDS);
+                if (remoteSuccesses.size() >= PRUNE_ACTIVE_AT_SIZE)
+                    remoteSuccesses.values().removeIf(e -> e.expiresAt <= now);
+                remoteSuccesses.put(txnId, new RemoteSuccessEntry(result, claimExpiresAt(txnId)));
+            }
+            return;
+        }
+
+        if (entry.timeout != null)
+            entry.timeout.cancel();
+        if (logger.isTraceEnabled())
+            logger.trace("{}: completing execution paused for BacklogClaim", txnId);
+        entry.paused.onRemoteSuccess(result);
+    }
+
+    /**
+     * Wait for a transaction we have claimed to become ReadyToExecute before trying to execute it
+     */
+    private class ReadyListener implements LocalListeners.ComplexListener
+    {
+        final TxnId txnId;
+
+        ReadyListener(TxnId txnId)
+        {
+            this.txnId = txnId;
+        }
+
+        @Override
+        public boolean notify(SafeCommandStore safeStore, SafeCommand safeCommand)
+        {
+            SaveStatus saveStatus = safeCommand.current().saveStatus();
+            if (saveStatus.compareTo(ReadyToExecute) < 0)
+                return true;
+
+            if (saveStatus != ReadyToExecute)
+            {
+                // executed by somebody else
+                release(txnId);
+            }
+            else
+            {
+                // re-evaluate in a fresh task rather than starting a coordination while the command is mid-update
+                safeStore.commandStore().execute(ExecutionContext.unsequenced(txnId, "ExecuteBacklog once Ready"), safeStore0 -> {
+                    tryExecuteOrRelease(safeStore0, txnId, null);
+                }, (success, fail) -> {
+                    if (fail != null)
+                    {
+                        release(txnId);
+                        node.agent().onException(fail);
+                    }
+                });
+            }
+            return false;
+        }
+
+        @Override
+        public String toString()
+        {
+            return "ExecuteBacklog.ReadyListener{" + txnId + '}';
+        }
     }
 }

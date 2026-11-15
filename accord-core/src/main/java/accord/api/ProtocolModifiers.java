@@ -240,6 +240,9 @@ public class ProtocolModifiers
         private static boolean coordinatorBacklogExecutionMultiKey = false;
         public static synchronized void setCoordinatorBacklogExecutionMultiKey(boolean newCoordinatorBacklogExecutionMultiKey) { pre(); coordinatorBacklogExecutionMultiKey = newCoordinatorBacklogExecutionMultiKey; }
 
+        private static boolean coordinatorBacklogExecutionClaims = false;
+        public static synchronized void setCoordinatorBacklogExecutionClaims(boolean newCoordinatorBacklogExecutionClaims) { pre(); coordinatorBacklogExecutionClaims = newCoordinatorBacklogExecutionClaims; }
+
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
 
@@ -396,6 +399,15 @@ public class ProtocolModifiers
      * If disabled, only {@link accord.primitives.TxnId.Cardinality#SingleKey} transactions are executed as part of a backlog.
      */
     public static boolean coordinatorBacklogExecutionMultiKey() { return coordinatorBacklogExecutionMultiKey; }
+
+    private static boolean coordinatorBacklogExecutionClaims = Configure.coordinatorBacklogExecutionClaims;
+
+    /**
+     * Whether backlog executors send {@link accord.messages.BacklogClaim} to the original coordinator of a transaction
+     * they intend to execute, so that it may pause its own attempt. Must not be enabled until every replica understands
+     * {@link accord.messages.BacklogClaim}.
+     */
+    public static boolean coordinatorBacklogExecutionClaims() { return coordinatorBacklogExecutionClaims; }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

@@ -39,19 +39,29 @@ public class RemoteSuccess implements Request
         this.result = result;
     }
 
+    /**
+     * @return true iff some coordination was waiting for this result
+     */
+    public static boolean report(Coordinations coordinations, TxnId txnId, Result result)
+    {
+        boolean[] reported = new boolean[1];
+        coordinations.forEach(txnId, coordination -> {
+            if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
+            {
+                ((ExecuteTxn) coordination).onRemoteSuccess(result);
+                reported[0] = true;
+            }
+        });
+        return reported[0];
+    }
+
     @Override
     public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
     {
-        report(on.coordinations(), txnId, result);
+        boolean reported = report(on.coordinations(), txnId, result);
+        // we may have paused our own execution in response to a BacklogClaim, or not yet have begun it
+        on.executeBacklogSink().onRemoteSuccess(txnId, result, reported);
         return null;
-    }
-
-    public static void report(Coordinations coordinations, TxnId txnId, Result result)
-    {
-        coordinations.forEach(txnId, coordination -> {
-            if (coordination.kind() == Execute && coordination instanceof ExecuteTxn)
-                ((ExecuteTxn) coordination).onRemoteSuccess(result);
-        });
     }
 
     @Override

@@ -360,29 +360,68 @@ in §8).
   executions 7,702 → 10,804. So ~44% of the 7,051 backlog executions that reached the execute
   stage still duplicate another coordinator's work. That's for Phase 2/3 claims to address.
 
-### Phase 2: Original coordinator interaction (no tokens yet)
+### Phase 2a: Claims to the original coordinator (done)
+- [x] New `BacklogClaim(txnId)` request (`MessageType.BACKLOG_CLAIM_REQ`; Cassandra
+      `Verb.ACCORD_BACKLOG_CLAIM_REQ` 175, `BacklogClaimSerializers`). Gated by
+      `ProtocolModifiers.coordinatorBacklogExecutionClaims()`, default off (Cassandra
+      `accord.coordinator_backlog_execution_claims`). Burn randomises it (override with
+      `-Daccord.burn.coordinator_backlog_execution_claims`).
+- [x] **When the backlog executor claims** (only if `txnId.node` is not us and nobody has promised a
+      non-zero ballot):
+  - **ready:** a multi-key txn, once `ReadyWithDefinition` has arrived covering every shard (the
+    Phase 1b readiness point);
+  - **read:** any other txn, once all reads have arrived, just before persisting;
+  - **ahead:** the next single-key STABLE txn behind the one being executed, just before persisting
+    the latter. Captured in `notWaiting` from the CFK; only claimed if we can mark it active, i.e.
+    nobody else on this node is executing it.
+- [x] **Obligation:** once we've claimed, we must try to complete the txn rather than abandon it.
+  - Claimed-ahead txns wait for local readiness (`ReadyListener`).
+  - `ExecuteBacklogTxn` in obligated mode reads without `NO_WAIT`, treats unavailable as
+    `ApprovePartial`, `NotReady` as `Reject`, `Waiting` as wait, and `InsufficientAndWaiting` as
+    `TryAlternative`.
+  - `Redundant` still abandons, since someone else has executed the txn.
+  - The pre-claim behaviour stays opportunistic, as in Phase 1.
+- [x] **Original coordinator:**
+  - On a claim, it pauses its `ExecuteTxn` and hands its callback, and the state needed to resume,
+    to `ExecuteTxnBacklog.pause`.
+  - It completes on `RemoteSuccess`, or on our own replica execution (`Node.reportLocalExecution`,
+    persisting if `replicaExecuteDistributedPersist`).
+  - It resumes with a fresh `ExecuteTxn` if neither arrives by `selfExpiresAt(READ_REQ)`.
+  - Claims that arrive before the coordinator reaches execution are recorded and consumed when
+    `ExecuteTxn` starts.
+  - `RemoteSuccess` results that arrive before execution starts, or that race a pause, are kept and
+    consumed likewise.
+  - It never pauses the privileged-coordinator fast path, or non-zero ballots.
+- [x] **Not done here:** v1 abandoned immediately without resuming. Resuming on timeout was cheap,
+      since the paused state is just `ExecuteTxn`'s constructor arguments, and it avoids stranding
+      clients if the claimant fails, or if the result can't be reported (e.g. Cassandra only reports
+      `txn_data` results remotely).
+- [x] **Burn (seeds 1–40, `ALWAYS` + multi-key, claims off vs on):**
+  - 3,377 claims (2,607 ready, 386 read, 384 ahead). Only 703 arrived while the coordinator was
+    executing; 2,645 arrived after it had finished.
+  - 408 pauses: 333 completed by `RemoteSuccess`/local execution, 75 resumed. Residual resumes come
+    from competing claimants, slow executions and reordering.
+  - Duplicate executions are not materially reduced (10,929 → 11,024); lost 881 → 994.
+  - **Why:** burn has no locality, so the original coordinator's reads typically complete at the
+    same moment as the backlog executor's (both wait for the same replicas to become ready), and
+    claims arrive too late. The benefit is expected only when the coordinator is remote. Assessing
+    it needs a DC-aware burn topology (Phase 2b).
+
+### Phase 2b: Locality and yielding
 - [ ] Locality hook (§4.6) in accord core, plus Cassandra and burn implementations.
+- [ ] **Burn:** DC-structured link latencies (cheap local links, expensive remote links), so claims
+      and yielding can be evaluated.
 - [ ] Make sure coordinators always pick up waiting backlog behind their own txn (relies on Phase 1
       takeover), so that yielding to them is sufficient.
 - [ ] Coordinator "plausibly still coordinating" heuristic: txn age vs execute timeout, plus liveness.
 - [ ] Yield (§4.4): stop our chain at T when C is nearby, live and able to continue the chain; release
       our sink. Otherwise skip T or execute it.
-- [ ] Direct `BacklogClaim(T_{n+1})` to the next coordinator, sent first or alongside `Apply` for T_n
-      (§4.3 step 1), **only for successors we already know will be ready** once T_n applies:
-      single-key successors, or successors whose only remaining local wait is on T_n. Claim other
-      multi-key txns only once every shard is confirmed ready (Phase 1b readiness point), still
-      before our `Apply`. **v1:** the coordinator's `ExecuteTxn` abandons immediately: no further reads or
-      retries, no persist/`Apply`, and it only waits for `RemoteSuccess` (or the local apply) to
-      complete the client.
-- [ ] Make sure an abandoned coordinator always gets completed. Today `reportLocalExecution` skips
-      `RemoteSuccess` when the coordinator owns the whole route, and `onLocalDirectSuccess` needs
-      writes (§4.3 "Check").
-- [ ] Coordinator abandons on evidence: local apply (exists for writes via `onLocalDirectSuccess`;
-      extend to reads), `RemoteSuccess` (exists), incoming `Apply` for its txn. Abandoning must not
-      persist/send `Apply`, and must not leave the client callback hanging.
+- [ ] Only claim (or only backlog-execute) txns whose coordinator is remote. A local coordinator will
+      receive the same replies at about the same time as us, so we'd only duplicate its work.
 - [ ] Leave room for decline (§4.4): message/reply shapes that allow `Declined(ABANDONED)` later.
-      Implementing it is optional in this phase.
 - [ ] Also defer to a live local *recovery* coordinator (non-zero promised ballot).
+- [ ] When the claimant abandons after claiming (e.g. definition incomplete due to reordering), wait
+      for or fetch the definition instead.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG

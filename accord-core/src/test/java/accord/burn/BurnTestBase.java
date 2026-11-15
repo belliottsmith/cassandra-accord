@@ -464,7 +464,11 @@ public class BurnTestBase
             coordinatorBacklogExecutionMultiKey = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_multi_key");
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecution", coordinatorBacklogExecution);
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionMultiKey", coordinatorBacklogExecutionMultiKey);
-        logger.info("Backlog execution: {}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "");
+        boolean coordinatorBacklogExecutionClaims = random.nextBoolean();
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_claims") != null)
+            coordinatorBacklogExecutionClaims = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_claims");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionClaims", coordinatorBacklogExecutionClaims);
+        logger.info("Backlog execution: {}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "");
         setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
         boolean sendMinimalNoDeps = random.nextBoolean();
         if (System.getProperty("accord.burn.send_minimal_no_deps") != null)

@@ -542,6 +542,8 @@ public class Node implements NodeCommandStoreService, UncaughtExceptionListener.
             coordinations().forEach(txnId, finder);
             if (finder.coordinator != null)
                 finder.coordinator.onLocalDirectSuccess(applyAt, writes, result);
+            else
+                executeBacklogSink.onLocalExecution(txnId, applyAt, writes, result); // we may have paused our execution for a BacklogClaim
         }
 
         if (Ballot.ZERO.equals(ballot) && !txnId.node.equals(id) && agent.reportRemoteSuccess(result))

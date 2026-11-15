@@ -43,6 +43,7 @@ import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
+import accord.primitives.Ranges;
 import accord.primitives.Timestamp;
 import accord.primitives.TimestampWithUniqueHlc;
 import accord.primitives.Txn;
@@ -58,6 +59,7 @@ import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecutePath.BACKLOG;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
+import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
 
 /**
  * Opportunistically execute a transaction that is already ready to execute, on behalf of its original coordinator
@@ -84,6 +86,12 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     final Timestamp executeAt;
     final Topologies allTopologies;
     final boolean collectDefinition;
+    // whether we may claim the transaction (see BacklogClaim) once we know every replica we read from is ready
+    final boolean mayClaim;
+    // invoked before we persist the transaction, e.g. to claim the next transaction in the backlog
+    final @Nullable Runnable beforePersist;
+    // whether we have claimed the transaction, so must try to complete it rather than abandon it when not ready
+    private boolean obligated;
     private @Nullable Txn txn;
     private @Nullable Deps deps;
 
@@ -93,7 +101,8 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     private Data data;
     private long uniqueHlc;
 
-    private ExecuteBacklogTxn(Node node, Topologies allTopologies, FullRoute<?> route, Ballot ballot, TxnId txnId, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, BiConsumer<? super Result, Throwable> callback)
+    private ExecuteBacklogTxn(Node node, Topologies allTopologies, FullRoute<?> route, Ballot ballot, TxnId txnId, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps,
+                              boolean obligated, boolean mayClaim, @Nullable Runnable beforePersist, BiConsumer<? super Result, Throwable> callback)
     {
         super(node, node.someExclusiveExecutor(), allTopologies.forEpoch(executeAt.epoch()), txnId, route, callback);
         Invariants.require((txn == null) == (deps == null));
@@ -104,13 +113,20 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         this.txn = txn;
         this.deps = deps;
         this.collectDefinition = txn == null;
+        this.obligated = obligated;
+        this.mayClaim = mayClaim;
+        this.beforePersist = beforePersist;
     }
 
     /**
-     * @param txn  the full transaction definition, or null if it must be collected from the replicas we read from
-     * @param deps the full stable deps, or null if they must be collected from the replicas we read from
+     * @param txn           the full transaction definition, or null if it must be collected from the replicas we read from
+     * @param deps          the full stable deps, or null if they must be collected from the replicas we read from
+     * @param obligated     if we have already claimed the transaction, so must try to complete it even if not ready
+     * @param mayClaim      if we should claim the transaction once we know every replica we read from is ready
+     * @param beforePersist invoked before we persist the transaction (e.g. to claim the next transaction in the backlog)
      */
-    public static void execute(Node node, FullRoute<?> route, Ballot ballot, TxnId txnId, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, BiConsumer<? super Result, Throwable> callback)
+    public static void execute(Node node, FullRoute<?> route, Ballot ballot, TxnId txnId, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps,
+                               boolean obligated, boolean mayClaim, @Nullable Runnable beforePersist, BiConsumer<? super Result, Throwable> callback)
     {
         ExecuteBacklogTxn execute;
         try
@@ -118,7 +134,7 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
             ActiveEpochs epochs = node.topology().active();
             Topologies all = epochs.reselect(null, QuorumEpochIntersections.preacceptOrCommit,
                                              route, txnId, executeAt, txnId.selectsShards(), QuorumEpochIntersections.stable);
-            execute = new ExecuteBacklogTxn(node, all, route, ballot, txnId, txn, executeAt, deps, callback);
+            execute = new ExecuteBacklogTxn(node, all, route, ballot, txnId, txn, executeAt, deps, obligated, mayClaim, beforePersist, callback);
         }
         catch (Throwable t)
         {
@@ -139,8 +155,17 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void contact(Id to)
     {
-        if (collectDefinition) node.send(to, new ReadTxnDataIfReady(to, allTopologies, txnId, route, executeAt), executor, this, tracing);
-        else node.send(to, new ReadTxnData(to, allTopologies, txnId, route, null, executeAt, executeAt.epoch(), ExecuteFlags.none().with(NO_WAIT)), executor, this, tracing);
+        if (txn == null) node.send(to, new ReadTxnDataIfReady(to, allTopologies, txnId, route, executeAt), executor, this, tracing);
+        else node.send(to, new ReadTxnData(to, allTopologies, txnId, route, null, executeAt, executeAt.epoch(), obligated ? ExecuteFlags.none() : ExecuteFlags.none().with(NO_WAIT)), executor, this, tracing);
+    }
+
+    /**
+     * Tell the original coordinator we intend to execute the transaction, after which we must try to complete it
+     */
+    private void claim(String reason)
+    {
+        obligated = true;
+        node.executeBacklogSink().claim(txnId, reason);
     }
 
     @Override
@@ -151,8 +176,11 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
             ReadyWithDefinition definition = (ReadyWithDefinition) reply;
             if (definition.partialTxn != null) collectTxn = PartialTxn.merge(collectTxn, definition.partialTxn);
             if (definition.partialDeps != null) collectDeps = collectDeps == null ? definition.partialDeps : collectDeps.with(definition.partialDeps);
-            // TODO (expected): this is the point at which every replica we have heard from is known to be ready;
-            //   once we have heard from every shard, we may claim the transaction
+            if (txn == null && tryReconstitute() && mayClaim && !obligated)
+            {
+                // every shard has told us it is ready, so we expect to succeed; claim the transaction
+                claim("ready");
+            }
             return Action.None;
         }
 
@@ -160,18 +188,16 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         {
             ReadOk ok = (ReadOk) reply;
             // with NO_WAIT, unavailable means some store was not ready (or not safe to read); either way we abandon
+            // unless we have claimed the transaction, in which case we try another replica for the unavailable ranges
             if (ok.unavailable != null)
-                return abandon(from, reply, NotReady.notReady(txnId, route));
-
-            if (ok.data != null)
-                data = data == null ? ok.data : data.merge(ok.data);
-
-            if (txnId.is(Txn.Kind.Write) && ok.uniqueHlc > 0)
             {
-                Invariants.require(ok.uniqueHlc > executeAt.hlc());
-                uniqueHlc = Math.max(uniqueHlc, ok.uniqueHlc);
+                if (!obligated)
+                    return abandon(from, reply, NotReady.notReady(txnId, route));
+                mergeAndRecord(from, ok);
+                return ApprovePartial;
             }
-            readFrom.add(from.id);
+
+            mergeAndRecord(from, ok);
             return Approve;
         }
 
@@ -181,9 +207,11 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
             default: throw UnhandledEnum.unknown(nack.kind);
             case InsufficientEpochs: throw UnhandledEnum.invalid(nack.kind);
             case Waiting:
+                return obligated ? Action.None : abandon(from, reply, NotReady.notReady(txnId, route));
             case InsufficientAndWaiting:
+                return obligated ? Action.TryAlternative : abandon(from, reply, NotReady.notReady(txnId, route));
             case NotReady:
-                return abandon(from, reply, NotReady.notReady(txnId, route));
+                return obligated ? Action.Reject : abandon(from, reply, NotReady.notReady(txnId, route));
 
             case Redundant:
                 return abandon(from, reply, new Redundant(txnId, route.homeKey(), executeAt));
@@ -191,6 +219,41 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
             case Rejected:
                 return abandon(from, reply, Preempted.preempted(node.agent(), txnId, route.homeKey()));
         }
+    }
+
+    private void mergeAndRecord(Id from, ReadOk ok)
+    {
+        if (ok.data != null)
+            data = data == null ? ok.data : data.merge(ok.data);
+
+        if (txnId.is(Txn.Kind.Write) && ok.uniqueHlc > 0)
+        {
+            Invariants.require(ok.uniqueHlc > executeAt.hlc());
+            uniqueHlc = Math.max(uniqueHlc, ok.uniqueHlc);
+        }
+        readFrom.add(from.id);
+    }
+
+    @Override
+    protected Ranges unavailable(ReadReply reply)
+    {
+        return ((ReadOk) reply).unavailable;
+    }
+
+    /**
+     * @return true iff we have collected a definition and deps covering the whole route, in which case txn and deps are set
+     */
+    private boolean tryReconstitute()
+    {
+        if (collectTxn == null || !collectTxn.covers(route) || collectDeps == null || !collectDeps.covers(route))
+            return false;
+
+        txn = collectTxn.reconstitute(route);
+        deps = collectDeps.reconstitute(route);
+        collectTxn = null;
+        collectDeps = null;
+        node.agent().coordinatorEvents().onExecuting(txnId, ballot, deps, BACKLOG);
+        return true;
     }
 
     private Action abandon(Id from, ReadReply reply, Throwable reason)
@@ -210,23 +273,23 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
             return;
         }
 
-        if (txn == null)
+        if (txn == null && !tryReconstitute())
         {
             // we may receive our data before the definition from the same replica if messages are reordered;
             // rather than wait, we simply abandon (as we would for any other failure)
-            if (collectTxn == null || !collectTxn.covers(route) || collectDeps == null || !collectDeps.covers(route))
-            {
-                if (logger.isTraceEnabled())
-                    logger.trace("{}: abandoning backlog execution as definition incomplete: {}, {}", txnId, collectTxn, collectDeps);
-                invokeCallback(null, NotReady.notReady(txnId, route));
-                return;
-            }
-            txn = collectTxn.reconstitute(route);
-            deps = collectDeps.reconstitute(route);
-            collectTxn = null;
-            collectDeps = null;
-            node.agent().coordinatorEvents().onExecuting(txnId, ballot, deps, BACKLOG);
+            // TODO (expected): if obligated, wait for the definition (or fetch it)
+            if (logger.isTraceEnabled())
+                logger.trace("{}: abandoning backlog execution as definition incomplete: {}, {}", txnId, collectTxn, collectDeps);
+            invokeCallback(null, NotReady.notReady(txnId, route));
+            return;
         }
+
+        // we have every read, so claim the transaction (if we have not already) so that the original coordinator may
+        // stop its own attempt, and claim any successor we will execute next
+        if (mayClaim && !obligated)
+            claim("read");
+        if (beforePersist != null)
+            beforePersist.run();
 
         Timestamp executeAt = this.executeAt;
         if (txnId.is(Txn.Kind.Write) && uniqueHlc != 0)
@@ -267,6 +330,7 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     public String describe()
     {
         return "collectDefinition=" + collectDefinition +
+               ", obligated=" + obligated +
                ", executeAt=" + executeAt +
                ", readFrom=" + readFrom +
                ", uniqueHlc=" + uniqueHlc;
