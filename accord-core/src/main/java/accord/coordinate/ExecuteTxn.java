@@ -43,9 +43,7 @@ import accord.local.Node.Id;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
-import accord.local.cfk.CommandsForKey;
-import accord.local.cfk.CommandsForKey.TxnInfo;
-import accord.local.cfk.SafeCommandsForKey;
+import accord.local.cfk.ExecuteTxnBacklog;
 import accord.messages.Accept;
 import accord.messages.Callback;
 import accord.messages.Commit;
@@ -74,6 +72,7 @@ import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionMultiKey;
 import static accord.api.ProtocolModifiers.fastReadExecutionMayResendTxn;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
 import static accord.api.ProtocolModifiers.permitCoordinatorLocalExecution;
@@ -85,12 +84,12 @@ import static accord.api.ProtocolModifiers.sendOnlyReadStableMessages;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
+import static accord.coordinate.ExecutePath.BACKLOG;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.coordinate.ReadCoordinator.Action.Approve;
 import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
-import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.messages.Commit.Kind.StableFastPath;
 import static accord.messages.Commit.Kind.StableMediumPath;
 import static accord.messages.Commit.Kind.StableSlowPath;
@@ -208,6 +207,12 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         if (!ballot.equals(Ballot.ZERO))
         {
             path = RECOVER;
+            flags.setNoWait();
+        }
+        else if (path == BACKLOG)
+        {
+            // backlog execution is opportunistic: we only want to execute if every replica we read from is already
+            // ready to execute, so ask replicas to report themselves unavailable rather than wait (see abandonIfNotReady)
             flags.setNoWait();
         }
         this.path = path;
@@ -411,7 +416,11 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 Invariants.require(ok.uniqueHlc > executeAt.hlc());
                 uniqueHlc = Math.max(uniqueHlc, ok.uniqueHlc);
             }
-            return ok.unavailable == null ? Approve : ApprovePartial;
+            if (ok.unavailable == null)
+                return Approve;
+            if (path == BACKLOG)
+                return abandonNotReady();
+            return ApprovePartial;
         }
 
         CommitOrReadNack nack = (CommitOrReadNack) reply;
@@ -420,6 +429,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             default: throw UnhandledEnum.unknown(nack.kind);
             case InsufficientEpochs: throw UnhandledEnum.invalid(nack.kind);
             case Waiting:
+                if (path == BACKLOG)
+                    return abandonNotReady();
                 if (from.id == node.id().id && isPrivilegedVoteCommitting)
                 {
                     start(Collections.emptyList(), Collections.singletonList(node.id()));
@@ -435,11 +446,27 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 return Action.Aborted;
 
             case InsufficientAndWaiting:
+                if (path == BACKLOG)
+                    return abandonNotReady();
                 // the replica may be missing the original commit, or any additional commit, so send everything
                 sendMaximal(from);
                 // also try sending a read command to another replica, in case they're ready to serve a response
                 return Action.TryAlternative;
         }
+    }
+
+    /**
+     * A backlog execution only proceeds if every replica we read from is already ready to execute the transaction.
+     * If any is not, we abandon our attempt without sending any further messages, leaving the transaction
+     * to its original coordinator, or to whichever backlog executor unblocks it.
+     * Note: we may also be told a replica is unavailable because it is not safe to read (e.g. bootstrapping);
+     * this is rare, and abandoning is safe in this case also.
+     * TODO (expected): distinguish unready from unsafe to read, and permit trying alternatives in the latter case
+     */
+    private Action abandonNotReady()
+    {
+        invokeCallback(null, NotReady.notReady(txnId, route));
+        return Action.Aborted;
     }
 
     @Override
@@ -604,25 +631,11 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (CommitOutcome.Rejected == Commands.commit(safeStore, safeCommand, participants, Stable, Ballot.ZERO, txnId, route, txn, executeAt, stableDeps, commitKind(node.id())))
                 return CommitOrReadNack.Rejected;
 
-            if (coordinatorBacklogExecution(ballot) && txnId.is(SingleKey) && txnId.is(Key))
+            if (coordinatorBacklogExecution(ballot) && txnId.is(Key) && (txnId.is(SingleKey) || coordinatorBacklogExecutionMultiKey()))
             {
-                SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(scope.get(0).asRoutingKey());
-                if (safeCfk != null)
-                {
-                    CommandsForKey cfk = safeCfk.current();
-                    int i = cfk.unappliedCommittedIndexOf(executeAt);
-                    if (i < 0) i = -1 -i;
-                    else ++i;
-
-                    boolean executeBacklog = false;
-                    if (i < cfk.committedSize())
-                    {
-                        TxnInfo next = cfk.get(i);
-                        executeBacklog = next.is(STABLE) && next.is(SingleKey);
-                    }
-                    if (executeBacklog) safeCfk.overrideSink(node.executeBacklogSink());
-                    else safeCfk.overrideSink(null);
-                }
+                Participants<?> executes = participants.stillExecutes();
+                if (executes != null)
+                    ExecuteTxnBacklog.maybeInstall(node, safeStore, executes, executeAt);
             }
 
             return super.applyInternal(safeStore, safeCommand, participants);

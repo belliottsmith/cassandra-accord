@@ -40,6 +40,7 @@ import accord.api.Scheduler;
 import accord.api.Tracing;
 import accord.coordinate.Coordination;
 import accord.coordinate.CoordinationFailed;
+import accord.coordinate.ExecutePath;
 import accord.coordinate.ExecuteSyncPoint;
 import accord.impl.InMemoryAgent;
 import accord.impl.InMemoryCommandStore;
@@ -50,6 +51,7 @@ import accord.impl.mock.Network;
 import accord.local.*;
 import accord.messages.MessageType;
 import accord.primitives.Ballot;
+import accord.primitives.Deps;
 import accord.primitives.Keys;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -89,6 +91,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     final TimeService time;
     final NodeSink.TimeoutSupplier timeoutSupplier;
     final Int2ObjectHashMap<Snapshotter<Snapshot>> snapshotters = new Int2ObjectHashMap<>();
+    @Nullable ExecutionStats executionStats;
 
     public ListAgent(Scheduler scheduler, RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, OwnershipEventListener ownershipEventListener, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time, NodeSink.TimeoutSupplier timeoutSupplier)
     {
@@ -104,6 +107,26 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         this.timeoutDelays = timeoutDelays;
         this.queueTimeMillis = queueTimeMillis;
         this.time = time;
+    }
+
+    public ListAgent withExecutionStats(@Nullable ExecutionStats executionStats)
+    {
+        this.executionStats = executionStats;
+        return this;
+    }
+
+    @Override
+    public void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path)
+    {
+        if (executionStats != null)
+            executionStats.onExecuting(path);
+    }
+
+    @Override
+    public void onExecuted(TxnId txnId, Ballot ballot)
+    {
+        if (executionStats != null)
+            executionStats.onExecuted(txnId);
     }
 
     @Override

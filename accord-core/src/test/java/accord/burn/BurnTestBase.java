@@ -86,6 +86,7 @@ import accord.impl.basic.PendingQueue;
 import accord.impl.basic.PendingRunnable;
 import accord.impl.basic.RandomDelayQueue;
 import accord.impl.basic.SimulatedDelayedExecutorService;
+import accord.impl.list.ExecutionStats;
 import accord.impl.list.ListAgent;
 import accord.impl.list.ListQuery;
 import accord.impl.list.ListRead;
@@ -454,7 +455,16 @@ public class BurnTestBase
         setUnsafe(ProtocolModifiers.class, "dataStoreDetectsFutureReads", detectsFutureReads);
         setUnsafe(ProtocolModifiers.class, "fastReadExecution", random.pick(fastExecuteOptions));
         setUnsafe(ProtocolModifiers.class, "fastWriteExecution", random.pick(fastExecuteOptions));
-        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecution", random.pick(CoordinatorBacklogExecution.values()));
+        CoordinatorBacklogExecution coordinatorBacklogExecution = random.pick(CoordinatorBacklogExecution.values());
+        boolean coordinatorBacklogExecutionMultiKey = random.nextBoolean();
+        // permit overriding (without perturbing the random stream) to compare executions with and without backlog execution for a given seed
+        if (System.getProperty("accord.burn.coordinator_backlog_execution") != null)
+            coordinatorBacklogExecution = CoordinatorBacklogExecution.valueOf(System.getProperty("accord.burn.coordinator_backlog_execution"));
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_multi_key") != null)
+            coordinatorBacklogExecutionMultiKey = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_multi_key");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecution", coordinatorBacklogExecution);
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionMultiKey", coordinatorBacklogExecutionMultiKey);
+        logger.info("Backlog execution: {}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "");
         setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
         Configure.validate();
 
@@ -470,7 +480,8 @@ public class BurnTestBase
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        TriFunction<OwnershipEventListener, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (ownershipEventListener, scheduler, timeoutSupplier) -> new ListAgent(scheduler, random.fork(), 1000L, failures::add, retryBootstrap, ownershipEventListener, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier);
+        ExecutionStats executionStats = new ExecutionStats();
+        TriFunction<OwnershipEventListener, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (ownershipEventListener, scheduler, timeoutSupplier) -> new ListAgent(scheduler, random.fork(), 1000L, failures::add, retryBootstrap, ownershipEventListener, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier).withExecutionStats(executionStats);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, random.fork(), 1000L, failures::add, retryBootstrap, OwnershipEventListener.FAIL, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         Verifier verifier = createVerifier(keyCount * prefixCount);
 
@@ -611,6 +622,7 @@ public class BurnTestBase
                     counters.get(Applied).get(), counters.get(RecoveryApplied).get(), counters.get(Invalidated).get(), counters.get(Lost).get(), counters.get(Truncated).get(),
                     observedOperations, operations);
         logger.info("Message counts: {}", statsInDescOrder(messageStatsMap));
+        logger.info("Executions: {}", executionStats);
         logger.info("Took {} and in logical time of {}", Duration.ofNanos(System.nanoTime() - startNanos), Duration.ofMillis(queue.nowInMillis() - startLogicalMillis));
         if (clock.get() != operations * 2 || observedOperations != operations)
         {

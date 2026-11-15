@@ -219,6 +219,9 @@ public class ProtocolModifiers
         private static CoordinatorBacklogExecution coordinatorBacklogExecution = CoordinatorBacklogExecution.ON_RECOVERY;
         public static synchronized void setCoordinatorBacklogExecution(CoordinatorBacklogExecution newCoordinatorExecuteBacklog) { pre(); coordinatorBacklogExecution = newCoordinatorExecuteBacklog; }
 
+        private static boolean coordinatorBacklogExecutionMultiKey = false;
+        public static synchronized void setCoordinatorBacklogExecutionMultiKey(boolean newCoordinatorBacklogExecutionMultiKey) { pre(); coordinatorBacklogExecutionMultiKey = newCoordinatorBacklogExecutionMultiKey; }
+
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
 
@@ -360,6 +363,14 @@ public class ProtocolModifiers
             case ON_RECOVERY: return !ballot.equals(Ballot.ZERO);
         }
     }
+
+    private static boolean coordinatorBacklogExecutionMultiKey = Configure.coordinatorBacklogExecutionMultiKey;
+
+    /**
+     * Whether backlog execution (see {@link #coordinatorBacklogExecution(Ballot)}) may extend to multi-key transactions.
+     * If disabled, only {@link accord.primitives.TxnId.Cardinality#SingleKey} transactions are executed as part of a backlog.
+     */
+    public static boolean coordinatorBacklogExecutionMultiKey() { return coordinatorBacklogExecutionMultiKey; }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

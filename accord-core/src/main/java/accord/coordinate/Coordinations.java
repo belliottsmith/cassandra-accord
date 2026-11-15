@@ -145,6 +145,15 @@ public class Coordinations implements Iterable<Coordination>
         });
     }
 
+    /**
+     * @return true iff any registered coordination of {@code txnId} has a kind contained in {@code kinds}
+     */
+    public boolean anyMatch(TxnId txnId, TinyEnumSet<CoordinationKind> kinds)
+    {
+        Entries entries = coordinations.get(txnId);
+        return entries != null && entries.foldl((c, v) -> kinds.contains(c.kind()) ? 1 : v, 0) != 0;
+    }
+
     public long mostRecent(TxnId txnId, TinyEnumSet<CoordinationKind> kinds, Ballot ballot)
     {
         Entries entries = coordinations.get(txnId);
