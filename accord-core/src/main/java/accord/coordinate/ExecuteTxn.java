@@ -84,7 +84,6 @@ import static accord.api.ProtocolModifiers.sendOnlyReadStableMessages;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
-import static accord.coordinate.ExecutePath.BACKLOG;
 import static accord.coordinate.ExecutePath.EPHEMERAL;
 import static accord.coordinate.ExecutePath.FAST;
 import static accord.coordinate.ExecutePath.RECOVER;
@@ -210,12 +209,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         if (!ballot.equals(Ballot.ZERO))
         {
             path = RECOVER;
-            flags.setNoWait();
-        }
-        else if (path == BACKLOG)
-        {
-            // backlog execution is opportunistic: we only want to execute if every replica we read from is already
-            // ready to execute, so ask replicas to report themselves unavailable rather than wait (see abandonIfNotReady)
             flags.setNoWait();
         }
         this.path = path;
@@ -424,11 +417,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 Invariants.require(ok.uniqueHlc > executeAt.hlc());
                 uniqueHlc = Math.max(uniqueHlc, ok.uniqueHlc);
             }
-            if (ok.unavailable == null)
-                return Approve;
-            if (path == BACKLOG)
-                return abandonNotReady();
-            return ApprovePartial;
+            return ok.unavailable == null ? Approve : ApprovePartial;
         }
 
         CommitOrReadNack nack = (CommitOrReadNack) reply;
@@ -437,8 +426,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             default: throw UnhandledEnum.unknown(nack.kind);
             case InsufficientEpochs: throw UnhandledEnum.invalid(nack.kind);
             case Waiting:
-                if (path == BACKLOG)
-                    return abandonNotReady();
                 if (from.id == node.id().id && isPrivilegedVoteCommitting)
                 {
                     start(Collections.emptyList(), Collections.singletonList(node.id()));
@@ -454,8 +441,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                 return Action.Aborted;
 
             case InsufficientAndWaiting:
-                if (path == BACKLOG)
-                    return abandonNotReady();
                 // the replica may be missing the original commit, or any additional commit, so send everything
                 sendMaximal(from);
                 // also try sending a read command to another replica, in case they're ready to serve a response
@@ -466,20 +451,6 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     private CoordinationFlags persistFlags()
     {
         return CoordinationFlags.withStableSent(flags, sentStable);
-    }
-
-    /**
-     * A backlog execution only proceeds if every replica we read from is already ready to execute the transaction.
-     * If any is not, we abandon our attempt without sending any further messages, leaving the transaction
-     * to its original coordinator, or to whichever backlog executor unblocks it.
-     * Note: we may also be told a replica is unavailable because it is not safe to read (e.g. bootstrapping);
-     * this is rare, and abandoning is safe in this case also.
-     * TODO (expected): distinguish unready from unsafe to read, and permit trying alternatives in the latter case
-     */
-    private Action abandonNotReady()
-    {
-        invokeCallback(null, NotReady.notReady(txnId, route));
-        return Action.Aborted;
     }
 
     @Override

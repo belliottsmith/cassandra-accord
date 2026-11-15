@@ -40,6 +40,7 @@ import accord.local.SafeCommandStore;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.local.StoreParticipants;
+import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
 import accord.primitives.Ranges;
@@ -92,6 +93,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         applyThenWaitUntilApplied(3),
         stableThenRead(4),
         fetchRequest(5),
+        readTxnDataIfReady(6),
         ;
 
         public final byte val;
@@ -115,6 +117,10 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     return applyThenWaitUntilApplied;
                 case 4:
                     return stableThenRead;
+                case 5:
+                    return fetchRequest;
+                case 6:
+                    return readTxnDataIfReady;
                 default:
                     throw new IllegalArgumentException("Unrecognized ReadType value " + val);
             }
@@ -185,6 +191,22 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
 
     protected abstract ExecuteOn executeOn();
     abstract public ReadType kind();
+
+    /**
+     * If true, rather than waiting for a store to become ready to execute, we abandon the read and reply
+     * {@link CommitOrReadNack#NotReady}, skipping any stores we have not yet processed.
+     */
+    protected boolean abandonIfNotReady() { return false; }
+
+    /**
+     * Invoked (while holding this object's lock) for each store we begin reading from in {@link #applyInternal}
+     */
+    protected void onExecuting(Command command) {}
+
+    /**
+     * Invoked once every store has been processed, if we have not already replied, before any final reply may be sent
+     */
+    protected void onSetupComplete() {}
 
     public final @Nullable PartialTxn partialTxn()
     {
@@ -275,6 +297,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
 
     protected CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
+        boolean abandonNotReady = false;
         synchronized (this)
         {
             if (!isPending())
@@ -287,7 +310,12 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             if (logger.isTraceEnabled())
                 logger.trace("{}: setting up read with status {} on {}", txnId, status, safeStore);
 
-            switch (actionFor(command))
+            StoreAction action = actionFor(command);
+            if (action == StoreAction.WAIT && abandonIfNotReady())
+            {
+                abandonNotReady = true;
+            }
+            else switch (action)
             {
                 default: throw new AssertionError();
                 case WAIT:
@@ -318,7 +346,15 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     waitingOn.add(storeId);
                     ++waitingOnCount;
                     reading.add(storeId);
+                    onExecuting(command);
             }
+        }
+
+        if (abandonNotReady)
+        {
+            // cancels any further processing, and replies NotReady
+            onFailure(CommitOrReadNack.NotReady, null);
+            return null;
         }
 
         read(safeStore, safeCommand.current());
@@ -492,6 +528,8 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         // Unless failed always ack to indicate setup has completed otherwise the counter never gets to -1
         if ((reply == null || !reply.isFinal()) && failure == null)
         {
+            if (isPending())
+                onSetupComplete();
             onOneSuccess(-1, null);
             if (reply != null)
                 reply(reply, null);
@@ -833,6 +871,12 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
              */
             Rejected(true),
 
+            /**
+             * Some store was not yet ready to execute, and the request asked not to wait (see {@link ReadData#abandonIfNotReady}).
+             * Note: introduced later than the other kinds, so may only be sent in reply to requests that ask for it.
+             */
+            NotReady(true),
+
             ;
 
             private static final Kind[] kinds = values();
@@ -854,7 +898,8 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         public static final CommitOrReadNack Redundant = new CommitOrReadNack(Kind.Redundant);
         public static final CommitOrReadNack InsufficientAndWaiting = new CommitOrReadNack(Kind.InsufficientAndWaiting);
         public static final CommitOrReadNack Rejected = new CommitOrReadNack(Kind.Rejected);
-        private static final CommitOrReadNack[] byKind = new CommitOrReadNack[] { Waiting, Redundant, InsufficientAndWaiting, null, Rejected };
+        public static final CommitOrReadNack NotReady = new CommitOrReadNack(Kind.NotReady);
+        private static final CommitOrReadNack[] byKind = new CommitOrReadNack[] { Waiting, Redundant, InsufficientAndWaiting, null, Rejected, NotReady };
         public static CommitOrReadNack lookupByKind(CommitOrReadNack.Kind kind) { return lookupByKindOrdinal(kind.ordinal()); }
         public static CommitOrReadNack lookupByKindOrdinal(int kindOrdinal) { return byKind[kindOrdinal]; }
 
@@ -947,6 +992,46 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         public final boolean isOk()
         {
             return true;
+        }
+    }
+
+    /**
+     * A non-final reply, sent before any data, reporting the replica's definition and dependencies for the transaction
+     * (see {@link ReadTxnDataIfReady}), so that a coordinator that does not know the full transaction may execute it.
+     */
+    public static class ReadyWithDefinition implements ReadData.ReadReply
+    {
+        public final @Nullable PartialTxn partialTxn;
+        public final @Nullable PartialDeps partialDeps;
+
+        public ReadyWithDefinition(@Nullable PartialTxn partialTxn, @Nullable PartialDeps partialDeps)
+        {
+            this.partialTxn = partialTxn;
+            this.partialDeps = partialDeps;
+        }
+
+        @Override
+        public MessageType type()
+        {
+            return READ_RSP;
+        }
+
+        @Override
+        public boolean isOk()
+        {
+            return false;
+        }
+
+        @Override
+        public boolean isFinal()
+        {
+            return false;
+        }
+
+        @Override
+        public String toString()
+        {
+            return "ReadyWithDefinition{" + partialTxn + ", " + partialDeps + '}';
         }
     }
 

@@ -26,14 +26,12 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.RoutingKey;
-import accord.coordinate.CoordinationAdapter.Adapters;
-import accord.coordinate.ExecuteFlag.CoordinationFlags;
-import accord.coordinate.ExecutePath;
+import accord.coordinate.ExecuteBacklogTxn;
 import accord.coordinate.NotReady;
+import accord.coordinate.Redundant;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.ExecutionContext;
-import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -49,17 +47,12 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
-import accord.topology.ActiveEpoch;
-import accord.topology.Topology;
 
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionMultiKey;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
-import static accord.coordinate.ExecutePath.BACKLOG;
-import static accord.coordinate.ExecutePath.RECOVER;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.SaveStatus.ReadyToExecute;
-import static accord.primitives.SaveStatus.Stable;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
@@ -79,16 +72,13 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * <p>
  * We only execute transactions that are already ready to execute: if a transaction is still waiting on some other
  * key or dependency, whoever unblocks it is a better candidate to execute it (and the original coordinator remains
- * waiting to do so in any case). So, a transaction must be {@link SaveStatus#ReadyToExecute} in every local command
- * store that executes it, and remote replicas are read with {@link accord.coordinate.ExecuteFlag#NO_WAIT} so that
- * we abandon our attempt if any is not ready (see {@code ExecuteTxn.abandonNotReady}).
+ * waiting to do so in any case). So, the transaction must be {@link SaveStatus#ReadyToExecute} in the store that
+ * notifies us, and {@link ExecuteBacklogTxn} abandons the attempt if any replica it reads from is not ready.
  * <p>
- * Multi-key transactions (if enabled by {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionMultiKey()})
- * may only be executed if this node replicates all of their participants, so that we hold the complete definition
- * and dependencies, which we collect from each local command store.
+ * If the notifying store holds the full definition and deps (e.g. a single key transaction) we provide them,
+ * otherwise (if enabled by {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionMultiKey()})
+ * {@link ExecuteBacklogTxn} collects them from the replicas it reads from.
  * <p>
- * TODO (expected): support multi-key transactions we do not fully replicate, by collecting their definition from
- *   the replicas we read from (see EXECUTE_BACKLOG_PLAN.md)
  * TODO (expected): notify/yield to competing coordinators and backlog executors (see EXECUTE_BACKLOG_PLAN.md)
  */
 public class ExecuteTxnBacklog implements NotifySink
@@ -201,7 +191,7 @@ public class ExecuteTxnBacklog implements NotifySink
     }
 
     /**
-     * @return true if we have started (or may yet start) execution
+     * @return true if we have started execution
      */
     private boolean tryExecute(SafeCommandStore safeStore, TxnId txnId)
     {
@@ -213,34 +203,32 @@ public class ExecuteTxnBacklog implements NotifySink
         if (!isCandidate(command))
             return false;
 
-        if (!txnId.is(SingleKey) && !locallyReplicatesAll(command.route(), txnId, command.executeAt()))
-            return false;
+        Ballot promised = command.promised();
+        Node.Id recovering = promised.equals(Ballot.ZERO) ? null : promised.node;
+        if (node.id().equals(recovering))
+            return false; // we are already recovering the transaction
 
+        FullRoute<?> route = (FullRoute<?>) command.route();
+        Timestamp executeAt = command.executeAt();
+        Ballot ballot = command.acceptedOrCommitted();
+        Txn txn = null;
+        Deps deps = null;
         if (coversRoute(command))
         {
-            // fast path: this store holds everything we need (e.g. a single key transaction)
-            FullRoute<?> route = (FullRoute<?>) command.route();
-            start(txnId, route, command.partialTxn().reconstitute(route), command.executeAt(),
-                  command.partialDeps().reconstitute(route), command.promised(), command.acceptedOrCommitted());
+            // this store holds the full definition and deps (e.g. a single key transaction), so we need not collect them
+            txn = command.partialTxn().reconstitute(route);
+            deps = command.partialDeps().reconstitute(route);
         }
-        else
-        {
-            new Gather(txnId, (FullRoute<?>) command.route(), command.executeAt()).begin();
-        }
+        start(txnId, route, txn, executeAt, deps, ballot, promised);
         return true;
     }
 
     private static boolean isCandidate(Command command)
     {
-        return command.saveStatus() == ReadyToExecute
-               && executesLocally(command)
-               && Route.isFullRoute(command.route());
-    }
-
-    private static boolean executesLocally(Command command)
-    {
         Participants<?> stillExecutes = command.participants().stillExecutes();
-        return stillExecutes != null && !stillExecutes.isEmpty();
+        return command.saveStatus() == ReadyToExecute
+               && stillExecutes != null && !stillExecutes.isEmpty()
+               && Route.isFullRoute(command.route());
     }
 
     private static boolean coversRoute(Command command)
@@ -249,21 +237,6 @@ public class ExecuteTxnBacklog implements NotifySink
         PartialTxn txn = command.partialTxn();
         PartialDeps deps = command.partialDeps();
         return txn != null && deps != null && txn.covers(route) && deps.covers(route);
-    }
-
-    private boolean locallyReplicatesAll(Route<?> route, TxnId txnId, Timestamp executeAt)
-    {
-        return locallyReplicatesAll(route, txnId.epoch()) && (executeAt.epoch() == txnId.epoch() || locallyReplicatesAll(route, executeAt.epoch()));
-    }
-
-    private boolean locallyReplicatesAll(Route<?> route, long epoch)
-    {
-        ActiveEpoch active = node.topology().active().ifExists(epoch);
-        if (active == null)
-            return false;
-
-        Topology.NodeInfo info = active.all().nodeInfo(node.id());
-        return info != null && info.ranges.containsAll(route);
     }
 
     private boolean tryMarkActive(TxnId txnId)
@@ -279,146 +252,23 @@ public class ExecuteTxnBacklog implements NotifySink
         return prev == null || (now - prev > ACTIVE_EXPIRES_AFTER_NANOS && active.replace(txnId, prev, now));
     }
 
-    private void start(TxnId txnId, FullRoute<?> route, Txn txn, Timestamp executeAt, Deps deps, Ballot promised, Ballot acceptedOrCommitted)
+    private void start(TxnId txnId, FullRoute<?> route, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, Ballot ballot, Ballot promised)
     {
-        ExecutePath path = promised.equals(Ballot.ZERO) ? BACKLOG : RECOVER;
-        Node.Id notify = (promised.equals(Ballot.ZERO) ? txnId : promised).node;
-        if (notify.equals(node.id()))
-        {
-            active.remove(txnId);
-            return;
-        }
-
         if (logger.isTraceEnabled())
-            logger.trace("{}: executing backlog via {} with ballot {}", txnId, path, acceptedOrCommitted);
+            logger.trace("{}: executing backlog{}", txnId, txn == null ? ", collecting definition" : "");
+
         node.withEpochAtLeast(executeAt.epoch(), null, (ignore, fail) -> {
             active.remove(txnId);
             node.agent().onException(fail);
         }, () -> {
-            node.agent().coordinatorEvents().onRecoveryStarted(txnId, promised);
-            Adapters.standard().execute(node, node.someExclusiveExecutor(), null, route, acceptedOrCommitted, path, CoordinationFlags.none(), txnId, txn, executeAt, deps, deps, (result, fail) -> {
+            ExecuteBacklogTxn.execute(node, route, ballot, txnId, txn, executeAt, deps, (result, fail) -> {
                 active.remove(txnId);
                 if (logger.isTraceEnabled())
                     logger.trace("{}: executed backlog with outcome {}", txnId, fail == null ? "success" : fail.getClass().getSimpleName());
+
                 if (fail == null) node.reportLocalExecution(txnId, route, promised, null, null, result);
-                else if (!(fail instanceof NotReady)) node.agent().onException(fail);
+                else if (!(fail instanceof NotReady) && !(fail instanceof Redundant)) node.agent().onException(fail);
             });
         });
-    }
-
-    static class Gathered
-    {
-        static final Gathered INELIGIBLE = new Gathered(null, null, Ballot.ZERO, Ballot.ZERO);
-
-        final @Nullable PartialTxn txn;
-        final @Nullable PartialDeps deps;
-        final Ballot promised;
-        final Ballot acceptedOrCommitted;
-
-        Gathered(@Nullable PartialTxn txn, @Nullable PartialDeps deps, Ballot promised, Ballot acceptedOrCommitted)
-        {
-            this.txn = txn;
-            this.deps = deps;
-            this.promised = promised;
-            this.acceptedOrCommitted = acceptedOrCommitted;
-        }
-
-        Gathered merge(Gathered that)
-        {
-            if (this == INELIGIBLE || that == INELIGIBLE)
-                return INELIGIBLE;
-
-            return new Gathered(PartialTxn.merge(this.txn, that.txn),
-                                this.deps == null ? that.deps : that.deps == null ? this.deps : this.deps.with(that.deps),
-                                Ballot.max(this.promised, that.promised),
-                                Ballot.max(this.acceptedOrCommitted, that.acceptedOrCommitted));
-        }
-    }
-
-    /**
-     * Collect the definition and dependencies of a multi-key transaction from every local command store,
-     * so that we may coordinate its execution.
-     */
-    class Gather extends MapReduceConsumeCommandStores<FullRoute<?>, Gathered>
-    {
-        final TxnId txnId;
-        final Timestamp executeAt;
-
-        Gather(TxnId txnId, FullRoute<?> route, Timestamp executeAt)
-        {
-            super(route);
-            this.txnId = txnId;
-            this.executeAt = executeAt;
-        }
-
-        void begin()
-        {
-            node.commandStores().mapReduceConsume(txnId.epoch(), executeAt.epoch(), this);
-        }
-
-        @Override
-        protected Gathered applyInternal(SafeCommandStore safeStore)
-        {
-            SafeCommand safeCommand = safeStore.ifInitialised(txnId);
-            if (safeCommand == null)
-                return new Gathered(null, null, Ballot.ZERO, Ballot.ZERO);
-
-            // every store that executes the transaction must be ready to execute it;
-            // a store that does not execute it (e.g. it participates only in an earlier epoch) need only be stable
-            Command command = safeCommand.current();
-            SaveStatus saveStatus = command.saveStatus();
-            if (saveStatus != ReadyToExecute && (saveStatus != Stable || executesLocally(command)))
-                return Gathered.INELIGIBLE;
-
-            return new Gathered(command.partialTxn(), command.partialDeps(), command.promised(), command.acceptedOrCommitted());
-        }
-
-        @Override
-        protected Gathered refuseInternal(SafeCommandStore safeStore)
-        {
-            return Gathered.INELIGIBLE;
-        }
-
-        @Override
-        public Gathered reduce(Gathered o1, Gathered o2)
-        {
-            return o1.merge(o2);
-        }
-
-        @Override
-        public void accept(Gathered result, Throwable failure)
-        {
-            if (failure != null)
-            {
-                active.remove(txnId);
-                node.agent().onException(failure);
-                return;
-            }
-
-            FullRoute<?> route = scope;
-            if (result == null || result == Gathered.INELIGIBLE
-                || result.txn == null || !result.txn.covers(route)
-                || result.deps == null || !result.deps.covers(route))
-            {
-                if (logger.isTraceEnabled())
-                    logger.trace("{}: not executing backlog, as {}", txnId, result == Gathered.INELIGIBLE ? "not ready locally" : "local definition incomplete");
-                active.remove(txnId);
-                return;
-            }
-
-            start(txnId, route, result.txn.reconstitute(route), executeAt, result.deps.reconstitute(route), result.promised, result.acceptedOrCommitted);
-        }
-
-        @Override
-        public TxnId primaryTxnId()
-        {
-            return txnId;
-        }
-
-        @Override
-        public String reason()
-        {
-            return "Gather for ExecuteBacklog";
-        }
     }
 }

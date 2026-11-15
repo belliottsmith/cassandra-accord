@@ -227,7 +227,8 @@ Things to think through before doing this:
     expire after 1 minute, in case a listener is erased without notifying.
   - `Coordinations.anyMatch(txnId, COORDINATES_STATE_MACHINE)`: skip if this node is already
     coordinating or recovering the txn.
-- [x] Widen eligibility to multi-key Read/Write, behind
+- [x] (Superseded by Phase 1b, which removes the "replicates every participant" restriction.)
+      Widen eligibility to multi-key Read/Write, behind
       `ProtocolModifiers.coordinatorBacklogExecutionMultiKey()`.
   - Default is off. Burn randomises it. Cassandra exposes it as
     `accord.coordinator_backlog_execution_multi_key`.
@@ -317,8 +318,47 @@ in §8).
 - Leaning (2), with (3) a fallback if wasted reads show up in the duplicate counter.
 - `CheckStatus` almost serves for (3) without new messages, but reports only the *max* status across
   a replica's stores, and readiness needs the min.
-- [ ] Choose (2) or (3) and implement. The executor reconstitutes `Txn`/`Deps` from the replies.
-- [ ] Choose nearby read replicas (local DC) for the definition/readiness round.
+- [x] Implemented (2):
+  - **Replica: `ReadTxnDataIfReady extends ReadTxnData`** (`ReadType.readTxnDataIfReady = 6`).
+    - Stores that are `ReadyToExecute` start reading immediately and contribute their
+      `partialTxn`/`partialDeps`.
+    - The first store that would WAIT abandons: it replies the new final
+      `CommitOrReadNack.NotReady`, and the remaining stores are skipped (they see `!isPending()`).
+    - Once every store has been processed, a non-final `ReadyWithDefinition(partialTxn, partialDeps)`
+      is sent before the final `ReadOk` can be.
+    - Generic hooks added to `ReadData`: `abandonIfNotReady`, `onExecuting(Command)`,
+      `onSetupComplete`.
+    - TODO (low priority): keep a `Cancellable` for reads already started, so they can be aborted.
+  - **Coordinator: `ExecuteBacklogTxn`** (a new `ReadCoordinator`, `CoordinationKind.ExecuteBacklog`).
+    - Reads at `executeAt.epoch()` only. If the notifying store holds the full definition and deps
+      (e.g. single key), it sends plain `ReadTxnData` with `NO_WAIT` and skips collecting the
+      definition.
+    - Abandons on any `NotReady`/`Waiting`/`InsufficientAndWaiting`/unavailable (`NotReady`), or
+      `Redundant` (`Redundant`).
+    - Reconstitutes `Txn`/`Deps` from the `ReadyWithDefinition` replies. If the data completes
+      before the definition does (messages reordered), it abandons rather than waits.
+    - Sends no Stable messages, and persists with `CoordinationFlags.withStableSent(readFrom)`, so
+      the replicas it read from get `NoDeps` under `SendMinimal.MINIMAL_NO_DEPS`.
+    - `onExecuting` is reported once deps are known, because Cassandra's metrics need them.
+    - TODO (expected): the claim point. When `ReadyWithDefinition` has arrived from every shard,
+      every replica we read from is known to be ready.
+  - `ExecuteTxnBacklog` no longer needs to replicate every participant, so the local `Gather` is
+    removed. `ExecuteTxn` no longer special-cases `BACKLOG`.
+  - Cassandra: `ReadDataSerializer` handles the new request type and the `ReadyWithDefinition` reply
+    (`0x40`). `NotReady` uses the existing nack encoding. New `BacklogMessageSerializersTest` round
+    trips `ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady` and `Apply.Kind.NoDeps`.
+- [ ] Choose nearby read replicas (local DC) for the definition/readiness round (relies on the
+      §4.6 locality hook; `ReadTracker` already prefers the nearest candidates).
+
+**Observations (seeds 1–8, `ALWAYS` + multi-key):**
+- 3,641 backlog attempts (3,245 collecting the definition): 813 succeeded, 877 `Redundant` (already
+  executed by someone else), 1,951 `NotReady`.
+- `NotReady` comes mostly from remote replicas (1,394 `NotReady` + 184 unavailable), and partly from
+  self (303: another local store not ready). 17 abandoned because the definition was incomplete
+  (reordering).
+- Same-seed A/B (1–40), `DISABLED` vs `ALWAYS` + multi-key: lost 1,264 → 932, and duplicate
+  executions 7,702 → 10,804. So ~44% of the 7,051 backlog executions that reached the execute
+  stage still duplicate another coordinator's work. That's for Phase 2/3 claims to address.
 
 ### Phase 2: Original coordinator interaction (no tokens yet)
 - [ ] Locality hook (§4.6) in accord core, plus Cassandra and burn implementations.
@@ -419,13 +459,8 @@ in §8).
 
 ## 7. Open questions
 
-- **Multi-key executors that don't replicate the whole txn** need the full definition and deps. Options:
-  - fetch from the original coordinator (has the full txn, but may be remote or gone);
-  - assemble from each shard, e.g. replicas include their `PartialTxn`/`PartialDeps` slice in the read
-    reply, or a `CheckStatus`-style fetch first. Costs an extra round trip unless piggybacked;
-  - keep the "replicates everything" restriction, and rely on handing off to such a node (Phase 4
-    `pick` should then choose among nodes that replicate the whole txn when possible).
-  This affects §4.5: the home shard has the query but not the other shards' read/update.
+- ~~Multi-key executors that don't replicate the whole txn~~: resolved by Phase 1b (the definition
+  is collected from the replicas we read from).
 - Precedence formulation: oldest chain origin is the working choice (§4.1). Revisit if it behaves
   badly, e.g. long-lived chains starving others, or comparing origins across keys.
 - Claim expiry duration. Tie it to the execute timeout?
