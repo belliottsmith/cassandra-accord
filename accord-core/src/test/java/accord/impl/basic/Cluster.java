@@ -203,6 +203,9 @@ public class Cluster
     final RandomSource random;
     // the number of simulated DCs; nodes are assigned to DCs by their id. If 1, nodes have no locality information
     final int dcs;
+    // if true, simulate a healthy cluster: reliable delivery with stable latencies, and no partitions, restarts or
+    // topology changes (see HappyBurnTest)
+    final boolean happy = Boolean.getBoolean("accord.burn.happy");
     final LinkConfig linkConfig;
     final Function<Id, Node> lookup;
     final PendingQueue pending;
@@ -627,7 +630,7 @@ public class Cluster
         {
             RandomSource random = randomSupplier.get();
             Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, nodeMap::get, () -> topologyFactory.rf, responseSink);
-            logger.info("Simulating {} DC(s)", sinks.dcs);
+            logger.info("Simulating {} DC(s){}", sinks.dcs, sinks.happy ? " (happy)" : "");
             TopologyUpdates topologyUpdates = new TopologyUpdates(executorMap::get);
             TopologyRandomizer.Listener schemaApply = t -> {
                 for (Node node : nodeMap.values())
@@ -747,18 +750,25 @@ public class Cluster
             ClusterScheduler clusterScheduler = sinks.new ClusterScheduler(-1);
             List<Id> nodesList = new ArrayList<>(Arrays.asList(nodes));
             Scheduled chaos = clusterScheduler.recurring(() -> {
-                sinks.links = sinks.linkConfig.overrideLinks.apply(nodesList);
+                if (!sinks.happy)
+                    sinks.links = sinks.linkConfig.overrideLinks.apply(nodesList);
                 if (random.decide(0.1f))
                     updateDurabilityRate.run();
                 if (random.decide(0.1f))
                     updateProgressLogConcurrency.run();
             }, 5L, SECONDS);
 
-            Scheduled reconfigure = clusterScheduler.recurring(topologyRandomizer::maybeUpdateTopology, 1, SECONDS);
+            Scheduled reconfigure = clusterScheduler.recurring(() -> {
+                if (!sinks.happy)
+                    topologyRandomizer.maybeUpdateTopology();
+            }, 1, SECONDS);
 
             Purge purge = new Purge(clusterScheduler, random, nodesList, nodeMap, journalMap);
 
             Scheduled restart = clusterScheduler.recurring(() -> {
+                if (sinks.happy)
+                    return;
+
                 Id id = pickNodeNotRefusing(random, nodesList, nodeMap);
 
                 Node node = nodeMap.get(id);
@@ -1215,15 +1225,25 @@ public class Cluster
 
     private BiFunction<Id, Id, Link> defaultLinks(RandomSource random)
     {
-        return caching((from, to) -> healthy(sameDc(from, to) ? defaultRandomWalkLatencyMicros(random)
+        return caching((from, to) -> healthy(sameDc(from, to) ? intraDcLatencyMicros(random)
                                                              : interDcLatencyMicros(random)));
+    }
+
+    private LongSupplier intraDcLatencyMicros(RandomSource random)
+    {
+        if (!happy)
+            return defaultRandomWalkLatencyMicros(random);
+
+        long minMicros = random.nextInt(200, 1000);
+        long maxMicros = minMicros + random.nextInt(100, 2000);
+        return () -> random.nextLong(minMicros, maxMicros);
     }
 
     // a fixed (per link) base latency between DCs, plus the usual jitter
     private LongSupplier interDcLatencyMicros(RandomSource random)
     {
         long baseMicros = MILLISECONDS.toMicros(random.nextInt(20, 150));
-        LongSupplier jitter = defaultRandomWalkLatencyMicros(random);
+        LongSupplier jitter = intraDcLatencyMicros(random);
         return () -> baseMicros + jitter.getAsLong();
     }
 

@@ -250,7 +250,11 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     @Override
     public boolean isSlowCoordinator(long elapsed, TimeUnit units, TxnId txnId, int attempt)
     {
-        return false;
+        // consider a coordinator slow once it has taken longer than (1 + attempt) request timeouts
+        if (timeoutSupplier == null)
+            return false;
+        long timeout = units.convert(timeoutSupplier.expiresDelay(), timeoutSupplier.units());
+        return elapsed >= (1 + attempt) * timeout;
     }
 
     @Override

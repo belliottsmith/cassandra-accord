@@ -8,6 +8,75 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped
 
 ---
 
+## 0. Handover (read this first)
+
+**Where things are.** Branch `execute-backlog` in both repos. Accord commits on top of `fc4a7698`:
+
+| accord | Cassandra | what |
+|---|---|---|
+| `2c40382c` | `ebed9f91aaf` | Phase 1: multi-key triggering, dedupe, release; `ReadData`/`LocalExecute` bug fixes |
+| `743cd85b`, `e91f9a35` | `f4f38e0eaf6`, `ba8c28a3e5e` | Side quest: `Apply.Kind.NoDeps`; `send_minimal` is now `MAXIMAL`/`MINIMAL`/`MINIMAL_NO_DEPS` |
+| `b0381f8d` | `eb2ee1f006e` | Phase 1b: `ReadTxnDataIfReady` + `ExecuteBacklogTxn` (definition collected from replicas) |
+| `af8c309a` | `b8cdf65ce86` | Phase 2a: `BacklogClaim`, pause/resume at the original coordinator |
+| `e464ddbf` | `1e1166b2ca9` | Phase 2b: locality hook, yield to nearby coordinators, burn DCs, burn latency stats |
+| branch HEAD | branch HEAD | burn `isSlowCoordinator`, `HappyBurnTest` (happy, 3 DCs, 80 seeds: 0 lost, p50 ≈ 0.5s, p99 ≈ 60s) |
+
+A standalone patch for the `ReadData` sliced-definition bug is in the Cassandra root
+(`accord-readdata-sliced-definition.patch`), applicable to unmodified `fc4a7698`.
+
+**Main classes:**
+- `accord.local.cfk.ExecuteTxnBacklog`: the node-level sink, triggering, dedupe, yield, claims (both
+  sides), obligations, paused executions.
+- `accord.coordinate.ExecuteBacklogTxn`: the backlog coordinator.
+- `accord.messages.ReadTxnDataIfReady`, `ReadData.ReadyWithDefinition`, `CommitOrReadNack.NotReady`.
+- `accord.messages.BacklogClaim`; `ExecuteTxn.onClaimed`/`Paused`.
+- `Apply.Kind.NoDeps`; `CoordinationFlags.withStableSent`.
+- `TopologySorter.Supplier.isNearby`.
+
+Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnTest`.
+
+**Config (all off or unchanged by default):**
+- `coordinator_backlog_execution` (existing)
+- `coordinator_backlog_execution_multi_key`
+- `coordinator_backlog_execution_claims` (new message)
+- `coordinator_backlog_execution_yield_to_nearby` (default on)
+- `send_minimal: MINIMAL_NO_DEPS` (new encoding)
+
+The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `BacklogClaim`,
+`Apply.Kind.NoDeps`) are only sent when the corresponding option is enabled; no serialization
+version bump.
+
+**Next steps, in priority order:**
+1. **Evaluate in a real multi-DC environment.** Burn can't establish efficacy: it has high fault and
+   recovery rates and synthetic latencies. Measure client latency, duplicate executions (coordinator
+   vs backlog executor vs recovery), `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, and claim
+   outcomes (paused / completed / resumed). Add metrics for these first (§6, Phase 2b follow-ups).
+2. **`HappyBurnTest` modelling gaps.** Even when "happy", ~10% of txns see recovery attempts and p99
+   latency is ~60s. Investigate whether progress-log/coordination delays (`BurnTestBase`
+   `coordinationDelays`/`progressDelays`, 1–1000ms) and timeouts are too aggressive relative to
+   inter-DC RTT, and tune them in happy mode only. Keep changes to burn minimal, since a separate
+   effort is evolving burn for fault detection.
+3. **Re-run the backlog A/B under `HappyBurnTest`.** Use `-Daccord.burn.coordinator_backlog_execution*`
+   overrides on the same seeds (§9). Decide defaults afterwards.
+4. **Phase 3:** replica-side claims and tokens, to suppress the original coordinator's in-flight reads
+   (the remaining source of backlog-attributable duplicates), then superseding tokens (§4.7).
+5. **Phase 2b leftovers:** coordinator liveness in `shouldYieldTo`; wait for or fetch the definition
+   if an obligated `ExecuteBacklogTxn` gets data before the definition; defer to live local recovery
+   coordinators.
+6. **Side-quest follow-ups:** an `Insufficient` metric and deferral window; investigate the high
+   volume of `Maximal` Applies in burn; `TinyEnumSet.equals` is broken for subclasses (e.g.
+   `ExecuteFlags`).
+
+**Known limitations, by design for now:**
+- A coordinator paused by a claim resumes only after `selfExpiresAt(READ_REQ)`. If the claimant
+  fails, the client sees extra latency.
+- Cassandra only reports `txn_data` results remotely (`AccordAgent.reportRemoteSuccess`). For other
+  result kinds, a paused coordinator always resumes by timeout and may then fail with `Exhausted`.
+- Claims for multi-key txns are sent at the readiness point, after which some data replies may
+  still arrive out of order, so the executor abandons (rare).
+
+---
+
 ## 1. Goals
 
 1. **Take over any backlog**, whether or not recovery is involved. Once a node is executing a chain of
@@ -583,6 +652,20 @@ the "yield" column toggles yielding to nearby coordinators.
   (4) home-shard hand-off and DC convergence.
 
 ## 9. Testing notes
+
+- Burn knobs (system properties; override the random choice without perturbing the random stream):
+  - `accord.burn.dcs`
+  - `accord.burn.happy`, or run `accord.burn.HappyBurnTest`
+  - `accord.burn.coordinator_backlog_execution=DISABLED|ON_RECOVERY|ALWAYS`
+  - `accord.burn.coordinator_backlog_execution_multi_key`
+  - `accord.burn.coordinator_backlog_execution_claims`
+  - `accord.burn.coordinator_backlog_execution_yield`
+  - `accord.burn.send_minimal_no_deps`
+- Each run logs `Executions:` (attempts by path, duplicate executions) and `Applied latency (ms)`.
+- TRACE logging on `accord.local.cfk.ExecuteTxnBacklog` and `accord.coordinate.ExecuteBacklogTxn`
+  reports each backlog attempt, its outcome, claims, pauses, resumes and yields.
+- The burn `ListAgent.isSlowCoordinator` now considers a coordinator slow after `(1 + attempt)`
+  request timeouts (it was always false).
 
 - The accord module can be built without gradle: `javac` all of `accord-core/src/{main,test}/java`
   against `accord-core/build/dependencies/{main,test}/libs`, then run
