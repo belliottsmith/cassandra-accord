@@ -144,6 +144,12 @@ public class BurnTestBase
 {
     private static final Logger logger = LoggerFactory.getLogger(BurnTestBase.class);
 
+    // read on demand, as subclasses (e.g. HappyBurnTest) may configure system properties after we are initialised
+    static BurnWorkload workload()
+    {
+        return new BurnWorkload();
+    }
+
     /**
      * Min hash value for the test domain, this value must be respected by the hash function
      * @see {@link BurnTest#hash(int)}
@@ -161,7 +167,7 @@ public class BurnTestBase
         Configure.setPermitAsyncTasks(false);
     }
 
-    static List<Packet> generate(RandomSource random, MessageListener listener, Function<? super CommandStore, AsyncExecutor> executor, List<Id> clients, List<Id> nodes, int[] keys, int operations)
+    static List<Packet> generate(RandomSource random, MessageListener listener, Function<? super CommandStore, AsyncExecutor> executor, List<Id> clients, List<Id> nodes, int[] keys, int operations, BurnWorkload workload)
     {
         List<Packet> packets = new ArrayList<>();
         Int2ObjectHashMap<int[]> prefixKeyUpdates = new Int2ObjectHashMap<>();
@@ -218,7 +224,8 @@ public class BurnTestBase
         RandomSource txnIdRandom = random.fork();
         BiFunction<Node, Txn, TxnId> txnIdGenerator = (node, txn) -> node.nextTxnId(txn, txnIdRandom.pick(fastPaths), txnIdRandom.pick(mediumPaths));
 
-        float rangeRatio = 0.05f + (random.nextFloat() * 0.25f);
+        float rangeRatio = workload.rangeRatio(0.05f + (random.nextFloat() * 0.25f));
+        int[] hotKeys = Arrays.copyOf(keys, workload.hotKeys);
         for (int count = 0 ; count < operations ; ++count)
         {
             int finalCount = count;
@@ -255,16 +262,18 @@ public class BurnTestBase
                     int writeCount = isWrite ? 1 + random.nextInt(2) : 0;
                     Kind kind = isWrite ? Kind.Write : readCount == 1 ? EphemeralRead : Kind.Read;
 
+                    // with a hot set, some transactions draw all of their keys from it (see BurnWorkload)
+                    int[] pickKeys = hotKeys.length > 0 && random.decide(workload.hotRatio) ? hotKeys : keys;
                     TreeSet<Key> requestKeys = new TreeSet<>();
                     IntHashSet readValues = new IntHashSet();
                     while (readCount-- > 0)
-                        requestKeys.add(randomKey(random, prefixes, keys, readValues));
+                        requestKeys.add(randomKey(random, prefixes, pickKeys, readValues));
 
                     ListUpdate update = isWrite ? new ListUpdate(executor) : null;
                     IntHashSet writeValues = isWrite ? new IntHashSet() : null;
                     while (writeCount-- > 0)
                     {
-                        PrefixedIntHashKey.Key key = randomKey(random, prefixes, keys, writeValues);
+                        PrefixedIntHashKey.Key key = randomKey(random, prefixes, pickKeys, writeValues);
                         int i = Arrays.binarySearch(keys, key.key);
                         int[] keyUpdateCounter = prefixKeyUpdates.computeIfAbsent(key.prefix, ignore -> new int[keys.length]);
                         update.put(key, ++keyUpdateCounter[i]);
@@ -474,7 +483,9 @@ public class BurnTestBase
             coordinatorBacklogExecutionYieldToNearby = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_yield");
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionYieldToNearby", coordinatorBacklogExecutionYieldToNearby);
         logger.info("Backlog execution: {}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "");
-        setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
+        ReplicaExecution replicaExecution = workload().replicaExecution(random.pick(ReplicaExecution.values()));
+        setUnsafe(ProtocolModifiers.class, "replicaExecution", replicaExecution);
+        logger.info("Replica execution: {}; workload: {}", replicaExecution, workload());
         boolean sendMinimalNoDeps = random.nextBoolean();
         if (System.getProperty("accord.burn.send_minimal_no_deps") != null)
             sendMinimalNoDeps = Boolean.getBoolean("accord.burn.send_minimal_no_deps");
@@ -494,7 +505,7 @@ public class BurnTestBase
                                      .asLongSupplier(forked);
         };
         Supplier<TimeService> timeServiceSupplier = () -> TimeService.ofNonMonotonic(nowSupplier.get(), MILLISECONDS);
-        ExecutionStats executionStats = new ExecutionStats();
+        ExecutionStats executionStats = new ExecutionStats(queue::nowInMillis);
         TriFunction<OwnershipEventListener, Scheduler, NodeSink.TimeoutSupplier, Agent> agentSupplier = (ownershipEventListener, scheduler, timeoutSupplier) -> new ListAgent(scheduler, random.fork(), 1000L, failures::add, retryBootstrap, ownershipEventListener, coordinationDelays, progressDelays, timeoutDelays, pendingQueue::nowInMillis, timeServiceSupplier.get(), timeoutSupplier).withExecutionStats(executionStats);
         SimulatedDelayedExecutorService globalExecutor = new SimulatedDelayedExecutorService(queue, new ListAgent(null, random.fork(), 1000L, failures::add, retryBootstrap, OwnershipEventListener.FAIL, coordinationDelays, progressDelays, timeoutDelays, queue::nowInMillis, timeServiceSupplier.get(), null), null);
         Verifier verifier = createVerifier(keyCount * prefixCount);
@@ -506,7 +517,7 @@ public class BurnTestBase
         Arrays.sort(prefixes);
 
         int[] keys = IntStream.range(0, keyCount).toArray();
-        Packet[] requests = generate(random, listener, Function.identity(), clients, nodes, keys, operations).toArray(Packet[]::new);
+        Packet[] requests = generate(random, listener, Function.identity(), clients, nodes, keys, operations, workload()).toArray(Packet[]::new);
         int[] starts = new int[requests.length];
         long[] startMillis = new long[requests.length];
         long[] appliedLatencyMillis = new long[requests.length];
@@ -651,6 +662,7 @@ public class BurnTestBase
                     observedOperations, operations);
         logger.info("Message counts: {}", statsInDescOrder(messageStatsMap));
         logger.info("Executions: {}", executionStats);
+        logger.info("Chains: {}", executionStats.chains());
         {
             long[] latencies = Arrays.copyOf(appliedLatencyMillis, appliedCount.get());
             Arrays.sort(latencies);
@@ -795,10 +807,10 @@ public class BurnTestBase
             invoker.run(seed, new TopologyFactory(rf, ranges(0, HASH_RANGE_START, HASH_RANGE_END, random.nextInt(Math.max(nodes.size() + 1, rf), nodes.size() * 3))),
                       clients,
                       nodes,
-                      5 + random.nextInt(15),
-                      5 + random.nextInt(15),
+                      workload().keys(5 + random.nextInt(15)),
+                      workload().prefixes(5 + random.nextInt(15)),
                       operations,
-                      10 + random.nextInt(30));
+                      workload().concurrency(10 + random.nextInt(30)));
         }
         catch (Throwable t)
         {

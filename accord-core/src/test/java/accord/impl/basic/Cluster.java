@@ -691,6 +691,8 @@ public class Cluster
                 OwnershipEventListener ownershipEventListener = topologyRandomizer.listener(id);
                 AsyncExecutor nodeExecutor = nodeExecutorSupplier.apply(id);
                 Agent agent = agentSupplier.apply(ownershipEventListener, scheduler, timeouts);
+                if (agent instanceof ListAgent)
+                    ((ListAgent) agent).setSameDc(sinks::sameDc);
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);

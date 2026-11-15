@@ -60,11 +60,14 @@ version bump.
      `coordinationDelays`/`progressDelays`/`timeoutDelays`, which are unused (left in place).
      Happy mode now models Cassandra's defaults: `recover_txn` 5s × attempt, `fetch_txn` 2s × attempt,
      `expire_txn` 5s, and a slow delay of twice the maximum simulated RTT.
-3. [x] **Re-run the backlog A/B under `HappyBurnTest`.** In the happy case the effect on latency is
-   noise-level (see below). Next: a contended happy workload, since backlog execution only pays off
-   on chains of length ≥ 2.
+3. [x] **Re-run the backlog A/B under `HappyBurnTest`.** With the default (uncontended) happy
+   workload the effect on latency is noise-level. With hot keys accessed together (`BurnWorkload`),
+   backlog execution cuts mean client latency by 16–24%, at the cost of up to ~20% duplicate
+   executions. See "Contended happy evaluation" in Phase 2b.
 4. **Phase 3:** replica-side claims and tokens, to suppress the original coordinator's in-flight reads
-   (the remaining source of backlog-attributable duplicates), then superseding tokens (§4.7).
+   (~70% of backlog-attributable duplicates under contention; claims to the coordinator don't reduce
+   them), then superseding tokens (§4.7). Competing backlog executors cause the other ~30%, which is
+   Phase 3 tokens / Phase 4's deterministic pick.
 5. **Phase 2b leftovers:** coordinator liveness in `shouldYieldTo`; wait for or fetch the definition
    if an obligated `ExecuteBacklogTxn` gets data before the definition; defer to live local recovery
    coordinators.
@@ -564,6 +567,56 @@ the "yield" column toggles yielding to nearby coordinators.
   sent for, and every pause completed (one resume in 80 seeds), but they don't reduce duplicates
   materially.
 
+**Contended happy evaluation** (`HappyBurnTest`, seeds 1–40, 40,000 txns per row, 0 lost; backlog
+`ALWAYS` + multi-key, no yield, no claims). Workloads: `hN rX` means `hot_keys=N`, `hot_ratio=X`
+(see `BurnWorkload`); `c40` means `concurrency=40`. "Wait depth" is the number of links a txn waited
+on in sequence after it began executing; "x-DC" counts only links whose coordinators are in
+different DCs (see `ExecutionStats.chains`). "Exec" is the time from first beginning to execute a
+txn to first completing it.
+
+| workload, DCs | mean (ms) `DISABLED` → `ALWAYS` | p90 | wait depth | x-DC wait depth | exec (ms) | dup. executions |
+|---------------|----------------------------------|-----|------------|-----------------|-----------|-----------------|
+| no hot keys, 3 | 590 → 570 (−3%)    | 866 → 843     | 3.1 → 2.8 | 2.2 → 2.0 | 339 → 315 | 3 → 1,721   |
+| h3 r0.5, 3     | 709 → 644 (−9%)    | 1,035 → 939   | 4.2 → 2.9 | 2.9 → 2.0 | 433 → 354 | 1 → 4,412   |
+| h4 r0.8, 3     | 800 → 712 (−11%)   | 1,105 → 995   | 5.1 → 3.6 | 3.5 → 2.4 | 511 → 409 | 0 → 5,235   |
+| h2 r0.8, 3     | 915 → 721 (−21%)   | 1,260 → 1,045 | 6.3 → 3.4 | 4.3 → 2.3 | 613 → 400 | 0 → 8,583   |
+| h3 r0.5 c40, 3 | 949 → 795 (−16%)   | 1,312 → 1,104 | 5.9 → 3.9 | 4.0 → 2.6 | 641 → 477 | 1 → 6,933   |
+| h4 r0.8 c40, 3 | 1,097 → 898 (−18%) | 1,442 → 1,217 | 7.2 → 4.6 | 4.9 → 3.1 | 777 → 568 | 1 → 8,192   |
+| h3 r0.5, 2     | 601 → 538 (−10%)   | 888 → 798     | 3.7 → 2.7 | 1.9 → 1.3 | 368 → 299 | 0 → 4,714   |
+| h2 r0.8, 2     | 743 → 567 (−24%)   | 1,041 → 798   | 5.2 → 2.9 | 2.6 → 1.3 | 491 → 307 | 25 → 9,413  |
+
+Yield and claims variants (`ALWAYS` + multi-key):
+
+| workload    | variant         | mean (ms) | p90   | dup. executions | backlog successes |
+|-------------|-----------------|-----------|-------|-----------------|-------------------|
+| h2 r0.8     | neither         | 721       | 1,045 | 8,583           | 13,827            |
+| h2 r0.8     | yield           | 738       | 1,065 | 5,785           | 9,746             |
+| h2 r0.8     | claims          | 719       | 1,049 | 8,444           | 14,260            |
+| h2 r0.8     | yield + claims  | 741       | 1,075 | 5,746           | 9,762             |
+| h4 r0.8 c40 | neither         | 898       | 1,217 | 8,192           | 11,852            |
+| h4 r0.8 c40 | yield           | 919       | 1,245 | 5,729           | 8,375             |
+| h4 r0.8 c40 | claims          | 893       | 1,215 | 8,256           | 12,545            |
+| h4 r0.8 c40 | yield + claims  | 925       | 1,246 | 5,579           | 8,199             |
+
+- The gain grows with contention, and comes from halving the cross-DC links that txns wait through.
+  Without backlog execution each cross-DC link costs at least a one-way inter-DC trip, since the
+  `Apply` of one link must reach the replica serving the next link's coordinator. A backlog executor
+  that runs consecutive links itself pays only a local round trip for them.
+- Relative gains with 2 DCs are similar to (or slightly larger than) those with 3. Fewer links cross
+  DCs, but latencies are lower overall.
+- **Yield** removes ~30% of duplicates, but gives back ~10% of the latency gain.
+- **Claims** have no measurable effect. In h2 r0.8 they pause ~33% of the txns they're sent for (all
+  complete), but duplicates don't fall. Paused coordinators would otherwise have stopped on
+  `RemoteSuccess` anyway; the coordinators that duplicate got their reads back before the claim
+  arrived. With mostly multi-key txns, claim-ahead (single-key only) rarely applies.
+- **Duplicate attribution** (h2 r0.8, no yield/claims): of 8,583 duplicates, ~2,400 are competing
+  backlog executors (2,145 txns backlog-executed by ≥ 2 nodes), and ~6,200 are the original
+  coordinator completing alongside a backlog executor.
+- Without contention, the default `replicaExecution` also hides chains: burn randomises it, and
+  single-key blind writes executed at replicas advance chains at local speed. Hence `HappyBurnTest`
+  defaults to `NONE`, like Cassandra. Cassandra only permits replica execution for blind writes in
+  any case, so read-modify-write txns never qualify.
+
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
       `StableThenRead` / `ReadTxnData` / `Commit` / `Apply` and on `BacklogClaim` via optional
@@ -696,7 +749,12 @@ the "yield" column toggles yielding to nearby coordinators.
   - `accord.burn.coordinator_backlog_execution_claims`
   - `accord.burn.coordinator_backlog_execution_yield`
   - `accord.burn.send_minimal_no_deps`
-- Each run logs `Executions:` (attempts by path, duplicate executions) and `Applied latency (ms)`.
+- Each run logs `Executions:` (attempts by path, duplicate executions), `Chains:` (wait depth,
+  cross-DC wait depth, execution latency) and `Applied latency (ms)`.
+- Workload overrides (`BurnWorkload`; `HappyBurnTest` defaults in brackets): `accord.burn.keys`,
+  `accord.burn.prefixes` [1], `accord.burn.concurrency`, `accord.burn.range_ratio` [0],
+  `accord.burn.replica_execution` [`NONE`], `accord.burn.hot_keys` / `accord.burn.hot_ratio`.
+  For a contended workload, try `-Daccord.burn.hot_keys=2 -Daccord.burn.hot_ratio=0.8`.
 - TRACE logging on `accord.local.cfk.ExecuteTxnBacklog` and `accord.coordinate.ExecuteBacklogTxn`
   reports each backlog attempt, its outcome, claims, pauses, resumes and yields.
 - `ListAgent.isSlowCoordinator` mirrors Cassandra: slow once `elapsed` exceeds the maximum

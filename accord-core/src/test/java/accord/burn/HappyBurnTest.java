@@ -24,6 +24,10 @@ import org.junit.jupiter.api.Test;
  * A burn test of a healthy cluster: reliable delivery with stable latencies, and no partitions, restarts or topology
  * changes, across three DCs by default. Intended to model the common case, e.g. for evaluating optimisations whose
  * benefit is primarily latency or efficiency (such as backlog execution), rather than for finding faults.
+ * <p>
+ * By default the workload has a single prefix, only key transactions, and no replica execution (as Cassandra's
+ * default, and as for any transaction that reads), so that chains of conflicting transactions are executed by their
+ * coordinators. These and other aspects of the workload may be overridden (see {@link BurnWorkload}).
  * Accepts the same arguments as {@link BurnTest}.
  */
 public class HappyBurnTest extends BurnTestBase
@@ -31,8 +35,16 @@ public class HappyBurnTest extends BurnTestBase
     static void configure()
     {
         System.setProperty("accord.burn.happy", "true");
-        if (System.getProperty("accord.burn.dcs") == null)
-            System.setProperty("accord.burn.dcs", "3");
+        setDefault("accord.burn.dcs", "3");
+        setDefault("accord.burn.prefixes", "1");
+        setDefault("accord.burn.range_ratio", "0");
+        setDefault("accord.burn.replica_execution", "NONE");
+    }
+
+    private static void setDefault(String property, String value)
+    {
+        if (System.getProperty(property) == null)
+            System.setProperty(property, value);
     }
 
     @Test

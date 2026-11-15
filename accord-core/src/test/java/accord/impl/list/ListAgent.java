@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.BiPredicate;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.IntSupplier;
@@ -116,6 +117,15 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         this.time = time;
     }
 
+    /**
+     * Tell our {@link ExecutionStats} (if any) which nodes are in the same DC
+     */
+    public void setSameDc(BiPredicate<Node.Id, Node.Id> sameDc)
+    {
+        if (executionStats != null)
+            executionStats.setSameDc(sameDc);
+    }
+
     public ListAgent withExecutionStats(@Nullable ExecutionStats executionStats)
     {
         this.executionStats = executionStats;
@@ -126,7 +136,7 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     public void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path)
     {
         if (executionStats != null)
-            executionStats.onExecuting(path);
+            executionStats.onExecuting(txnId, deps, path);
     }
 
     @Override
