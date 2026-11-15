@@ -93,6 +93,13 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     final Int2ObjectHashMap<Snapshotter<Snapshot>> snapshotters = new Int2ObjectHashMap<>();
     @Nullable ExecutionStats executionStats;
 
+    // if true, simulate a healthy cluster (see HappyBurnTest); use timings modelled on Cassandra's defaults, i.e.
+    // recover_txn = "5s*attempts <= 60s" and fetch_txn = "2s*attempts <= 60s", rather than aggressive timings that
+    // provoke recovery and exercise fault handling
+    final boolean happy = Boolean.getBoolean("accord.burn.happy");
+    static final long HAPPY_RECOVER_MILLIS = 5000, HAPPY_FETCH_MILLIS = 2000, HAPPY_MAX_WAIT_MILLIS = 60000;
+    // the maximum slowCoordinatorDelay for the first attempt, when not happy
+    static final long MAX_RECOVER_MILLIS = 1000;
     public ListAgent(Scheduler scheduler, RandomSource rnd, long timeout, Consumer<Throwable> onFailure, Consumer<Runnable> retryBootstrap, OwnershipEventListener ownershipEventListener, IntSupplier coordinationDelays, IntSupplier progressDelays, IntSupplier timeoutDelays, LongSupplier queueTimeMillis, TimeService time, NodeSink.TimeoutSupplier timeoutSupplier)
     {
         this.scheduler = scheduler;
@@ -244,22 +251,24 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     public long slowCoordinatorDelay(Node node, SafeCommandStore safeStore, TxnId txnId, TimeUnit units, int attempt)
     {
         // TODO (expected): meta randomise
-        return units.convert(rnd.nextLong(100, 1000) * attempt, MILLISECONDS);
+        if (happy)
+            return units.convert(Math.min(HAPPY_MAX_WAIT_MILLIS, HAPPY_RECOVER_MILLIS * attempt) + rnd.nextLong(0, 100), MILLISECONDS);
+        return units.convert(rnd.nextLong(100, MAX_RECOVER_MILLIS) * attempt, MILLISECONDS);
     }
 
     @Override
     public boolean isSlowCoordinator(long elapsed, TimeUnit units, TxnId txnId, int attempt)
     {
-        // consider a coordinator slow once it has taken longer than (1 + attempt) request timeouts
-        if (timeoutSupplier == null)
-            return false;
-        long timeout = units.convert(timeoutSupplier.expiresDelay(), timeoutSupplier.units());
-        return elapsed >= (1 + attempt) * timeout;
+        // like Cassandra: slow once it has taken longer than we would wait before this attempt to recover it
+        long maxWaitMillis = happy ? Math.min(HAPPY_MAX_WAIT_MILLIS, HAPPY_RECOVER_MILLIS * attempt) : MAX_RECOVER_MILLIS * attempt;
+        return elapsed >= units.convert(maxWaitMillis, MILLISECONDS);
     }
 
     @Override
     public long slowReplicaDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, BlockedUntil blockedUntil, TimeUnit units)
     {
+        if (happy)
+            return units.convert(Math.min(HAPPY_MAX_WAIT_MILLIS, HAPPY_FETCH_MILLIS * attempt) + rnd.nextLong(0, 100), MILLISECONDS);
         return units.convert(rnd.nextInt(100, 1000), MILLISECONDS);
     }
 

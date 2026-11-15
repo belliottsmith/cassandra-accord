@@ -518,14 +518,22 @@ public class BurnTestBase
             counters.put(status, new AtomicInteger());
         AtomicInteger clock = new AtomicInteger();
         AtomicInteger requestIndex = new AtomicInteger();
-        Queue<Packet> initialRequests = new ArrayDeque<>();
+        Queue<Integer> initialRequests = new ArrayDeque<>();
         for (int max = Math.min(concurrency, requests.length) ; requestIndex.get() < max ; )
         {
             int i = requestIndex.getAndIncrement();
             starts[i] = clock.incrementAndGet();
-            startMillis[i] = queue.nowInMillis();
-            initialRequests.add(requests[i]);
+            initialRequests.add(i);
         }
+        // the initial requests are only submitted once the cluster has started up (which takes at least a minute of
+        // logical time), so we only start their latency clock at that point
+        Supplier<Packet> submitInitialRequest = () -> {
+            Integer i = initialRequests.poll();
+            if (i == null)
+                return null;
+            startMillis[i] = queue.nowInMillis();
+            return requests[i];
+        };
 
         // not used for atomicity, just for encapsulation
         AtomicReference<Runnable> onSubmitted = new AtomicReference<>();
@@ -618,7 +626,7 @@ public class BurnTestBase
                                           agentSupplier,
                                           queue::checkFailures,
                                           responseSink, random::fork, timeServiceSupplier,
-                                          topologyFactory, initialRequests::poll,
+                                          topologyFactory, submitInitialRequest,
                                           onSubmitted::set,
                                           ignore -> {},
                                           journalFactory);

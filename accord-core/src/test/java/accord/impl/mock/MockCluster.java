@@ -398,6 +398,12 @@ public class MockCluster implements Network, AutoCloseable, Iterable<Node>
         }
 
         @Override
+        public TimeUnit nowUnits()
+        {
+            return TimeUnit.MILLISECONDS;
+        }
+
+        @Override
         public long elapsed(TimeUnit unit)
         {
             return elapsed.applyAsLong(unit);

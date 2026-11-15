@@ -51,13 +51,18 @@ version bump.
    recovery rates and synthetic latencies. Measure client latency, duplicate executions (coordinator
    vs backlog executor vs recovery), `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, and claim
    outcomes (paused / completed / resumed). Add metrics for these first (§6, Phase 2b follow-ups).
-2. **`HappyBurnTest` modelling gaps.** Even when "happy", ~10% of txns see recovery attempts and p99
-   latency is ~60s. Investigate whether progress-log/coordination delays (`BurnTestBase`
-   `coordinationDelays`/`progressDelays`, 1–1000ms) and timeouts are too aggressive relative to
-   inter-DC RTT, and tune them in happy mode only. Keep changes to burn minimal, since a separate
-   effort is evolving burn for fault detection.
-3. **Re-run the backlog A/B under `HappyBurnTest`.** Use `-Daccord.burn.coordinator_backlog_execution*`
-   overrides on the same seeds (§9). Decide defaults afterwards.
+2. [x] **`HappyBurnTest` modelling gaps** (fixed, see "Happy burn evaluation" in Phase 2b):
+   - The p99 of ~60s was a startup artifact. `Cluster.run` spends at least a minute of logical time
+     starting up, and the initial requests' latency clock started before then. It now starts at
+     submission. This also inflated the means (but not p50/p90) in the non-happy table below.
+   - The ~10% recovery attempts came from `ListAgent.slowCoordinatorDelay` (100–1000ms × attempt),
+     `slowReplicaDelay` and `Cluster`'s message slow/expiry timeouts, not from `BurnTestBase`
+     `coordinationDelays`/`progressDelays`/`timeoutDelays`, which are unused (left in place).
+     Happy mode now models Cassandra's defaults: `recover_txn` 5s × attempt, `fetch_txn` 2s × attempt,
+     `expire_txn` 5s, and a slow delay of twice the maximum simulated RTT.
+3. [x] **Re-run the backlog A/B under `HappyBurnTest`.** In the happy case the effect on latency is
+   noise-level (see below). Next: a contended happy workload, since backlog execution only pays off
+   on chains of length ≥ 2.
 4. **Phase 3:** replica-side claims and tokens, to suppress the original coordinator's in-flight reads
    (the remaining source of backlog-attributable duplicates), then superseding tokens (§4.7).
 5. **Phase 2b leftovers:** coordinator liveness in `shouldYieldTo`; wait for or fetch the definition
@@ -499,8 +504,11 @@ in §8).
   - Configurable: `ProtocolModifiers.coordinatorBacklogExecutionYieldToNearby()`, default on.
     Cassandra: `accord.coordinator_backlog_execution_yield_to_nearby`. Burn randomises it (override
     with `-Daccord.burn.coordinator_backlog_execution_yield`).
-- [ ] Coordinator liveness. "Plausibly still coordinating" is age-based only; burn's
-      `isSlowCoordinator` is always false, so burn always yields to nearby coordinators.
+- [ ] Coordinator liveness. "Plausibly still coordinating" is age-based only: the coordinator is
+      considered slow once older than our first recovery delay (`isSlowCoordinator(attempt=1)`).
+  - Fixed: this used `attempt=0`, which Cassandra's `recover_txn = "5s*attempts"` maps to a max wait
+    of 0, so Cassandra **never yielded**. It also passed `now() - hlc` as micros, but burn's HLCs are
+    millis (now `TimeService.nowUnits()`).
 - [ ] Leave room for decline (§4.4): message/reply shapes that allow `Declined(ABANDONED)` later.
 - [ ] Also defer to a live local *recovery* coordinator (non-zero promised ballot).
 - [ ] When the claimant abandons after claiming (e.g. definition incomplete due to reordering), wait
@@ -528,6 +536,33 @@ the "yield" column toggles yielding to nearby coordinators.
   coordinators. The ~3–5k attributable to backlog execution are the original coordinator and backlog
   executors completing concurrently. Phase 3 (replica-side claims that suppress competing reads) is
   the remaining lever for those.
+- **Caveat:** means in this table include ~2s+ of startup artifact (see §0 step 2), and the
+  simulation's aggressive recovery timings mean that backlog executors largely stand in for slow
+  recovery. The happy evaluation below is a better guide to the common case.
+
+**Happy burn evaluation** (`HappyBurnTest`, 3 DCs, multi-key on, after the modelling fixes; seeds
+1–40 / 41–80; 40,000 txns per batch, 0 lost):
+
+| config (latency in logical ms)  | mean      | p50       | p90       | p99           | dup. executions | backlog successes |
+|---------------------------------|-----------|-----------|-----------|---------------|-----------------|-------------------|
+| `DISABLED`                      | 560 / 573 | 561 / 573 | 853 / 877 | 1,235 / 1,293 | 7 / 1           | –                 |
+| `ALWAYS`, no yield, no claims   | 551 / 559 | 546 / 561 | 848 / 851 | 1,288 / 1,212 | 1,065 / 944     | 1,690 / 1,595     |
+| `ALWAYS`, yield, no claims      | 555 / 555 | 548 / 559 | 870 / 846 | 1,259 / 1,207 | 722 / 780       | 1,164 / 1,316     |
+| `ALWAYS`, no yield, claims      | 556 / 559 | 553 / 558 | 848 / 856 | 1,277 / 1,271 | 942 / 1,015     | 1,584 / 1,782     |
+| `ALWAYS`, yield, claims         | 555 / 563 | 552 / 563 | 853 / 860 | 1,231 / 1,241 | 724 / 737       | 1,195 / 1,313     |
+
+- Recovery is essentially absent (≤ 4 attempts per batch), so duplicates are now almost entirely
+  backlog-attributable: ~2.5% of executions without yielding, ~1.8% with.
+- Latency gains are 1–3%, within noise. Only ~4% of txns are backlog-executed, and about as many
+  attempts again abandon as `NotReady`.
+- Expected: for T_{n+1} itself, the client learns the result via `RemoteSuccess` (one WAN hop from
+  the executor), about as soon as it would have from its own read. The gain is that T_{n+1}'s
+  `Apply` reaches replicas a WAN round trip sooner, which unblocks T_{n+2}. So it only helps chains
+  of length ≥ 2, which this workload rarely builds (5–19 keys × 5–19 prefixes, concurrency 10–39,
+  5–30% range txns, which are ineligible and break chains).
+- Yielding removes ~20–30% of duplicates at no latency cost. Claims pause ~35% of the txns they're
+  sent for, and every pause completed (one resume in 80 seeds), but they don't reduce duplicates
+  materially.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
@@ -664,8 +699,10 @@ the "yield" column toggles yielding to nearby coordinators.
 - Each run logs `Executions:` (attempts by path, duplicate executions) and `Applied latency (ms)`.
 - TRACE logging on `accord.local.cfk.ExecuteTxnBacklog` and `accord.coordinate.ExecuteBacklogTxn`
   reports each backlog attempt, its outcome, claims, pauses, resumes and yields.
-- The burn `ListAgent.isSlowCoordinator` now considers a coordinator slow after `(1 + attempt)`
-  request timeouts (it was always false).
+- `ListAgent.isSlowCoordinator` mirrors Cassandra: slow once `elapsed` exceeds the maximum
+  `slowCoordinatorDelay` for that attempt (`attempt × 1s`, or `attempt × 5s` when happy).
+- Burn latency is measured from submission. The initial requests are only submitted after
+  `Cluster.run` has spent at least a minute of logical time starting up.
 
 - The accord module can be built without gradle: `javac` all of `accord-core/src/{main,test}/java`
   against `accord-core/build/dependencies/{main,test}/libs`, then run

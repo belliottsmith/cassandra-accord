@@ -244,8 +244,10 @@ public class ExecuteTxnBacklog implements NotifySink
         if (!coordinatorBacklogExecutionYieldToNearby() || coordinator.equals(node.id()) || !node.isNearby(coordinator) || isObligated(txnId))
             return false;
 
-        long ageMicros = Math.max(0, node.now() - txnId.hlc());
-        return !node.agent().isSlowCoordinator(ageMicros, MICROSECONDS, txnId, 0);
+        long age = Math.max(0, node.now() - txnId.hlc());
+        // attempt 1: has the coordinator taken longer than we would wait before first trying to recover it
+        // (attempt 0 would typically consider any coordinator slow, e.g. with Cassandra's "5s*attempts")
+        return !node.agent().isSlowCoordinator(age, node.time().nowUnits(), txnId, 1);
     }
 
     /**

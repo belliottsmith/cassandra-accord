@@ -32,6 +32,11 @@ public interface TimeService
     long now();
 
     /**
+     * The units of {@link #now()}, and so of the HLCs we issue. Typically microseconds, but may differ in simulation.
+     */
+    default TimeUnit nowUnits() { return TimeUnit.MICROSECONDS; }
+
+    /**
      * Return the current time since some arbitrary epoch in the specified time unit. May be simulated time and not
      * real time. This clock should not go backwards, nor should it generally correct for clock skew - it should
      * only track time elapsed between two points.
@@ -46,7 +51,13 @@ public interface TimeService
 
     static TimeService ofNonMonotonic(LongSupplier now, TimeUnit units)
     {
-        return of(now, elapsedWrapperFromNonMonotonicSource(units, now));
+        ToLongFunction<TimeUnit> elapsed = elapsedWrapperFromNonMonotonicSource(units, now);
+        return new TimeService()
+        {
+            @Override public long now() { return now.getAsLong(); }
+            @Override public TimeUnit nowUnits() { return units; }
+            @Override public long elapsed(TimeUnit unit) { return elapsed.applyAsLong(unit); }
+        };
     }
 
     static TimeService of(LongSupplier now, ToLongFunction<TimeUnit> elapsed)

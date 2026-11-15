@@ -667,12 +667,16 @@ public class Cluster
                     expiresDelay = random.biasedUniformLongs(minExpiresDelay, medianExpiresDelay, maxExpiresDelay);
                     failsDelay = random.biasedUniformLongs(minFailsDelay, medianFailsDelay, maxFailsDelay);
                 }
+                // when happy, model Cassandra's defaults rather than provoking timeouts: slow_read = "30ms <= p50*2 <= 1000ms",
+                // for which we use twice the maximum round trip so that we never consider a healthy replica slow, and
+                // expire_txn = "5s*attempts <= 60s"
+                final long happySlowDelay = Math.max(30, Math.min(1000, 2 * sinks.happyMaxRttMillis())), happyExpiresDelay = 5000;
                 @Override public long localDelay() { return localDelay.getAsLong();}
-                @Override public long slowDelay() { return slowDelay.getAsLong();}
-                @Override public long expiresDelay() { return expiresDelay.getAsLong(); }
-                @Override public long slowAt() { return now() + slowDelay.getAsLong();}
-                @Override public long expiresAt() { return now() + expiresDelay.getAsLong(); }
-                @Override public long failsAt() { return now() + failsDelay.getAsLong(); }
+                @Override public long slowDelay() { return sinks.happy ? happySlowDelay : slowDelay.getAsLong();}
+                @Override public long expiresDelay() { return sinks.happy ? happyExpiresDelay : expiresDelay.getAsLong(); }
+                @Override public long slowAt() { return now() + slowDelay();}
+                @Override public long expiresAt() { return now() + expiresDelay(); }
+                @Override public long failsAt() { return now() + (sinks.happy ? happyExpiresDelay : failsDelay.getAsLong()); }
                 @Override public long now() { return sinks.pending.nowInMillis(); }
                 @Override public TimeUnit units() { return MILLISECONDS; }
             };
@@ -1229,6 +1233,19 @@ public class Cluster
                                                              : interDcLatencyMicros(random)));
     }
 
+    // bounds on simulated link latencies (when happy, for intra-DC links), so that happy timeouts may be derived from them
+    static final int MIN_INTER_DC_BASE_MILLIS = 20, MAX_INTER_DC_BASE_MILLIS = 150;
+    static final int HAPPY_MAX_INTRA_DC_MICROS = 1000 + 2000;
+
+    /**
+     * @return an upper bound on the round trip time between any two nodes when happy
+     */
+    long happyMaxRttMillis()
+    {
+        long maxOneWayMicros = (dcs > 1 ? MILLISECONDS.toMicros(MAX_INTER_DC_BASE_MILLIS) : 0) + HAPPY_MAX_INTRA_DC_MICROS;
+        return MICROSECONDS.toMillis(2 * maxOneWayMicros);
+    }
+
     private LongSupplier intraDcLatencyMicros(RandomSource random)
     {
         if (!happy)
@@ -1242,7 +1259,7 @@ public class Cluster
     // a fixed (per link) base latency between DCs, plus the usual jitter
     private LongSupplier interDcLatencyMicros(RandomSource random)
     {
-        long baseMicros = MILLISECONDS.toMicros(random.nextInt(20, 150));
+        long baseMicros = MILLISECONDS.toMicros(random.nextInt(MIN_INTER_DC_BASE_MILLIS, MAX_INTER_DC_BASE_MILLIS));
         LongSupplier jitter = intraDcLatencyMicros(random);
         return () -> baseMicros + jitter.getAsLong();
     }
