@@ -89,11 +89,11 @@ public class Apply extends RouteRequest<ApplyReply>
         Maximal,
 
         /**
-         * Sends neither the transaction's definition nor its dependencies, for use only when the recipient is known
-         * to have recorded the transaction as Stable (so that it already has both). If the recipient turns out to be
+         * Sends neither the transaction's definition nor its dependencies, for use only when the recipient is expected
+         * to have been sent a Stable message (so that it already has both). If the recipient turns out to be
          * missing either, it will reply {@link ApplyReply#Insufficient} and the coordinator will send {@link #Maximal}.
          * Note: this was introduced after the other kinds, and so may only be sent once every replica understands it
-         * (see {@link accord.api.ProtocolModifiers#applyOmitsDepsIfKnownStable()}).
+         * (see {@link accord.api.ProtocolModifiers.SendMinimal#MINIMAL_NO_DEPS}).
          */
         NoDeps
     }

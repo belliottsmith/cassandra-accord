@@ -385,34 +385,34 @@ in §8).
 
 ## 6b. Side quests
 
-### `Apply.Kind.NoDeps`: don't resend deps to replicas known to be Stable
+### `Apply.Kind.NoDeps`: don't resend deps to replicas expected to be Stable
 - [x] New `Apply.Kind.NoDeps`, appended so that the existing kinds keep their encoding. It carries
       neither the definition nor the deps. Cassandra's `ApplySerializers` omits the deps field only
       for `NoDeps`.
 - [x] The replica side needed no change. `Commands.apply` already accepts null deps: `KEEP_DEPS` if
       the replica has `DepsKnown`, otherwise `Insufficient`, in which case `Persist` falls back to
       `Maximal`.
-- [x] The decision is made per recipient, in `Persist.applyKind(to, status)`: a healthy recipient
-      that the coordinator *knows* is Stable gets `NoDeps`. Everyone else keeps the existing kind.
+- [x] The decision is made per recipient, in `Persist.applyKind(to, status)`: a healthy recipient that we
+      **expect to have been sent Stable** gets `NoDeps`. Everyone else keeps the existing kind.
+  - This follows the convention of other minimal messages: *assume* earlier messages were delivered,
+    and repair with `Maximal` on `Insufficient`.
   - `ExecuteTxn` tracks `sentStable`: replicas sent `StableThenRead`/`Commit`/maximal commit, or self
     via a non-fast `LocalExecute`.
-  - `knownStable` is the subset of those that replied ok or `Waiting`.
   - It is passed to `Persist` as coordinator-local knowledge through
-    `CoordinationFlags.withKnownStable` / `isKnownStable`, so no adapter signatures change.
+    `CoordinationFlags.withStableSent` / `isStableSent`, so no adapter signatures change.
   - Paths without this knowledge (recovery, interop, blind-write persist) behave as before.
-- [x] We use "acknowledged Stable" rather than merely "sent Stable". Cassandra splits small and large
-      messages onto different connections, so a large Stable could be overtaken by a small `NoDeps`
-      Apply. The replica would then reply `Insufficient` and we'd send `Maximal`, costing more than
-      we saved. This mostly forgoes the saving for remote-DC replicas whose Stable ack hasn't
-      arrived by the time we persist.
-  - Possible follow-up: also send `NoDeps` to replicas we've merely sent Stable to, and have the
-    replica wait briefly for an in-flight Stable before replying `Insufficient`.
-- [x] Gated by `ProtocolModifiers.applyOmitsDepsIfKnownStable()`, default off. Cassandra:
-      `accord.apply_omits_deps_if_known_stable`. Must stay off until every node understands
-      `NoDeps`.
-- [x] Burn randomises it (override with `-Daccord.burn.apply_omits_deps_if_known_stable`). Same-seed
-      A/B over 40 seeds: identical outcomes and `APPLY_REQ` counts, so no `Insufficient` fallbacks.
-      Over 8 seeds, 40–85% of what would have been `Minimal` Applies were sent as `NoDeps`.
+  - With the default `SendStableMessages.FOR_READS_OR_NONE_IF_FASTEXEC`, only readers are sent Stable,
+    so non-readers still receive deps.
+- [x] Configured by merging into `send_minimal`: `ProtocolModifiers.SendMinimal { MAXIMAL, MINIMAL,
+      MINIMAL_NO_DEPS }`, default `MINIMAL`.
+  - Cassandra's `accord.send_minimal` is now this enum (the tests that set `false` now set `MAXIMAL`).
+  - `MINIMAL_NO_DEPS` must not be enabled until every node understands `NoDeps`.
+- [x] Burn randomises it (override with `-Daccord.burn.send_minimal_no_deps`).
+- [ ] Later, if `Insufficient` replies are frequent: a general mechanism, for all phases, to *defer* an
+      `Insufficient` reply for a short window, so a slow earlier message (e.g. a large Stable on the
+      large-message connection) can be delivered first. Add a metric for `Insufficient` replies to
+      decide whether this is needed. `AccordExecutor` should already order a queued Stable before a
+      queued Apply.
 - Observation (not investigated): `Maximal` Applies are numerous in burn, sometimes more than
   `Minimal`. They come from non-HEALTHY recipients and the recovery/sync point adapters. Possibly
   worth a look.

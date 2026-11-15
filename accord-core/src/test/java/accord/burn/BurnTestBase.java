@@ -466,11 +466,11 @@ public class BurnTestBase
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionMultiKey", coordinatorBacklogExecutionMultiKey);
         logger.info("Backlog execution: {}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "");
         setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
-        boolean applyOmitsDepsIfKnownStable = random.nextBoolean();
-        if (System.getProperty("accord.burn.apply_omits_deps_if_known_stable") != null)
-            applyOmitsDepsIfKnownStable = Boolean.getBoolean("accord.burn.apply_omits_deps_if_known_stable");
-        setUnsafe(ProtocolModifiers.class, "applyOmitsDepsIfKnownStable", applyOmitsDepsIfKnownStable);
-        logger.info("Apply omits deps if known stable: {}", applyOmitsDepsIfKnownStable);
+        boolean sendMinimalNoDeps = random.nextBoolean();
+        if (System.getProperty("accord.burn.send_minimal_no_deps") != null)
+            sendMinimalNoDeps = Boolean.getBoolean("accord.burn.send_minimal_no_deps");
+        setUnsafe(ProtocolModifiers.class, "sendMinimalNoDeps", sendMinimalNoDeps && ProtocolModifiers.sendMinimal());
+        logger.info("Send minimal without deps: {}", sendMinimalNoDeps);
         Configure.validate();
 
         Supplier<LongSupplier> nowSupplier = () -> {

@@ -95,26 +95,26 @@ public enum ExecuteFlag
         }
 
         /**
-         * @return true iff the coordinator knows {@code node} has recorded the transaction as Stable,
-         * so that it does not need to be sent the transaction's definition or dependencies again.
+         * @return true iff the coordinator has sent {@code node} a message that records the transaction as Stable,
+         * so that (assuming it was delivered) it does not need to be sent the transaction's definition or deps again.
          * This is coordinator-local knowledge, and is not sent to replicas.
          */
-        default boolean isKnownStable(Node.Id node)
+        default boolean isStableSent(Node.Id node)
         {
             return false;
         }
 
         /**
-         * @return a view of {@code flags} that additionally reports {@code knownStable} via {@link #isKnownStable}.
-         * {@code knownStable} is copied, so may be safely modified afterwards.
+         * @return a view of {@code flags} that additionally reports {@code stableSentTo} via {@link #isStableSent}.
+         * {@code stableSentTo} is copied, so may be safely modified afterwards.
          */
-        static CoordinationFlags withKnownStable(CoordinationFlags flags, IntHashSet knownStable)
+        static CoordinationFlags withStableSent(CoordinationFlags flags, IntHashSet stableSentTo)
         {
-            if (knownStable.isEmpty())
+            if (stableSentTo.isEmpty())
                 return flags;
-            IntHashSet copy = new IntHashSet(knownStable.size());
-            copy.addAll(knownStable);
-            return new WithKnownStable(flags, copy);
+            IntHashSet copy = new IntHashSet(stableSentTo.size());
+            copy.addAll(stableSentTo);
+            return new WithStableSent(flags, copy);
         }
 
         static CoordinationFlags none()
@@ -133,15 +133,15 @@ public enum ExecuteFlag
         }
     }
 
-    static class WithKnownStable implements CoordinationFlags
+    static class WithStableSent implements CoordinationFlags
     {
         final CoordinationFlags wrapped;
-        final IntHashSet knownStable;
+        final IntHashSet stableSentTo;
 
-        WithKnownStable(CoordinationFlags wrapped, IntHashSet knownStable)
+        WithStableSent(CoordinationFlags wrapped, IntHashSet stableSentTo)
         {
-            this.wrapped = wrapped instanceof WithKnownStable ? ((WithKnownStable) wrapped).wrapped : wrapped;
-            this.knownStable = knownStable;
+            this.wrapped = wrapped instanceof WithStableSent ? ((WithStableSent) wrapped).wrapped : wrapped;
+            this.stableSentTo = stableSentTo;
         }
 
         @Override public boolean isReadyToExecute(Node.Id node) { return wrapped.isReadyToExecute(node); }
@@ -150,12 +150,12 @@ public enum ExecuteFlag
         @Override public void setNoWait() { wrapped.setNoWait(); }
         @Override public void add(Node.Id node, ExecuteFlags flags) { wrapped.add(node, flags); }
         @Override public ExecuteFlags get(Node.Id node) { return wrapped.get(node); }
-        @Override public boolean isKnownStable(Node.Id node) { return knownStable.contains(node.id); }
+        @Override public boolean isStableSent(Node.Id node) { return stableSentTo.contains(node.id); }
 
         @Override
         public String toString()
         {
-            return wrapped + "{knownStable:" + knownStable + '}';
+            return wrapped + "{stableSentTo:" + stableSentTo + '}';
         }
     }
 

@@ -104,6 +104,24 @@ public class ProtocolModifiers
 
     public enum CoordinatorBacklogExecution { DISABLED, ON_RECOVERY, ALWAYS }
 
+    /**
+     * How much information to include in messages, assuming earlier messages have been delivered.
+     * Less information is more efficient, but may lead to additional traffic and latency when earlier messages
+     * have not arrived, as the recipient must request (or the coordinator must resend) a more complete message.
+     */
+    public enum SendMinimal
+    {
+        /** Always include everything a recipient might need */
+        MAXIMAL,
+        /** Include the least information expected to be necessary, but always include deps with Apply */
+        MINIMAL,
+        /**
+         * As MINIMAL, but also omit deps from Apply messages to replicas we expect to have been sent a Stable message
+         * (see {@link accord.messages.Apply.Kind#NoDeps}). Must not be enabled until every replica understands NoDeps.
+         */
+        MINIMAL_NO_DEPS
+    }
+
     public enum InformOfDurability { NONE, HOME, ALL }
 
     public enum ReplicaExecution { NONE, BLIND_WRITE, ALL }
@@ -154,8 +172,8 @@ public class ProtocolModifiers
         private static SendStableMessages sendStableMessages = FOR_READS_OR_NONE_IF_FASTEXEC;
         public static synchronized void setSendStableMessages(SendStableMessages newSendStableMessages) { pre(); sendStableMessages = newSendStableMessages; }
 
-        private static boolean sendMinimal = true;
-        public static synchronized void setSendMinimal(boolean newSendMinimal) { pre(); sendMinimal = newSendMinimal; }
+        private static SendMinimal sendMinimal = SendMinimal.MINIMAL;
+        public static synchronized void setSendMinimal(SendMinimal newSendMinimal) { pre(); sendMinimal = newSendMinimal; }
 
         private static boolean permitCoordinatorLocalExecution = true;
         public static synchronized void setPermitCoordinatorLocalExecution(boolean newPermitCoordinatorLocalExecution) { pre(); permitCoordinatorLocalExecution = newPermitCoordinatorLocalExecution; }
@@ -221,9 +239,6 @@ public class ProtocolModifiers
 
         private static boolean coordinatorBacklogExecutionMultiKey = false;
         public static synchronized void setCoordinatorBacklogExecutionMultiKey(boolean newCoordinatorBacklogExecutionMultiKey) { pre(); coordinatorBacklogExecutionMultiKey = newCoordinatorBacklogExecutionMultiKey; }
-
-        private static boolean applyOmitsDepsIfKnownStable = false;
-        public static synchronized void setApplyOmitsDepsIfKnownStable(boolean newApplyOmitsDepsIfKnownStable) { pre(); applyOmitsDepsIfKnownStable = newApplyOmitsDepsIfKnownStable; }
 
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
@@ -292,8 +307,15 @@ public class ProtocolModifiers
     public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && !mayExecuteAtReplica(txnId)); }
     public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 
-    private static final boolean sendMinimal = Configure.sendMinimal;
+    private static final boolean sendMinimal = Configure.sendMinimal != SendMinimal.MAXIMAL;
     public static boolean sendMinimal() { return sendMinimal; }
+
+    private static boolean sendMinimalNoDeps = Configure.sendMinimal == SendMinimal.MINIMAL_NO_DEPS;
+    /**
+     * Whether {@link accord.coordinate.Persist} may send {@link accord.messages.Apply.Kind#NoDeps} to replicas we
+     * expect to have been sent a Stable message (see {@link accord.coordinate.ExecuteFlag.CoordinationFlags#isStableSent}).
+     */
+    public static boolean sendMinimalNoDeps() { return sendMinimalNoDeps; }
 
     private static final boolean dataStoreRequiresUniqueHlcs = Configure.dataStoreRequiresUniqueHlcs;
     public static boolean dataStoreRequiresUniqueHlcs() { return dataStoreRequiresUniqueHlcs; }
@@ -374,15 +396,6 @@ public class ProtocolModifiers
      * If disabled, only {@link accord.primitives.TxnId.Cardinality#SingleKey} transactions are executed as part of a backlog.
      */
     public static boolean coordinatorBacklogExecutionMultiKey() { return coordinatorBacklogExecutionMultiKey; }
-
-    private static boolean applyOmitsDepsIfKnownStable = Configure.applyOmitsDepsIfKnownStable;
-
-    /**
-     * Whether {@link accord.coordinate.Persist} may send {@link accord.messages.Apply.Kind#NoDeps} to replicas the
-     * coordinator knows to have recorded the transaction as Stable (see {@link accord.coordinate.ExecuteFlag.CoordinationFlags#isKnownStable}).
-     * Must not be enabled until every replica understands {@link accord.messages.Apply.Kind#NoDeps}.
-     */
-    public static boolean applyOmitsDepsIfKnownStable() { return applyOmitsDepsIfKnownStable; }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

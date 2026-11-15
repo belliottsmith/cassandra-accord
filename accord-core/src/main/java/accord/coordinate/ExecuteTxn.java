@@ -141,13 +141,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         public void onSuccessExclusive(Id from, ReadReply reply)
         {
             hasOnlyRedundant &= reply == CommitOrReadNack.Redundant;
-            if (reply.isOk() || reply == Waiting)
-            {
-                if (sentStable.contains(from.id))
-                    knownStable.add(from.id);
-                if (RequestStatus.Success == recordSuccess(from) && informOnSuccess)
-                    informStable();
-            }
+            if ((reply.isOk() || reply == Waiting) && RequestStatus.Success == recordSuccess(from) && informOnSuccess)
+                informStable();
         }
 
         @Override
@@ -201,9 +196,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     final CoordinationFlags flags;
     private final StableTracker stable;
     private @Nullable SortedListSet<Node.Id> unstableFastReads;
-    // replicas we have sent a message that records the transaction as Stable, and those that have acknowledged it;
-    // the latter need not be sent our deps again when we persist (see Apply.Kind.NoDeps)
-    private final IntHashSet sentStable = new IntHashSet(), knownStable = new IntHashSet();
+    // replicas we have sent a message that records the transaction as Stable; assuming delivery, these need not be
+    // sent our deps again when we persist (see Apply.Kind.NoDeps); if they are missing they will reply Insufficient
+    private final IntHashSet sentStable = new IntHashSet();
 
     private Data data;
     private long uniqueHlc;
@@ -470,7 +465,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private CoordinationFlags persistFlags()
     {
-        return CoordinationFlags.withKnownStable(flags, knownStable);
+        return CoordinationFlags.withStableSent(flags, sentStable);
     }
 
     /**

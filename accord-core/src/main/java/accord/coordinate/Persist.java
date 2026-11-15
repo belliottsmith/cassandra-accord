@@ -50,7 +50,7 @@ import accord.topology.Topologies;
 import accord.topology.TopologyException;
 import accord.utils.Invariants;
 
-import static accord.api.ProtocolModifiers.applyOmitsDepsIfKnownStable;
+import static accord.api.ProtocolModifiers.sendMinimalNoDeps;
 import static accord.api.TopologySorter.NodeStatus.HEALTHY;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Apply.Kind.Maximal;
@@ -153,7 +153,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     {
         if (nodeStatus != HEALTHY)
             return Maximal;
-        if (applyKind == Minimal && applyOmitsDepsIfKnownStable() && flags.isKnownStable(to))
+        if (applyKind == Minimal && sendMinimalNoDeps() && flags.isStableSent(to))
             return NoDeps;
         return applyKind;
     }
