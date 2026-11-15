@@ -69,6 +69,13 @@ public interface TopologySorter
     {
         TopologySorter get(Topology topologies);
         TopologySorter get(Topologies topologies);
+
+        /**
+         * @return true iff {@code node} is known to be near this node (e.g. in the same DC), so that communication
+         * between us is cheap. Used to decide whether to defer to another coordinator (e.g. for backlog execution).
+         * If unknown, return false.
+         */
+        default boolean isNearby(Node.Id node) { return false; }
     }
 
     interface StaticSorter extends Supplier, TopologySorter

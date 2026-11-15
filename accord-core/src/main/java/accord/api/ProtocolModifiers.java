@@ -243,6 +243,9 @@ public class ProtocolModifiers
         private static boolean coordinatorBacklogExecutionClaims = false;
         public static synchronized void setCoordinatorBacklogExecutionClaims(boolean newCoordinatorBacklogExecutionClaims) { pre(); coordinatorBacklogExecutionClaims = newCoordinatorBacklogExecutionClaims; }
 
+        private static boolean coordinatorBacklogExecutionYieldToNearby = true;
+        public static synchronized void setCoordinatorBacklogExecutionYieldToNearby(boolean newCoordinatorBacklogExecutionYieldToNearby) { pre(); coordinatorBacklogExecutionYieldToNearby = newCoordinatorBacklogExecutionYieldToNearby; }
+
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
 
@@ -408,6 +411,14 @@ public class ProtocolModifiers
      * {@link accord.messages.BacklogClaim}.
      */
     public static boolean coordinatorBacklogExecutionClaims() { return coordinatorBacklogExecutionClaims; }
+
+    private static boolean coordinatorBacklogExecutionYieldToNearby = Configure.coordinatorBacklogExecutionYieldToNearby;
+
+    /**
+     * Whether backlog executors leave a transaction to its original coordinator if the latter is nearby
+     * (see {@link accord.local.Node#isNearby}) and plausibly still coordinating it
+     */
+    public static boolean coordinatorBacklogExecutionYieldToNearby() { return coordinatorBacklogExecutionYieldToNearby; }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

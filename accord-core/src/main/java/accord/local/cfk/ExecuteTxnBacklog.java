@@ -54,9 +54,12 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
+import accord.topology.Topology;
 
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionClaims;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionMultiKey;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionYieldToNearby;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
@@ -107,7 +110,10 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * (for coordinators that have not yet reached execution), executions paused, and results retained (for coordinators
  * that receive our RemoteSuccess before reaching execution).
  * <p>
- * TODO (expected): yield to nearby live coordinators (see EXECUTE_BACKLOG_PLAN.md)
+ * <p>
+ * We yield to a transaction's original coordinator if it is nearby (see {@link Node#isNearby}) and plausibly still
+ * coordinating the transaction, as it will receive its replies about as promptly as we would. If it is expected to
+ * continue the backlog behind the transaction itself, we also stop listening to the key.
  */
 public class ExecuteTxnBacklog implements NotifySink
 {
@@ -197,6 +203,7 @@ public class ExecuteTxnBacklog implements NotifySink
         if (!mayExecute(txnId) || txnId.node.equals(node.id()))
             return;
 
+        boolean yield = shouldYieldTo(txnId);
         TxnId claimAhead = null;
         SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(key);
         if (safeCfk != null && safeCfk.overrideSink() == this)
@@ -208,14 +215,51 @@ public class ExecuteTxnBacklog implements NotifySink
                 TxnInfo next = nextBacklog(cfk, info.executeAt);
                 // if nothing eligible is queued behind this transaction then the backlog is exhausted once it is executed,
                 // so stop listening on this key; a later coordinator may decide to install us again
-                if (next == null) safeCfk.overrideSink(null);
+                if (next == null || (yield && mayContinueBacklog(txnId, key))) safeCfk.overrideSink(null);
                 // if a single key transaction is queued behind this one then once we have executed this transaction it
                 // will be ready to execute, so we may claim it (see ExecuteBacklogTxn)
-                else if (next.is(SingleKey) && mayClaim(next, Ballot.ZERO)) claimAhead = next.plainTxnId();
+                else if (!yield && next.is(SingleKey) && mayClaim(next, Ballot.ZERO) && !shouldYieldTo(next.plainTxnId())) claimAhead = next.plainTxnId();
             }
         }
 
+        if (yield)
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: yielding backlog execution to nearby coordinator", txnId);
+            return;
+        }
+
         execute(safeStore.commandStore(), txnId, claimAhead);
+    }
+
+    /**
+     * @return true iff the original coordinator of {@code txnId} is nearby (e.g. in the same DC) and plausibly still
+     * coordinating it, in which case it will receive its replies about as promptly as we would, so we should leave
+     * the transaction to it rather than duplicate its work
+     * TODO (desired): consider the coordinator's liveness, not only the transaction's age
+     */
+    private boolean shouldYieldTo(TxnId txnId)
+    {
+        Node.Id coordinator = txnId.node;
+        if (!coordinatorBacklogExecutionYieldToNearby() || coordinator.equals(node.id()) || !node.isNearby(coordinator) || isObligated(txnId))
+            return false;
+
+        long ageMicros = Math.max(0, node.now() - txnId.hlc());
+        return !node.agent().isSlowCoordinator(ageMicros, MICROSECONDS, txnId, 0);
+    }
+
+    /**
+     * @return true iff the original coordinator of {@code txnId} is expected to continue executing the backlog on
+     * {@code key} behind it, i.e. it will execute the transaction locally and install its own backlog sink
+     */
+    private boolean mayContinueBacklog(TxnId txnId, RoutingKey key)
+    {
+        if (!coordinatorBacklogExecution(Ballot.ZERO) || !txnId.is(SingleKey))
+            return false;
+
+        Topology current = node.topology().current();
+        Topology.NodeInfo info = current.nodeInfo(txnId.node);
+        return info != null && info.ranges.contains(key);
     }
 
     @Override

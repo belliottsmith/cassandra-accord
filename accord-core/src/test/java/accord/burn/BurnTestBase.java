@@ -56,6 +56,7 @@ import java.util.function.IntSupplier;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
 import java.util.stream.IntStream;
+import java.util.stream.LongStream;
 import java.util.zip.CRC32;
 
 import org.slf4j.Logger;
@@ -468,7 +469,11 @@ public class BurnTestBase
         if (System.getProperty("accord.burn.coordinator_backlog_execution_claims") != null)
             coordinatorBacklogExecutionClaims = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_claims");
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionClaims", coordinatorBacklogExecutionClaims);
-        logger.info("Backlog execution: {}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "");
+        boolean coordinatorBacklogExecutionYieldToNearby = random.nextBoolean();
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_yield") != null)
+            coordinatorBacklogExecutionYieldToNearby = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_yield");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionYieldToNearby", coordinatorBacklogExecutionYieldToNearby);
+        logger.info("Backlog execution: {}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "");
         setUnsafe(ProtocolModifiers.class, "replicaExecution", random.pick(ReplicaExecution.values()));
         boolean sendMinimalNoDeps = random.nextBoolean();
         if (System.getProperty("accord.burn.send_minimal_no_deps") != null)
@@ -503,6 +508,9 @@ public class BurnTestBase
         int[] keys = IntStream.range(0, keyCount).toArray();
         Packet[] requests = generate(random, listener, Function.identity(), clients, nodes, keys, operations).toArray(Packet[]::new);
         int[] starts = new int[requests.length];
+        long[] startMillis = new long[requests.length];
+        long[] appliedLatencyMillis = new long[requests.length];
+        AtomicInteger appliedCount = new AtomicInteger();
         Packet[] replies = new Packet[requests.length];
 
         EnumMap<ListResult.Status, AtomicInteger> counters = new EnumMap<>(ListResult.Status.class);
@@ -515,6 +523,7 @@ public class BurnTestBase
         {
             int i = requestIndex.getAndIncrement();
             starts[i] = clock.incrementAndGet();
+            startMillis[i] = queue.nowInMillis();
             initialRequests.add(requests[i]);
         }
 
@@ -528,6 +537,7 @@ public class BurnTestBase
             {
                 int i = requestIndex.getAndIncrement();
                 starts[i] = clock.incrementAndGet();
+                startMillis[i] = queue.nowInMillis();
                 queue.addNoDelay(requests[i]);
                 if (i == requests.length - 1)
                     onSubmitted.get().run();
@@ -562,6 +572,7 @@ public class BurnTestBase
                         return;
 
                     case Applied:
+                        appliedLatencyMillis[appliedCount.getAndIncrement()] = queue.nowInMillis() - startMillis[(int)packet.replyId];
                     case RecoveryApplied:
                         replies[(int)packet.replyId] = packet;
                         counters.get(reply.status).incrementAndGet();
@@ -632,6 +643,13 @@ public class BurnTestBase
                     observedOperations, operations);
         logger.info("Message counts: {}", statsInDescOrder(messageStatsMap));
         logger.info("Executions: {}", executionStats);
+        {
+            long[] latencies = Arrays.copyOf(appliedLatencyMillis, appliedCount.get());
+            Arrays.sort(latencies);
+            if (latencies.length > 0)
+                logger.info("Applied latency (ms): mean={} p50={} p90={} p99={}", LongStream.of(latencies).sum() / latencies.length,
+                            latencies[latencies.length / 2], latencies[(int)(latencies.length * 0.9)], latencies[(int)(latencies.length * 0.99)]);
+        }
         logger.info("Took {} and in logical time of {}", Duration.ofNanos(System.nanoTime() - startNanos), Duration.ofMillis(queue.nowInMillis() - startLogicalMillis));
         if (clock.get() != operations * 2 || observedOperations != operations)
         {

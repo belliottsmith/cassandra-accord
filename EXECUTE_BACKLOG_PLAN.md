@@ -408,20 +408,57 @@ in §8).
     it needs a DC-aware burn topology (Phase 2b).
 
 ### Phase 2b: Locality and yielding
-- [ ] Locality hook (§4.6) in accord core, plus Cassandra and burn implementations.
-- [ ] **Burn:** DC-structured link latencies (cheap local links, expensive remote links), so claims
-      and yielding can be evaluated.
-- [ ] Make sure coordinators always pick up waiting backlog behind their own txn (relies on Phase 1
-      takeover), so that yielding to them is sufficient.
-- [ ] Coordinator "plausibly still coordinating" heuristic: txn age vs execute timeout, plus liveness.
-- [ ] Yield (§4.4): stop our chain at T when C is nearby, live and able to continue the chain; release
-      our sink. Otherwise skip T or execute it.
-- [ ] Only claim (or only backlog-execute) txns whose coordinator is remote. A local coordinator will
-      receive the same replies at about the same time as us, so we'd only duplicate its work.
+- [x] Locality hook: `TopologySorter.Supplier.isNearby(Node.Id)`, which defaults to false (unknown), and
+      `Node.isNearby(Id)`.
+  - Cassandra: `AccordTopologySorter.Supplier` uses `InOurDc.endpoints()` on the mapped endpoint;
+    `CompositeTopologySorter.Supplier` says nearby if any delegate does.
+- [x] **Burn DCs:** `Cluster` picks 1 (50%), 2 or 3 DCs (override with `-Daccord.burn.dcs`). Nodes and
+      clients are assigned to DCs by `floorMod(id, dcs)`.
+  - Links between DCs get a fixed per-link base latency of 20–150ms, plus the usual jitter. Links
+    within a DC keep the existing distribution.
+  - With more than one DC, each node gets a `DcAwareSorter` (prefer self, then the same DC, then
+    intersection size), which also makes read-candidate selection DC-aware. With one DC there is no
+    locality information, so behaviour is as before.
+- [x] **Burn client latency:** each run logs mean/p50/p90/p99 of logical client latency for `Applied`
+      replies.
+- [x] **Yield** (`ExecuteTxnBacklog.shouldYieldTo`): when notified of T, skip it if T's original
+      coordinator is nearby, not us, and plausibly still coordinating
+      (`!agent.isSlowCoordinator(now - txnId.hlc)`), unless we are obligated (have claimed T).
+  - Also stop listening on the key if that coordinator is expected to continue the backlog itself
+    (`ALWAYS` mode, single-key T, and the coordinator replicates the key).
+  - Claim-ahead is not sent to successors we would yield to.
+  - Configurable: `ProtocolModifiers.coordinatorBacklogExecutionYieldToNearby()`, default on.
+    Cassandra: `accord.coordinator_backlog_execution_yield_to_nearby`. Burn randomises it (override
+    with `-Daccord.burn.coordinator_backlog_execution_yield`).
+- [ ] Coordinator liveness. "Plausibly still coordinating" is age-based only; burn's
+      `isSlowCoordinator` is always false, so burn always yields to nearby coordinators.
 - [ ] Leave room for decline (§4.4): message/reply shapes that allow `Declined(ABANDONED)` later.
 - [ ] Also defer to a live local *recovery* coordinator (non-zero promised ballot).
 - [ ] When the claimant abandons after claiming (e.g. definition incomplete due to reordering), wait
       for or fetch the definition instead.
+
+**Burn evaluation, 3 DCs, multi-key backlog execution.** Two batches of 40 seeds each (1–40, 41–80);
+the "yield" column toggles yielding to nearby coordinators.
+
+| config (latency in logical ms)  | mean (1–40 / 41–80) | p50 | p90 | lost | duplicate executions |
+|---------------------------------|---------------------|-----|-----|------|----------------------|
+| `DISABLED`                      | 8,605 / 12,115 | 6,560 / 9,760 | 18,089 / 26,274 | 3,999 / 5,344 | 15,472 / 15,667 |
+| `ALWAYS`, no yield, no claims   | 4,922 / 5,739  | 3,179 / 4,467 | 8,216 / 10,081  | 2,592 / 2,852 | 20,463 / 20,203 |
+| `ALWAYS`, yield, no claims      | 5,469 / 6,137  | 3,955 / 4,522 | 9,128 / 11,297  | 2,763 / 2,920 | 18,515 / 19,008 |
+| `ALWAYS`, no yield, claims      | 5,064 / 5,231  | 3,667 / 3,478 | 8,036 / 9,353   | 2,604 / 2,749 | 20,067 / 20,427 |
+| `ALWAYS`, yield, claims         | 4,580 / 6,294  | 2,750 / 4,801 | 7,849 / 11,675  | 2,276 / 3,008 | 18,617 / 18,635 |
+
+- **Backlog execution:** roughly halves mean latency (by 2.4× in the second batch), with p90 cut by
+  more than half and ~30–45% fewer lost txns. The cost is ~20–30% more duplicate executions.
+- **Yielding:** consistently removes ~7–10% of duplicate executions (~20% fewer backlog executions),
+  at a cost of ~8–10% mean latency. This is likely because burn always considers nearby coordinators
+  live, and its intra-DC links occasionally have large latency spikes.
+- **Claims:** their effect on latency is within the noise between batches, and they don't reduce
+  duplicates materially. Only ~10–15% of claims arrive while the coordinator is still executing.
+- Most duplicate executions (~15.5k) occur without backlog execution at all: recovery racing
+  coordinators. The ~3–5k attributable to backlog execution are the original coordinator and backlog
+  executors completing concurrently. Phase 3 (replica-side claims that suppress competing reads) is
+  the remaining lever for those.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG

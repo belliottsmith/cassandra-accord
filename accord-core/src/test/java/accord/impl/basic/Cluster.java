@@ -59,6 +59,7 @@ import accord.api.OwnershipEventListener;
 import accord.api.RoutingKey;
 import accord.api.Scheduler;
 import accord.api.Scheduler.Scheduled;
+import accord.api.TopologySorter;
 import accord.burn.BurnTestTopologyService;
 import accord.burn.TopologyUpdates;
 import accord.burn.random.FrequentLargeRange;
@@ -144,6 +145,7 @@ import static java.util.stream.Collectors.toList;
 public class Cluster
 {
     public static final Logger trace = LoggerFactory.getLogger("accord.impl.basic.Trace");
+    private static final Logger logger = LoggerFactory.getLogger(Cluster.class);
 
     public static class Stats
     {
@@ -199,6 +201,8 @@ public class Cluster
     final Map<MessageType, Stats> statsMap = new HashMap<>();
 
     final RandomSource random;
+    // the number of simulated DCs; nodes are assigned to DCs by their id. If 1, nodes have no locality information
+    final int dcs;
     final LinkConfig linkConfig;
     final Function<Id, Node> lookup;
     final PendingQueue pending;
@@ -219,8 +223,22 @@ public class Cluster
         this.checkFailures = checkFailures;
         this.lookup = lookup;
         this.responseSink = responseSink;
+        int dcs = random.pickInt(1, 1, 2, 3);
+        if (Integer.getInteger("accord.burn.dcs") != null)
+            dcs = Integer.getInteger("accord.burn.dcs");
+        this.dcs = dcs;
         this.linkConfig = defaultLinkConfig(random, rf);
         this.links = linkConfig.defaultLinks;
+    }
+
+    public boolean sameDc(Id a, Id b)
+    {
+        return Math.floorMod(a.id, dcs) == Math.floorMod(b.id, dcs);
+    }
+
+    TopologySorter.Supplier topologySorter(Id self)
+    {
+        return dcs == 1 ? SizeOfIntersectionSorter.SUPPLIER : new DcAwareSorter.Supplier(self, this::sameDc);
     }
 
     NodeSink create(Id self, NodeSink.TimeoutSupplier timeouts)
@@ -609,6 +627,7 @@ public class Cluster
         {
             RandomSource random = randomSupplier.get();
             Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, nodeMap::get, () -> topologyFactory.rf, responseSink);
+            logger.info("Simulating {} DC(s)", sinks.dcs);
             TopologyUpdates topologyUpdates = new TopologyUpdates(executorMap::get);
             TopologyRandomizer.Listener schemaApply = t -> {
                 for (Node node : nodeMap.values())
@@ -673,7 +692,7 @@ public class Cluster
                 Node node = new Node(id, messageSink, topologyService, timeService, new AtomicUniqueAutoStaleTimes(timeService, 100L, MICROSECONDS),
                                      () -> new ListStore(scheduler, random, id), new ShardDistributor.EvenSplit<>(8, ignore -> new PrefixedIntHashKey.Splitter()),
                                      agent,
-                                     randomSupplier.get(), scheduler, SizeOfIntersectionSorter.SUPPLIER, DefaultRemoteListeners::new, time -> new DefaultTimeouts(time, Runnable::run),
+                                     randomSupplier.get(), scheduler, sinks.topologySorter(id), DefaultRemoteListeners::new, time -> new DefaultTimeouts(time, Runnable::run),
                                      TestProgressLogs::new, DefaultLocalListeners.Factory::new, DelayedCommandStores.factory(sinks.pending, cacheLoading), new CoordinationAdapter.DefaultFactory(),
                                      journal.durableBeforePersister(), journal);
                 journal.start(node);
@@ -1196,7 +1215,16 @@ public class Cluster
 
     private BiFunction<Id, Id, Link> defaultLinks(RandomSource random)
     {
-        return caching((from, to) -> healthy(defaultRandomWalkLatencyMicros(random)));
+        return caching((from, to) -> healthy(sameDc(from, to) ? defaultRandomWalkLatencyMicros(random)
+                                                             : interDcLatencyMicros(random)));
+    }
+
+    // a fixed (per link) base latency between DCs, plus the usual jitter
+    private LongSupplier interDcLatencyMicros(RandomSource random)
+    {
+        long baseMicros = MILLISECONDS.toMicros(random.nextInt(20, 150));
+        LongSupplier jitter = defaultRandomWalkLatencyMicros(random);
+        return () -> baseMicros + jitter.getAsLong();
     }
 
     private BiFunction<Id, Id, Link> caching(BiFunction<Id, Id, Link> uncached)

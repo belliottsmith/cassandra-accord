@@ -200,6 +200,7 @@ public class Node implements NodeCommandStoreService, UncaughtExceptionListener.
     private final AtomicLong nextCoordinationId = new AtomicLong();
 
     private final ExecuteTxnBacklog executeBacklogSink;
+    private final TopologySorter.Supplier topologySorter;
 
     /**
      * Used to guard some operations that should normally operate on consistent information, but in rare cases may need to repeat work.
@@ -233,6 +234,7 @@ public class Node implements NodeCommandStoreService, UncaughtExceptionListener.
                                                           this::setPersistedDurableBefore,
                                                           run -> someExecutor().execute(run));
         this.commandStores = factory.create(this, agent, dataSupplier.get(), random.fork(), journal, shardDistributor, progressLogFactory.apply(this), localListenersFactory.apply(this));
+        this.topologySorter = topologySorter;
         this.topology = new TopologyManager(topologySorter, this, topologyService, time, timeouts);
         this.durabilityService = new DurabilityService(this);
         this.executeBacklogSink = new ExecuteTxnBacklog(this);
@@ -953,6 +955,14 @@ public class Node implements NodeCommandStoreService, UncaughtExceptionListener.
     public ExecuteTxnBacklog executeBacklogSink()
     {
         return executeBacklogSink;
+    }
+
+    /**
+     * @return true iff {@code node} is this node, or is known to be near it (e.g. in the same DC)
+     */
+    public boolean isNearby(Id node)
+    {
+        return id.equals(node) || topologySorter.isNearby(node);
     }
 
     public boolean isCoordinatingWithBallot(TxnId txnId, Ballot ballot)
