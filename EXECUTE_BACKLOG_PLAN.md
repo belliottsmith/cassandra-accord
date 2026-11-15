@@ -383,6 +383,40 @@ in §8).
       takeover while they still hold the slow executor's claim.
 - [ ] Decline reasons beyond `ABANDONED` (§4.4).
 
+## 6b. Side quests
+
+### `Apply.Kind.NoDeps`: don't resend deps to replicas known to be Stable
+- [x] New `Apply.Kind.NoDeps`, appended so that the existing kinds keep their encoding. It carries
+      neither the definition nor the deps. Cassandra's `ApplySerializers` omits the deps field only
+      for `NoDeps`.
+- [x] The replica side needed no change. `Commands.apply` already accepts null deps: `KEEP_DEPS` if
+      the replica has `DepsKnown`, otherwise `Insufficient`, in which case `Persist` falls back to
+      `Maximal`.
+- [x] The decision is made per recipient, in `Persist.applyKind(to, status)`: a healthy recipient
+      that the coordinator *knows* is Stable gets `NoDeps`. Everyone else keeps the existing kind.
+  - `ExecuteTxn` tracks `sentStable`: replicas sent `StableThenRead`/`Commit`/maximal commit, or self
+    via a non-fast `LocalExecute`.
+  - `knownStable` is the subset of those that replied ok or `Waiting`.
+  - It is passed to `Persist` as coordinator-local knowledge through
+    `CoordinationFlags.withKnownStable` / `isKnownStable`, so no adapter signatures change.
+  - Paths without this knowledge (recovery, interop, blind-write persist) behave as before.
+- [x] We use "acknowledged Stable" rather than merely "sent Stable". Cassandra splits small and large
+      messages onto different connections, so a large Stable could be overtaken by a small `NoDeps`
+      Apply. The replica would then reply `Insufficient` and we'd send `Maximal`, costing more than
+      we saved. This mostly forgoes the saving for remote-DC replicas whose Stable ack hasn't
+      arrived by the time we persist.
+  - Possible follow-up: also send `NoDeps` to replicas we've merely sent Stable to, and have the
+    replica wait briefly for an in-flight Stable before replying `Insufficient`.
+- [x] Gated by `ProtocolModifiers.applyOmitsDepsIfKnownStable()`, default off. Cassandra:
+      `accord.apply_omits_deps_if_known_stable`. Must stay off until every node understands
+      `NoDeps`.
+- [x] Burn randomises it (override with `-Daccord.burn.apply_omits_deps_if_known_stable`). Same-seed
+      A/B over 40 seeds: identical outcomes and `APPLY_REQ` counts, so no `Insufficient` fallbacks.
+      Over 8 seeds, 40–85% of what would have been `Minimal` Applies were sent as `NoDeps`.
+- Observation (not investigated): `Maximal` Applies are numerous in burn, sometimes more than
+  `Minimal`. They come from non-HEALTHY recipients and the recovery/sync point adapters. Possibly
+  worth a look.
+
 ## 7. Open questions
 
 - **Multi-key executors that don't replicate the whole txn** need the full definition and deps. Options:

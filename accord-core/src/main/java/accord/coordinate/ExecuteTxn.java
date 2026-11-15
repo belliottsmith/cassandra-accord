@@ -141,8 +141,13 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         public void onSuccessExclusive(Id from, ReadReply reply)
         {
             hasOnlyRedundant &= reply == CommitOrReadNack.Redundant;
-            if ((reply.isOk() || reply == Waiting) && RequestStatus.Success == recordSuccess(from) && informOnSuccess)
-                informStable();
+            if (reply.isOk() || reply == Waiting)
+            {
+                if (sentStable.contains(from.id))
+                    knownStable.add(from.id);
+                if (RequestStatus.Success == recordSuccess(from) && informOnSuccess)
+                    informStable();
+            }
         }
 
         @Override
@@ -196,6 +201,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     final CoordinationFlags flags;
     private final StableTracker stable;
     private @Nullable SortedListSet<Node.Id> unstableFastReads;
+    // replicas we have sent a message that records the transaction as Stable, and those that have acknowledged it;
+    // the latter need not be sent our deps again when we persist (see Apply.Kind.NoDeps)
+    private final IntHashSet sentStable = new IntHashSet(), knownStable = new IntHashSet();
 
     private Data data;
     private long uniqueHlc;
@@ -256,6 +264,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
             if (mayFastExecute)
                 markUnstableFastRead(node.id());
+            if (!mayFastExecute)
+                sentStable.add(self.id);
             new LocalExecute(txnId, executeFlags, mayFastExecute).process(node, node.agent().selfExpiresAt(txnId, READ_REQ, MICROSECONDS));
             if (!isPrivilegedVoteCommitting)
                 start(Collections.emptyList(), Collections.singletonList(node.id()));
@@ -321,6 +331,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private void sendStableOnly(Node.Id to)
     {
+        sentStable.add(to.id);
         Commit send = new Commit(commitKind(to), to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
         boolean addCallback = allTopologies.size() == 1 || stable.nodes().contains(to);
         if (addCallback) node.send(to, send, executor, stable, tracing);
@@ -349,11 +360,13 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     private void sendStableRead(Node.Id to, Commit.Kind kind)
     {
+        sentStable.add(to.id);
         node.send(to, new StableThenRead(kind, to, allTopologies, txnId, txn, route, executeAt, stableDeps), executor, this, tracing);
     }
 
     private void sendMaximal(Node.Id to)
     {
+        sentStable.add(to.id);
         Commit send = new Commit(StableWithTxnAndDeps, to, allTopologies, txnId, txn, route, ballot, executeAt, stableDeps);
         node.send(to, send, executor, stable, tracing);
     }
@@ -455,6 +468,11 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         }
     }
 
+    private CoordinationFlags persistFlags()
+    {
+        return CoordinationFlags.withKnownStable(flags, knownStable);
+    }
+
     /**
      * A backlog execution only proceeds if every replica we read from is already ready to execute the transaction.
      * If any is not, we abandon our attempt without sending any further messages, leaving the transaction
@@ -486,7 +504,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             // in case there is shared state between Result and Update.
             Writes writes = txnId.is(Txn.Kind.Write) ? txn.execute(txnId, executeAt, data) : null;
             Result result = txn.result(txnId, executeAt, data);
-            adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
+            adapter().persist(node, executor, allTopologies, route, ballot, persistFlags(), txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
         }
         else
         {
@@ -494,7 +512,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             {
                 if (txnId.isSomeRead() && !recoverReads())
                 {
-                    adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, null, null, null);
+                    adapter().persist(node, executor, allTopologies, route, ballot, persistFlags(), txnId, txn, executeAt, stableDeps, null, null, null);
                 }
                 else
                 {
@@ -574,7 +592,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                     return;
 
                 stable.setDone();
-                adapter().persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
+                adapter().persist(node, executor, allTopologies, route, ballot, persistFlags(), txnId, txn, executeAt, stableDeps, writes, result, takeCallback());
             });
         }
         else

@@ -18,6 +18,8 @@
 
 package accord.coordinate;
 
+import org.agrona.collections.IntHashSet;
+
 import accord.local.Node;
 import accord.utils.SortedArrays;
 import accord.utils.SortedList;
@@ -92,6 +94,29 @@ public enum ExecuteFlag
             return result;
         }
 
+        /**
+         * @return true iff the coordinator knows {@code node} has recorded the transaction as Stable,
+         * so that it does not need to be sent the transaction's definition or dependencies again.
+         * This is coordinator-local knowledge, and is not sent to replicas.
+         */
+        default boolean isKnownStable(Node.Id node)
+        {
+            return false;
+        }
+
+        /**
+         * @return a view of {@code flags} that additionally reports {@code knownStable} via {@link #isKnownStable}.
+         * {@code knownStable} is copied, so may be safely modified afterwards.
+         */
+        static CoordinationFlags withKnownStable(CoordinationFlags flags, IntHashSet knownStable)
+        {
+            if (knownStable.isEmpty())
+                return flags;
+            IntHashSet copy = new IntHashSet(knownStable.size());
+            copy.addAll(knownStable);
+            return new WithKnownStable(flags, copy);
+        }
+
         static CoordinationFlags none()
         {
             return of(ExecuteFlags.none());
@@ -105,6 +130,32 @@ public enum ExecuteFlag
         static CoordinationFlags empty(SortedList<Node.Id> list)
         {
             return list.size() <= 64 ? new SmallCoordinationFlags(ExecuteFlags.none(), list) : new LargeCoordinationFlags(ExecuteFlags.none(), list);
+        }
+    }
+
+    static class WithKnownStable implements CoordinationFlags
+    {
+        final CoordinationFlags wrapped;
+        final IntHashSet knownStable;
+
+        WithKnownStable(CoordinationFlags wrapped, IntHashSet knownStable)
+        {
+            this.wrapped = wrapped instanceof WithKnownStable ? ((WithKnownStable) wrapped).wrapped : wrapped;
+            this.knownStable = knownStable;
+        }
+
+        @Override public boolean isReadyToExecute(Node.Id node) { return wrapped.isReadyToExecute(node); }
+        @Override public boolean isAnyReadyToExecute() { return wrapped.isAnyReadyToExecute(); }
+        @Override public ExecuteFlags all() { return wrapped.all(); }
+        @Override public void setNoWait() { wrapped.setNoWait(); }
+        @Override public void add(Node.Id node, ExecuteFlags flags) { wrapped.add(node, flags); }
+        @Override public ExecuteFlags get(Node.Id node) { return wrapped.get(node); }
+        @Override public boolean isKnownStable(Node.Id node) { return knownStable.contains(node.id); }
+
+        @Override
+        public String toString()
+        {
+            return wrapped + "{knownStable:" + knownStable + '}';
         }
     }
 

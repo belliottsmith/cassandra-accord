@@ -50,9 +50,12 @@ import accord.topology.Topologies;
 import accord.topology.TopologyException;
 import accord.utils.Invariants;
 
+import static accord.api.ProtocolModifiers.applyOmitsDepsIfKnownStable;
 import static accord.api.TopologySorter.NodeStatus.HEALTHY;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Apply.Kind.Maximal;
+import static accord.messages.Apply.Kind.Minimal;
+import static accord.messages.Apply.Kind.NoDeps;
 import static accord.primitives.Status.Durability.AllQuorums;
 import static accord.topology.SelectShards.ALL;
 
@@ -146,11 +149,13 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
             finishOnFailure();
     }
 
-    private Apply.Kind applyKind(NodeStatus nodeStatus)
+    private Apply.Kind applyKind(Node.Id to, NodeStatus nodeStatus)
     {
-        if (nodeStatus == HEALTHY)
-            return applyKind;
-        return Maximal;
+        if (nodeStatus != HEALTHY)
+            return Maximal;
+        if (applyKind == Minimal && applyOmitsDepsIfKnownStable() && flags.isKnownStable(to))
+            return NoDeps;
+        return applyKind;
     }
 
     @Override
@@ -172,7 +177,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     {
         // applyMinimal is used for transaction execution by the original coordinator so it's important to use
         // Node's Apply factory in case the factory has to do synchronous Apply.
-        contact((to, nodeStatus) -> factory.create(applyKind(nodeStatus), to, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(to)), include);
+        contact((to, nodeStatus) -> factory.create(applyKind(to, nodeStatus), to, tracker.topologies(), txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(to)), include);
     }
 
     @Override

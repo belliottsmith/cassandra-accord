@@ -222,6 +222,9 @@ public class ProtocolModifiers
         private static boolean coordinatorBacklogExecutionMultiKey = false;
         public static synchronized void setCoordinatorBacklogExecutionMultiKey(boolean newCoordinatorBacklogExecutionMultiKey) { pre(); coordinatorBacklogExecutionMultiKey = newCoordinatorBacklogExecutionMultiKey; }
 
+        private static boolean applyOmitsDepsIfKnownStable = false;
+        public static synchronized void setApplyOmitsDepsIfKnownStable(boolean newApplyOmitsDepsIfKnownStable) { pre(); applyOmitsDepsIfKnownStable = newApplyOmitsDepsIfKnownStable; }
+
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
 
@@ -371,6 +374,15 @@ public class ProtocolModifiers
      * If disabled, only {@link accord.primitives.TxnId.Cardinality#SingleKey} transactions are executed as part of a backlog.
      */
     public static boolean coordinatorBacklogExecutionMultiKey() { return coordinatorBacklogExecutionMultiKey; }
+
+    private static boolean applyOmitsDepsIfKnownStable = Configure.applyOmitsDepsIfKnownStable;
+
+    /**
+     * Whether {@link accord.coordinate.Persist} may send {@link accord.messages.Apply.Kind#NoDeps} to replicas the
+     * coordinator knows to have recorded the transaction as Stable (see {@link accord.coordinate.ExecuteFlag.CoordinationFlags#isKnownStable}).
+     * Must not be enabled until every replica understands {@link accord.messages.Apply.Kind#NoDeps}.
+     */
+    public static boolean applyOmitsDepsIfKnownStable() { return applyOmitsDepsIfKnownStable; }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

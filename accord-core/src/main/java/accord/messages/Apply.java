@@ -76,12 +76,32 @@ public class Apply extends RouteRequest<ApplyReply>
         Apply create(Kind kind, Id to, Topologies participates, TxnId txnId, Ballot ballot, Route<?> scope, Txn txn, Timestamp executeAt, Deps deps, Writes writes, PersistableResult result, FullRoute<?> fullRoute, ExecuteFlags flags);
     }
 
-    public enum Kind { Minimal, Maximal }
+    public enum Kind
+    {
+        /**
+         * Sends the transaction's dependencies, but not its definition or full route
+         */
+        Minimal,
+
+        /**
+         * Sends the transaction's definition, dependencies and full route
+         */
+        Maximal,
+
+        /**
+         * Sends neither the transaction's definition nor its dependencies, for use only when the recipient is known
+         * to have recorded the transaction as Stable (so that it already has both). If the recipient turns out to be
+         * missing either, it will reply {@link ApplyReply#Insufficient} and the coordinator will send {@link #Maximal}.
+         * Note: this was introduced after the other kinds, and so may only be sent once every replica understands it
+         * (see {@link accord.api.ProtocolModifiers#applyOmitsDepsIfKnownStable()}).
+         */
+        NoDeps
+    }
 
     public final Kind kind;
     public final Ballot ballot;
     public final Timestamp executeAt;
-    private PartialDeps deps; // not much benefit in nullability, as we try only to commit to readers, so most recipients will need to receive deps
+    private @Nullable PartialDeps deps; // null only for Kind.NoDeps
     private @Nullable PartialTxn txn;
     public final @Nullable FullRoute<?> fullRoute;
     private @Nullable Writes writes;
@@ -101,7 +121,7 @@ public class Apply extends RouteRequest<ApplyReply>
         Invariants.require(txnId.kind() != Txn.Kind.Write || writes != null);
         this.ballot = ballot;
         this.kind = kind;
-        this.deps = deps.intersecting(scope);
+        this.deps = kind == Kind.NoDeps ? null : deps.intersecting(scope);
         this.txn = kind == Kind.Maximal ? txn.intersecting(scope, true) : null;
         this.fullRoute = kind == Kind.Maximal ? fullRoute : null;
         this.executeAt = executeAt;
