@@ -19,6 +19,7 @@
 package accord.api;
 
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -246,6 +247,12 @@ public class ProtocolModifiers
         private static boolean coordinatorBacklogExecutionYieldToNearby = true;
         public static synchronized void setCoordinatorBacklogExecutionYieldToNearby(boolean newCoordinatorBacklogExecutionYieldToNearby) { pre(); coordinatorBacklogExecutionYieldToNearby = newCoordinatorBacklogExecutionYieldToNearby; }
 
+        private static boolean coordinatorBacklogExecutionWait = false;
+        public static synchronized void setCoordinatorBacklogExecutionWait(boolean newCoordinatorBacklogExecutionWait) { pre(); coordinatorBacklogExecutionWait = newCoordinatorBacklogExecutionWait; }
+
+        private static long coordinatorBacklogExecutionLingerMicros = 0;
+        public static synchronized void setCoordinatorBacklogExecutionLinger(long linger, TimeUnit units) { pre(); coordinatorBacklogExecutionLingerMicros = units.toMicros(linger); }
+
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
 
@@ -419,6 +426,31 @@ public class ProtocolModifiers
      * (see {@link accord.local.Node#isNearby}) and plausibly still coordinating it
      */
     public static boolean coordinatorBacklogExecutionYieldToNearby() { return coordinatorBacklogExecutionYieldToNearby; }
+
+    private static boolean coordinatorBacklogExecutionWait = Configure.coordinatorBacklogExecutionWait;
+
+    /**
+     * Whether backlog executors wait for the replicas they read from to become ready to execute, rather than abandon
+     * their attempt. A backlog executor is typically caught up with the backlog, so that a replica that is not ready is
+     * typically about to be (e.g. it has yet to apply the predecessor we have just executed, or to receive a Stable
+     * message); if we abandon, the transaction instead falls to its original coordinator, which may be in another DC.
+     * We still abandon if a replica has not yet recorded the transaction as Stable, as we cannot then learn its
+     * definition, and if the transaction is executed by somebody else first.
+     * Must not be enabled until every replica supports {@link accord.messages.ReadTxnDataIfReady} without
+     * {@link accord.coordinate.ExecuteFlag#NO_WAIT}.
+     */
+    public static boolean coordinatorBacklogExecutionWait() { return coordinatorBacklogExecutionWait; }
+
+    private static long coordinatorBacklogExecutionLingerMicros = Configure.coordinatorBacklogExecutionLingerMicros;
+
+    /**
+     * How long a backlog executor continues to listen to a key once it has caught up with the backlog there, i.e.
+     * since it last found a STABLE transaction queued behind the one it is executing. If zero, it stops listening as
+     * soon as it catches up. A backlog executor is typically caught up under steady contention (as it executes
+     * transactions faster than they arrive), so lingering avoids handing the chain to remote coordinators; but while
+     * we linger we will also execute transactions that their original coordinator might execute as promptly.
+     */
+    public static long coordinatorBacklogExecutionLinger(TimeUnit units) { return units.convert(coordinatorBacklogExecutionLingerMicros, TimeUnit.MICROSECONDS); }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

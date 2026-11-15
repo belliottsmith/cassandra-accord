@@ -20,6 +20,7 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import accord.coordinate.ExecuteFlag;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
 import accord.local.Node;
@@ -27,6 +28,7 @@ import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
+import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
 import accord.topology.Topologies;
@@ -34,12 +36,16 @@ import accord.topology.Topologies;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 
 /**
- * An opportunistic read, for use by coordinators that do not necessarily know the full transaction definition
- * (e.g. backlog execution). Each store that is ready to execute begins its read immediately; as soon as we encounter
- * a store that is not ready to execute we abandon the read, replying {@link ReadData.CommitOrReadNack#NotReady}.
- * If every store is ready, then before any data we first reply with a (non-final) {@link ReadData.ReadyWithDefinition}
- * containing the definition and deps of every store we read from, so that the coordinator may reconstitute the
- * transaction (and know every replica it reads from is ready before any data arrives).
+ * A read for use by coordinators that do not necessarily know the full transaction definition (e.g. backlog execution).
+ * Each store that is ready to execute begins its read immediately. Before any data we first reply with a (non-final)
+ * {@link ReadData.ReadyWithDefinition} containing the definition and deps of every store, so that the coordinator may
+ * reconstitute the transaction.
+ * <p>
+ * With {@link ExecuteFlag#NO_WAIT}, the read is opportunistic: as soon as we encounter a store that is not ready to
+ * execute we abandon the read, replying {@link ReadData.CommitOrReadNack#NotReady}; so the coordinator knows every
+ * replica it reads from is ready before any data arrives. Otherwise, we wait for stores that are Stable to become
+ * ready to execute (as {@link ReadTxnData}), only abandoning if a store has yet to record the transaction as Stable
+ * (so that we cannot report its definition and deps).
  *
  * TODO (desired): retain the reads we have started so that we may cancel them when we abandon
  */
@@ -56,9 +62,12 @@ public class ReadTxnDataIfReady extends ReadTxnData
     private @Nullable PartialTxn collectTxn;
     private @Nullable PartialDeps collectDeps;
 
-    public ReadTxnDataIfReady(Node.Id to, Topologies topologies, TxnId txnId, FullRoute<?> route, Timestamp executeAt)
+    /**
+     * @param wait if true, wait for stores that are Stable to become ready to execute, rather than abandon
+     */
+    public ReadTxnDataIfReady(Node.Id to, Topologies topologies, TxnId txnId, FullRoute<?> route, Timestamp executeAt, boolean wait)
     {
-        super(to, topologies, txnId, route, null, executeAt, executeAt.epoch(), ExecuteFlags.none().with(NO_WAIT));
+        super(to, topologies, txnId, route, null, executeAt, executeAt.epoch(), wait ? ExecuteFlags.none() : ExecuteFlags.none().with(NO_WAIT));
     }
 
     protected ReadTxnDataIfReady(TxnId txnId, Participants<?> scope, @Nullable Timestamp executeAt, long executeAtEpoch, ExecuteFlags flags)
@@ -67,13 +76,13 @@ public class ReadTxnDataIfReady extends ReadTxnData
     }
 
     @Override
-    protected boolean abandonIfNotReady()
+    protected boolean abandonIfNotReady(Command command)
     {
-        return true;
+        return flags.contains(NO_WAIT) || command.saveStatus().compareTo(SaveStatus.Stable) < 0;
     }
 
     @Override
-    protected void onExecuting(Command command)
+    protected void onSetup(Command command)
     {
         PartialTxn txn = command.partialTxn();
         if (txn != null)

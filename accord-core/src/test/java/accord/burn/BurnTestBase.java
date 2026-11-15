@@ -489,7 +489,16 @@ public class BurnTestBase
         if (System.getProperty("accord.burn.coordinator_backlog_execution_yield") != null)
             coordinatorBacklogExecutionYieldToNearby = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_yield");
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionYieldToNearby", coordinatorBacklogExecutionYieldToNearby);
-        logger.info("Backlog execution: {}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "");
+        boolean coordinatorBacklogExecutionWait = random.nextBoolean();
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_wait") != null)
+            coordinatorBacklogExecutionWait = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_wait");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionWait", coordinatorBacklogExecutionWait);
+        long coordinatorBacklogExecutionLingerMillis = random.pickLong(0, 0, 100, 1000);
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_linger_millis") != null)
+            coordinatorBacklogExecutionLingerMillis = Long.getLong("accord.burn.coordinator_backlog_execution_linger_millis");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionLingerMicros", MILLISECONDS.toMicros(coordinatorBacklogExecutionLingerMillis));
+        logger.info("Backlog execution: {}{}{}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "",
+                    coordinatorBacklogExecutionWait ? " (waiting for ready)" : "", coordinatorBacklogExecutionLingerMillis > 0 ? " (lingering " + coordinatorBacklogExecutionLingerMillis + "ms)" : "");
         if (System.getProperty("accord.burn.send_stable") != null)
         {
             SendStableMessages sendStable = SendStableMessages.valueOf(System.getProperty("accord.burn.send_stable"));

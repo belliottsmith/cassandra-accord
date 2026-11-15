@@ -40,13 +40,18 @@ Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnT
 - `coordinator_backlog_execution_multi_key`
 - `coordinator_backlog_execution_claims` (new message)
 - `coordinator_backlog_execution_yield_to_nearby` (default on)
+- `coordinator_backlog_execution_wait` (Phase 2c; wait for replicas to become ready rather than abandon)
+- `coordinator_backlog_execution_linger` (Phase 2c; keep listening on a key after catching up)
 - `send_minimal: MINIMAL_NO_DEPS` (new encoding)
 
 The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `BacklogClaim`,
 `Apply.Kind.NoDeps`) are only sent when the corresponding option is enabled; no serialization
 version bump.
 
-**Next steps, in priority order:**
+**Next steps, in priority order (updated after Phase 2c):**
+0. **Converge contended chains on a single DC** (preferred default), keeping parallel per-DC execution
+   as an opt-in for latency-first deployments (e.g. benchmarks). With wait + linger we now run
+   roughly one executor per DC, i.e. 1–1.4 extra executions per contended txn. See Phase 2c.
 1. **Evaluate in a real multi-DC environment.** Burn can't establish efficacy: it has high fault and
    recovery rates and synthetic latencies. Measure client latency, duplicate executions (coordinator
    vs backlog executor vs recovery), `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, and claim
@@ -669,6 +674,39 @@ Yield and claims variants (`ALWAYS` + multi-key):
   back (+0.5R), so execution costs ~1R rather than ~0.75R, and that executor is a single point of
   delay. Running one executor per DC gives each coordinator a local executor, at the cost of up to
   (#DCs − 1) extra executions per contended txn (reads, and Apply fan-out).
+
+### Phase 2c: Following the chain (done)
+- [x] A backlog executor installs its sink on **every key** of a txn it executes that it replicates
+      (before persisting), not only the key that notified it. The sink is now a per-key
+      `ExecuteTxnBacklog.KeySink`, which records when it last found a backlog.
+- [x] **Linger** (`ProtocolModifiers.coordinatorBacklogExecutionLinger`, Cassandra
+      `accord.coordinator_backlog_execution_linger`, default 0 = previous behaviour): once caught
+      up, keep listening for this long since we last found a backlog. `maybeInstall` no longer
+      removes a sink when lingering.
+- [x] **Wait** (`ProtocolModifiers.coordinatorBacklogExecutionWait`, Cassandra
+      `accord.coordinator_backlog_execution_wait`, default off): `ExecuteBacklogTxn` reads without
+      `NO_WAIT`. `ReadTxnDataIfReady` without `NO_WAIT` waits for Stable stores to become ready, still
+      sending `ReadyWithDefinition` (now also covering waiting stores) before any data. It only
+      abandons (`NotReady`) if a store isn't yet Stable. Waiting attempts may time out or exhaust
+      replicas; these outcomes aren't reported to the agent. No wire change: the flags are already
+      serialized (`BacklogMessageSerializersTest` covers both).
+- [x] Burn randomises both (overrides `accord.burn.coordinator_backlog_execution_wait`,
+      `accord.burn.coordinator_backlog_execution_linger_millis`). Note that this perturbs the random
+      stream relative to earlier runs. 80 seeds of non-happy burn pass, both forced on and random.
+- **Happy burn** (3 DCs, 40 seeds, mean ms / p99; `ALWAYS` + multi-key, no yield, no claims):
+
+  | variant                          | h4 r0.8 c40   | h2 r0.8      | no hot keys | dup. executions (h4 / none) |
+  |----------------------------------|---------------|--------------|-------------|-----------------------------|
+  | `DISABLED`                       | 1,115 / 1,742 | 923 / 1,490  | 586 / 1,069 | 0 / 4                       |
+  | `ALWAYS` (sinks on every key)    | 781 / 1,364   | 692 / 1,293  | 546 / 1,043 | 17,586 / 5,394              |
+  | + wait                           | 650 / 1,076   | 633 / 1,169  | 477 / 841   | 36,634 / 23,842             |
+  | + wait + linger 100ms            | **606 / 932** | **561 / 856** | **454 / 800** | 56,897 / 39,740          |
+  | + wait + linger 1s               | 604 / 926     | 557 / 848    | 446 / 775   | 57,113 / 48,483             |
+  | + linger 1s (no wait)            | 653 / 1,060   | 571 / 884    | 455 / 803   | 37,077 / 31,033             |
+
+  With wait + linger, client latency falls 46% / 39% / 23%, and coordination (~360ms, the medium
+  path) is now the larger share. But every DC's executor executes each contended txn (up to 1.4
+  extra executions per txn): this is parallel per-DC execution, not convergence.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG

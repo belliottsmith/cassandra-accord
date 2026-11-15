@@ -55,6 +55,7 @@ import accord.utils.Invariants;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionWait;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecutePath.BACKLOG;
@@ -92,6 +93,8 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     final @Nullable Runnable beforePersist;
     // whether we have claimed the transaction, so must try to complete it rather than abandon it when not ready
     private boolean obligated;
+    // whether we wait for replicas to become ready (see ProtocolModifiers#coordinatorBacklogExecutionWait), rather than abandon
+    private final boolean waitForReady;
     private @Nullable Txn txn;
     private @Nullable Deps deps;
 
@@ -114,6 +117,7 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         this.deps = deps;
         this.collectDefinition = txn == null;
         this.obligated = obligated;
+        this.waitForReady = obligated || coordinatorBacklogExecutionWait();
         this.mayClaim = mayClaim;
         this.beforePersist = beforePersist;
     }
@@ -155,8 +159,8 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void contact(Id to)
     {
-        if (txn == null) node.send(to, new ReadTxnDataIfReady(to, allTopologies, txnId, route, executeAt), executor, this, tracing);
-        else node.send(to, new ReadTxnData(to, allTopologies, txnId, route, null, executeAt, executeAt.epoch(), obligated ? ExecuteFlags.none() : ExecuteFlags.none().with(NO_WAIT)), executor, this, tracing);
+        if (txn == null) node.send(to, new ReadTxnDataIfReady(to, allTopologies, txnId, route, executeAt, waitForReady), executor, this, tracing);
+        else node.send(to, new ReadTxnData(to, allTopologies, txnId, route, null, executeAt, executeAt.epoch(), waitForReady ? ExecuteFlags.none() : ExecuteFlags.none().with(NO_WAIT)), executor, this, tracing);
     }
 
     /**
@@ -188,10 +192,10 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         {
             ReadOk ok = (ReadOk) reply;
             // with NO_WAIT, unavailable means some store was not ready (or not safe to read); either way we abandon
-            // unless we have claimed the transaction, in which case we try another replica for the unavailable ranges
+            // unless we are waiting for readiness, in which case we try another replica for the unavailable ranges
             if (ok.unavailable != null)
             {
-                if (!obligated)
+                if (!waitForReady)
                     return abandon(from, reply, NotReady.notReady(txnId, route));
                 mergeAndRecord(from, ok);
                 return ApprovePartial;
@@ -206,10 +210,13 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         {
             default: throw UnhandledEnum.unknown(nack.kind);
             case InsufficientEpochs: throw UnhandledEnum.invalid(nack.kind);
+            // the replica will reply again once it is ready to execute
             case Waiting:
-                return obligated ? Action.None : abandon(from, reply, NotReady.notReady(txnId, route));
+                return waitForReady ? Action.None : abandon(from, reply, NotReady.notReady(txnId, route));
+            // the replica has not yet recorded the transaction as Stable, and we do not send Stable messages
             case InsufficientAndWaiting:
-                return obligated ? Action.TryAlternative : abandon(from, reply, NotReady.notReady(txnId, route));
+                return waitForReady ? Action.TryAlternative : abandon(from, reply, NotReady.notReady(txnId, route));
+            // the replica was not ready (without NO_WAIT: has not yet recorded the transaction as Stable)
             case NotReady:
                 return obligated ? Action.Reject : abandon(from, reply, NotReady.notReady(txnId, route));
 
@@ -331,6 +338,7 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     {
         return "collectDefinition=" + collectDefinition +
                ", obligated=" + obligated +
+               ", waitForReady=" + waitForReady +
                ", executeAt=" + executeAt +
                ", readFrom=" + readFrom +
                ", uniqueHlc=" + uniqueHlc;

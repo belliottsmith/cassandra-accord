@@ -193,15 +193,16 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
     abstract public ReadType kind();
 
     /**
-     * If true, rather than waiting for a store to become ready to execute, we abandon the read and reply
+     * If true, rather than waiting for {@code command}'s store to become ready to execute, we abandon the read and reply
      * {@link CommitOrReadNack#NotReady}, skipping any stores we have not yet processed.
      */
-    protected boolean abandonIfNotReady() { return false; }
+    protected boolean abandonIfNotReady(Command command) { return false; }
 
     /**
-     * Invoked (while holding this object's lock) for each store we begin reading from in {@link #applyInternal}
+     * Invoked (while holding this object's lock) in {@link #applyInternal} for each store we begin reading from, and each
+     * store we will wait on that has already recorded the transaction as Stable (so knows its definition and deps)
      */
-    protected void onExecuting(Command command) {}
+    protected void onSetup(Command command) {}
 
     /**
      * Invoked once every store has been processed, if we have not already replied, before any final reply may be sent
@@ -311,7 +312,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                 logger.trace("{}: setting up read with status {} on {}", txnId, status, safeStore);
 
             StoreAction action = actionFor(command);
-            if (action == StoreAction.WAIT && abandonIfNotReady())
+            if (action == StoreAction.WAIT && abandonIfNotReady(command))
             {
                 abandonNotReady = true;
             }
@@ -329,6 +330,8 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     listeners.put(storeId, safeStore.register(txnId, this));
                     waitingOn.add(storeId);
                     ++waitingOnCount;
+                    if (c >= 0)
+                        onSetup(command);
 
                     if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
                     else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
@@ -346,7 +349,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     waitingOn.add(storeId);
                     ++waitingOnCount;
                     reading.add(storeId);
-                    onExecuting(command);
+                    onSetup(command);
             }
         }
 

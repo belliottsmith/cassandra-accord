@@ -31,9 +31,11 @@ import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.Timeouts;
 import accord.coordinate.ExecuteBacklogTxn;
+import accord.coordinate.Exhausted;
 import accord.coordinate.ExecuteTxn;
 import accord.coordinate.NotReady;
 import accord.coordinate.Redundant;
+import accord.coordinate.Timeout;
 import accord.local.Command;
 import accord.local.CommandStore;
 import accord.local.ExecutionContext;
@@ -60,10 +62,13 @@ import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionClaims;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionMultiKey;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionYieldToNearby;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionLinger;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionWait;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.primitives.Routable.Domain.Key;
+import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.ReadyToExecute;
 import static accord.primitives.Txn.Kind.Read;
 import static accord.primitives.Txn.Kind.Write;
@@ -74,20 +79,26 @@ import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 /**
- * A {@link NotifySink} installed on a {@link CommandsForKey} (see {@link SafeCommandsForKey#overrideSink(NotifySink)})
+ * A {@link NotifySink} ({@link KeySink}) installed on a {@link CommandsForKey} (see {@link SafeCommandsForKey#overrideSink(NotifySink)})
  * when this node is coordinating a transaction that has a backlog of STABLE transactions queued behind it.
  * As each transaction in the backlog becomes unblocked we coordinate its execution ourselves, rather than waiting
- * for its (possibly distant) original coordinator to do so.
+ * for its (possibly distant) original coordinator to do so. Having executed a transaction as part of a backlog, we
+ * also install our sink on each of its other keys that we replicate, as we are then best placed to continue the
+ * backlog on those keys too (since the transaction's successors there will become ready here first).
  * <p>
- * The sink remains installed until the backlog is exhausted (see {@link #notWaiting}) or another local coordinator
- * decides there is no eligible backlog (see {@link #maybeInstall}). Transactions we decline to execute
+ * The sink remains installed until we catch up with the backlog (see {@link #notWaiting}), i.e. find no eligible STABLE
+ * transaction queued behind the one we are notified of, or another local coordinator decides there is no eligible
+ * backlog (see {@link #maybeInstall}). Under steady contention we typically catch up, as we execute transactions
+ * faster than they arrive, so we may continue to listen for some time after we last found a backlog (see
+ * {@link ProtocolModifiers#coordinatorBacklogExecutionLinger}). Transactions we decline to execute
  * (e.g. our own, or multi-key transactions we cannot coordinate) do not terminate the backlog: once they apply
  * we will be notified of the next transaction.
  * <p>
- * We only execute transactions that are already ready to execute: if a transaction is still waiting on some other
- * key or dependency, whoever unblocks it is a better candidate to execute it (and the original coordinator remains
- * waiting to do so in any case). So, the transaction must be {@link SaveStatus#ReadyToExecute} in the store that
- * notifies us, and {@link ExecuteBacklogTxn} abandons the attempt if any replica it reads from is not ready.
+ * We only start to execute transactions that are ready to execute in the store that notifies us
+ * ({@link SaveStatus#ReadyToExecute}). By default, {@link ExecuteBacklogTxn} then abandons the attempt if any replica
+ * it reads from is not ready: if a transaction is still waiting on some other key or dependency, whoever unblocks it
+ * may be a better candidate to execute it. But since we are typically caught up with the backlog, a replica that is not
+ * ready is typically about to be, so we may instead wait (see {@link ProtocolModifiers#coordinatorBacklogExecutionWait}).
  * <p>
  * If the notifying store holds the full definition and deps (e.g. a single key transaction) we provide them,
  * otherwise (if enabled by {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionMultiKey()})
@@ -115,7 +126,7 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * coordinating the transaction, as it will receive its replies about as promptly as we would. If it is expected to
  * continue the backlog behind the transaction itself, we also stop listening to the key.
  */
-public class ExecuteTxnBacklog implements NotifySink
+public class ExecuteTxnBacklog
 {
     // TODO (desired): configurable
     private static final long ACTIVE_EXPIRES_AFTER_NANOS = MINUTES.toNanos(1);
@@ -197,50 +208,130 @@ public class ExecuteTxnBacklog implements NotifySink
     }
 
     /**
+     * Our sink on a particular key, which records when we last found a backlog there, so that we may continue to
+     * listen for a while once we have caught up (see {@link ProtocolModifiers#coordinatorBacklogExecutionLinger})
+     */
+    static final class KeySink implements NotifySink
+    {
+        final ExecuteTxnBacklog backlog;
+        // per Node#elapsed(MICROSECONDS); only accessed by the owning command store
+        long foundBacklogAt;
+
+        KeySink(ExecuteTxnBacklog backlog, long foundBacklogAt)
+        {
+            this.backlog = backlog;
+            this.foundBacklogAt = foundBacklogAt;
+        }
+
+        @Override
+        public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
+        {
+            DefaultNotifySink.INSTANCE.notWaiting(safeStore, txnId, key, uniqueHlc);
+            backlog.notWaiting(this, safeStore, txnId, key);
+        }
+
+        @Override
+        public void waitingOn(SafeCommandStore safeStore, TxnInfo txn, RoutingKey key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
+        {
+            DefaultNotifySink.INSTANCE.waitingOn(safeStore, txn, key, waitingOnStatus, blockedUntil, notifyCfk);
+        }
+
+        @Override
+        public String toString()
+        {
+            return "ExecuteTxnBacklog.KeySink{" + backlog.node.id() + '}';
+        }
+    }
+
+    private @Nullable KeySink sink(SafeCommandsForKey safeCfk)
+    {
+        NotifySink sink = safeCfk.overrideSink();
+        return sink instanceof KeySink && ((KeySink) sink).backlog == this ? (KeySink) sink : null;
+    }
+
+    /**
+     * Install our sink on {@code safeCfk}, or refresh it if already installed
+     */
+    private void install(SafeCommandsForKey safeCfk)
+    {
+        long now = node.elapsed(MICROSECONDS);
+        KeySink sink = sink(safeCfk);
+        if (sink != null) sink.foundBacklogAt = now;
+        else safeCfk.overrideSink(new KeySink(this, now));
+    }
+
+    /**
      * Invoked by a local coordinator that is about to execute {@code executeAt} on each of {@code keys};
-     * install this node's backlog sink if there is an eligible backlog queued behind it, and remove it otherwise.
+     * install this node's backlog sink if there is an eligible backlog queued behind it. Otherwise, if we do not
+     * linger (see {@link ProtocolModifiers#coordinatorBacklogExecutionLinger}), remove any sink; if we do, any
+     * sink we have installed will expire by itself.
      */
     public static void maybeInstall(Node node, SafeCommandStore safeStore, Participants<?> keys, Timestamp executeAt)
     {
+        ExecuteTxnBacklog backlog = node.executeBacklogSink();
+        boolean linger = coordinatorBacklogExecutionLinger(MICROSECONDS) > 0;
         for (int i = 0, size = keys.size() ; i < size ; ++i)
         {
             SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(keys.get(i).asRoutingKey());
             if (safeCfk == null)
                 continue;
 
-            if (hasBacklogAfter(safeCfk.current(), executeAt)) safeCfk.overrideSink(node.executeBacklogSink());
-            else safeCfk.overrideSink(null);
+            if (hasBacklogAfter(safeCfk.current(), executeAt)) backlog.install(safeCfk);
+            else if (!linger) safeCfk.overrideSink(null);
         }
     }
 
-    @Override
-    public void notWaiting(SafeCommandStore safeStore, TxnId txnId, RoutingKey key, long uniqueHlc)
+    /**
+     * Having executed {@code txnId} as part of a backlog, we are best placed to continue the backlog on each of its keys,
+     * so install our sink on every key of {@code route} we replicate (not only the key that notified us). We do so
+     * before we persist (so typically before we apply the transaction locally, and so are notified of its successors).
+     */
+    private void installOnEveryKey(TxnId txnId, FullRoute<?> route, Timestamp executeAt)
     {
-        DefaultNotifySink.INSTANCE.notWaiting(safeStore, txnId, key, uniqueHlc);
+        Participants<?> participants = route.participants();
+        long epoch = executeAt.epoch();
+        node.commandStores().forEach("Install ExecuteBacklog", txnId, participants, epoch, epoch, safeStore -> {
+            Participants<?> owned = participants.slice(safeStore.ranges().allAt(epoch), Minimal);
+            for (int i = 0, size = owned.size() ; i < size ; ++i)
+            {
+                SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(owned.get(i).asRoutingKey());
+                if (safeCfk != null)
+                    install(safeCfk);
+            }
+        }).begin(node.agent());
+    }
+
+    private void notWaiting(KeySink sink, SafeCommandStore safeStore, TxnId txnId, RoutingKey key)
+    {
         if (!mayExecute(txnId) || txnId.node.equals(node.id()))
             return;
 
         boolean yield = shouldYieldTo(txnId);
         TxnId claimAhead = null;
         SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(key);
-        if (safeCfk != null && safeCfk.overrideSink() == this)
+        if (safeCfk != null && safeCfk.overrideSink() == sink)
         {
             CommandsForKey cfk = safeCfk.current();
             TxnInfo info = cfk.get(txnId);
             if (info != null)
             {
                 TxnInfo next = nextBacklog(cfk, info.executeAt);
-                // if nothing eligible is queued behind this transaction then the backlog is exhausted once it is executed,
-                // so stop listening on this key; a later coordinator may decide to install us again
-                if (next == null || (yield && mayContinueBacklog(txnId, key)))
+                long now = node.elapsed(MICROSECONDS);
+                if (next != null)
+                    sink.foundBacklogAt = now;
+
+                // if nothing eligible is queued behind this transaction then we have caught up with the backlog; unless
+                // we linger, stop listening on this key (a later coordinator may decide to install us again)
+                boolean caughtUp = next == null && now - sink.foundBacklogAt >= coordinatorBacklogExecutionLinger(MICROSECONDS);
+                if (caughtUp || (yield && mayContinueBacklog(txnId, key)))
                 {
                     if (logger.isTraceEnabled())
-                        logger.trace("{}: releasing backlog sink on {} ({})", txnId, key, next == null ? describeNoBacklog(cfk, info.executeAt) : "yield");
+                        logger.trace("{}: releasing backlog sink on {} ({})", txnId, key, caughtUp ? describeNoBacklog(cfk, info.executeAt) : "yield");
                     safeCfk.overrideSink(null);
                 }
                 // if a single key transaction is queued behind this one then once we have executed this transaction it
                 // will be ready to execute, so we may claim it (see ExecuteBacklogTxn)
-                else if (!yield && next.is(SingleKey) && mayClaim(next, Ballot.ZERO) && !shouldYieldTo(next.plainTxnId())) claimAhead = next.plainTxnId();
+                else if (!yield && next != null && next.is(SingleKey) && mayClaim(next, Ballot.ZERO) && !shouldYieldTo(next.plainTxnId())) claimAhead = next.plainTxnId();
             }
         }
 
@@ -284,12 +375,6 @@ public class ExecuteTxnBacklog implements NotifySink
         Topology current = node.topology().current();
         Topology.NodeInfo info = current.nodeInfo(txnId.node);
         return info != null && info.ranges.contains(key);
-    }
-
-    @Override
-    public void waitingOn(SafeCommandStore safeStore, TxnInfo txn, RoutingKey key, SaveStatus waitingOnStatus, BlockedUntil blockedUntil, boolean notifyCfk)
-    {
-        DefaultNotifySink.INSTANCE.waitingOn(safeStore, txn, key, waitingOnStatus, blockedUntil, notifyCfk);
     }
 
     private void execute(CommandStore commandStore, TxnId txnId, @Nullable TxnId claimAhead)
@@ -409,19 +494,37 @@ public class ExecuteTxnBacklog implements NotifySink
             logger.trace("{}: executing backlog{}{}", txnId, txn == null ? ", collecting definition" : "", obligated ? ", as claimed" : "");
 
         boolean mayClaim = !obligated && mayClaim(txnId, promised);
+        Runnable claimBeforePersist = beforePersist;
+        Runnable installAndClaimBeforePersist = () -> {
+            installOnEveryKey(txnId, route, executeAt);
+            if (claimBeforePersist != null)
+                claimBeforePersist.run();
+        };
         node.withEpochAtLeast(executeAt.epoch(), null, (ignore, fail) -> {
             release(txnId);
             node.agent().onException(fail);
         }, () -> {
-            ExecuteBacklogTxn.execute(node, route, ballot, txnId, txn, executeAt, deps, obligated, mayClaim, beforePersist, (result, fail) -> {
+            ExecuteBacklogTxn.execute(node, route, ballot, txnId, txn, executeAt, deps, obligated, mayClaim, installAndClaimBeforePersist, (result, fail) -> {
                 release(txnId);
                 if (logger.isTraceEnabled())
                     logger.trace("{}: executed backlog with outcome {} on {}", txnId, fail == null ? "success" : fail.getClass().getSimpleName(), node.id());
 
                 if (fail == null) node.reportLocalExecution(txnId, route, promised, null, null, result);
-                else if (!(fail instanceof NotReady) && !(fail instanceof Redundant)) node.agent().onException(fail);
+                else if (!isExpectedFailure(fail)) node.agent().onException(fail);
             });
         });
+    }
+
+    /**
+     * @return true iff {@code fail} is an expected outcome of an attempt to execute a backlog, that need not be reported
+     */
+    private static boolean isExpectedFailure(Throwable fail)
+    {
+        if (fail instanceof NotReady || fail instanceof Redundant)
+            return true;
+        // if we wait for replicas to become ready, we may time out (e.g. if they are waiting on a slow predecessor)
+        // or run out of replicas to try (e.g. if none has yet recorded the transaction as Stable)
+        return (coordinatorBacklogExecutionWait() || coordinatorBacklogExecutionClaims()) && (fail instanceof Timeout || fail instanceof Exhausted);
     }
 
     /*
