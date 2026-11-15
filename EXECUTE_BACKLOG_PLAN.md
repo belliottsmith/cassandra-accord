@@ -636,12 +636,39 @@ Yield and claims variants (`ALWAYS` + multi-key):
   persisting. Mean latency 1,089 → 763ms (−30% vs `DISABLED`, −13% vs current `ALWAYS`); h2 r0.8
   914 → 679ms (−26%). But duplicates double (8.7k → 17.9k per 40k txns): executors in different DCs
   now each hold the coupled keys and execute the same txns.
-- **What remains with the prototype:** cross-DC links are still 45% of links and 76% of link time.
-  Coupled hot chains are held by executors in different DCs, so every multi-key txn joining them
-  costs an inter-DC hop. That's DC convergence (Phase 4). Separately, ~40% of txns wait on a dep
-  that became stable only after they did, often one with a later TxnId but an earlier `executeAt`.
-  The medium path pushes `executeAt` past txns that remote replicas witnessed first, so those must
-  complete their own coordination first. Backlog execution can't help with these.
+- **The executor is usually caught up, not working through a backlog.** Under steady contention a
+  backlog executor runs links far faster (~ms) than STABLE txns arrive (~one per 40ms per hot key).
+  So "not ready" usually means "about to be ready": a sibling store, or a nearby replica of a shard
+  we don't replicate, hasn't yet applied the local predecessor, or a dep's Stable hasn't arrived.
+  We then abandon (`NO_WAIT`), and nothing re-triggers us unless we happen to hold a sink on that
+  other key. The link falls to another DC (+0.5 RTT). Likewise we release the sink once we've caught
+  up ("no committed successor").
+- **Prototype experiments** (h4 r0.8 c40 / h2 r0.8 / no hot keys, 40 seeds, mean ms; switches are
+  system properties in the uncommitted patch `backlog-prototype.patch` in the Cassandra root):
+
+  | variant                                                         | h4 r0.8 c40 | h2 r0.8 | no hot keys | dup. executions (h4) |
+  |-----------------------------------------------------------------|-------------|---------|-------------|----------------------|
+  | `DISABLED`                                                      | 1,097       | 915     | 590         | 1                    |
+  | `ALWAYS` (current)                                              | 898         | 721     | 570         | 8,192                |
+  | + install sinks on every key of a txn we backlog-execute        | 769         | 679     | –           | 17,358               |
+  | + keep sinks when caught up (`accord.backlog.sticky`)           | 751         | 656     | –           | 20,567               |
+  | + retry `NotReady` every 2ms (`accord.backlog.retry_not_ready_micros`) | **629** | **595** | **447**     | 36,621               |
+
+  `send_stable = TO_ALL` makes no difference in any variant.
+- **First principles, with an executor in every DC** (which the last variant approximates, with
+  ~0.9 extra executions per txn). Let R be the inter-DC RTT. T is stable at its coordinator at ~2R
+  (medium path). A dep U that a remote replica witnessed before T's PreAccept arrived started at
+  most ~0.5R after T, so it is stable by ~2.5R, and its Stable reaches T's DC by ~3R. T's own DC can
+  execute T as soon as the last such Stable arrives, so execution costs ~0.5–1R (measured: the late
+  dep becomes stable ~54ms after T on average). So the bound is roughly 2.75R plus local processing,
+  and T's client gets its result locally. Measured: coordination ~360ms plus execution ~290ms. That's
+  ~100ms from the bound, plausibly local processing (same-node links ~16ms each in burn) and residual
+  breaks.
+- **Single DC vs one executor per DC.** Converging on one DC avoids duplicates, but for a txn
+  coordinated elsewhere the Stable must reach the executor's DC (+0.5R) and the result must come
+  back (+0.5R), so execution costs ~1R rather than ~0.75R, and that executor is a single point of
+  delay. Running one executor per DC gives each coordinator a local executor, at the cost of up to
+  (#DCs − 1) extra executions per contended txn (reads, and Apply fan-out).
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
