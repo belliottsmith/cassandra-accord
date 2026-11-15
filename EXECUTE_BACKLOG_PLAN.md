@@ -617,6 +617,32 @@ Yield and claims variants (`ALWAYS` + multi-key):
   defaults to `NONE`, like Cassandra. Cassandra only permits replica execution for blind writes in
   any case, so read-modify-write txns never qualify.
 
+**Why the contended gain is bounded** (h4 r0.8 c40, 3 DCs; `send_stable` override, `Phases:` and
+`-Daccord.burn.dump_timeline=<dir>` per-txn CSV; see `ExecutionStats`):
+- Client hops are free in burn, and coordination is ~360ms (~97% medium path, i.e. ~2 inter-DC RTTs).
+  The rest is execution: ~770ms `DISABLED`, ~550ms `ALWAYS`.
+- `send_stable = TO_ALL` makes < 2% difference. Under contention txns are rarely ready to execute
+  when they commit, so `isAnyReadyToExecute()` is false and Stable already goes to every replica.
+- When a backlog executor holds the chain, a link costs ~3–18ms (same node). A link that crosses
+  DCs costs ~80ms. Cross-DC links account for 92% (`DISABLED`) and 88% (`ALWAYS`) of link time.
+- **Sinks don't follow the chain across keys.** They are only installed by a coordinator's
+  `LocalExecute` (i.e. one replicating every key of its txn), and only if a STABLE successor exists
+  at that moment. A backlog executor never installs a sink on the other keys of the txns it
+  executes. So when a multi-key txn joins two hot chains, nobody is listening on the other key, and
+  the next link falls back to its original coordinator, typically in another DC. In one seed, 52%
+  of cross-DC coordinator links had no backlog attempt at all, and most of the rest abandoned as
+  `NotReady` (mostly from the executor's own other store).
+- **Prototype** (not committed): install the sink on every key of a txn we backlog-execute, before
+  persisting. Mean latency 1,089 → 763ms (−30% vs `DISABLED`, −13% vs current `ALWAYS`); h2 r0.8
+  914 → 679ms (−26%). But duplicates double (8.7k → 17.9k per 40k txns): executors in different DCs
+  now each hold the coupled keys and execute the same txns.
+- **What remains with the prototype:** cross-DC links are still 45% of links and 76% of link time.
+  Coupled hot chains are held by executors in different DCs, so every multi-key txn joining them
+  costs an inter-DC hop. That's DC convergence (Phase 4). Separately, ~40% of txns wait on a dep
+  that became stable only after they did, often one with a later TxnId but an earlier `executeAt`.
+  The medium path pushes `executeAt` past txns that remote replicas witnessed first, so those must
+  complete their own coordination first. Backlog execution can't help with these.
+
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
       `StableThenRead` / `ReadTxnData` / `Commit` / `Apply` and on `BacklogClaim` via optional
@@ -755,6 +781,8 @@ Yield and claims variants (`ALWAYS` + multi-key):
   `accord.burn.prefixes` [1], `accord.burn.concurrency`, `accord.burn.range_ratio` [0],
   `accord.burn.replica_execution` [`NONE`], `accord.burn.hot_keys` / `accord.burn.hot_ratio`.
   For a contended workload, try `-Daccord.burn.hot_keys=2 -Daccord.burn.hot_ratio=0.8`.
+- `accord.burn.send_stable` overrides `SendStableMessages`; `accord.burn.dump_timeline=<dir>` writes
+  each run's per-txn timeline (phases, executor, blocker, deps) to `<dir>/timeline-<seed>.csv`.
 - TRACE logging on `accord.local.cfk.ExecuteTxnBacklog` and `accord.coordinate.ExecuteBacklogTxn`
   reports each backlog attempt, its outcome, claims, pauses, resumes and yields.
 - `ListAgent.isSlowCoordinator` mirrors Cassandra: slow once `elapsed` exceeds the maximum

@@ -309,7 +309,7 @@ public class ProtocolModifiers
     private static final boolean filterDuplicateDependenciesFromAcceptReply = Configure.filterDuplicateDependenciesFromAcceptReply;
     public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
 
-    private static final SendStableMessages sendStableMessages = Configure.sendStableMessages;
+    private static SendStableMessages sendStableMessages = Configure.sendStableMessages;
     public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && !mayExecuteAtReplica(txnId)); }
     public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
 

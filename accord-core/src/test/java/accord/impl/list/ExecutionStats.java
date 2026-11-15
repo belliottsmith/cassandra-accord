@@ -18,9 +18,15 @@
 
 package accord.impl.list;
 
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +38,7 @@ import javax.annotation.Nullable;
 
 import accord.coordinate.ExecutePath;
 import accord.local.Node;
+import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.TxnId;
 
@@ -53,6 +60,9 @@ import static accord.primitives.Txn.Kind.Write;
  * backlog execution (see {@link accord.local.cfk.ExecuteTxnBacklog}) aims to accelerate: without it, each
  * cross-DC link costs at least a one-way trip between DCs, as the Apply of one link must reach the replicas
  * serving the coordinator of the next.
+ * <p>
+ * Finally, we break down client latency into phases (see {@link #phases()}), and may dump each transaction's
+ * timeline (see {@link #dump}).
  */
 public class ExecutionStats
 {
@@ -65,21 +75,27 @@ public class ExecutionStats
     private final @Nullable LongSupplier nowMillis;
     private volatile BiPredicate<Node.Id, Node.Id> sameDc = (a, b) -> true;
 
-    private static class Started
+    /**
+     * The timeline of a transaction; all times are logical millis, or -1 if unknown
+     */
+    private static class Timeline
     {
-        final TxnId[] deps;
-        final long startedAtMillis;
-        long executedAtMillis = -1;
+        long clientStartAt = -1, submittedAt = -1, coordinatorStartedAt = -1, clientReplyAt = -1;
+        @Nullable ExecutePath coordinatorPath;
+        String keys;
 
-        Started(TxnId[] deps, long startedAtMillis)
-        {
-            this.deps = deps;
-            this.startedAtMillis = startedAtMillis;
-        }
+        // the first execution attempt anywhere
+        TxnId[] deps;
+        long startedAt = -1;
+        @Nullable ExecutePath startedPath;
+
+        // the first completed execution
+        long executedAt = -1;
+        Node.Id executedBy;
+        boolean executedByRecovery;
     }
 
-    // the dependencies of each transaction, and when we first began and completed executing it
-    private final ConcurrentHashMap<TxnId, Started> started = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<TxnId, Timeline> timelines = new ConcurrentHashMap<>();
 
     public ExecutionStats()
     {
@@ -98,25 +114,67 @@ public class ExecutionStats
         this.sameDc = sameDc;
     }
 
-    void onExecuting(TxnId txnId, Deps deps, ExecutePath path)
+    private Timeline timeline(TxnId txnId)
+    {
+        return timelines.computeIfAbsent(txnId, ignore -> new Timeline());
+    }
+
+    private boolean measuring()
+    {
+        return nowMillis != null;
+    }
+
+    void onSubmitted(TxnId txnId)
+    {
+        if (measuring())
+            timeline(txnId).submittedAt = nowMillis.getAsLong();
+    }
+
+    /**
+     * The client received a reply for {@code txnId}, which it submitted at {@code clientStartAt}
+     */
+    public void onClientReply(TxnId txnId, long clientStartAt, String keys)
+    {
+        if (!measuring())
+            return;
+        Timeline t = timeline(txnId);
+        t.clientStartAt = clientStartAt;
+        t.clientReplyAt = nowMillis.getAsLong();
+        t.keys = keys;
+    }
+
+    void onExecuting(Node.Id self, TxnId txnId, Deps deps, ExecutePath path)
     {
         if (path == null) attemptsWithoutPath.incrementAndGet();
         else attemptsByPath.get(path).incrementAndGet();
 
-        if (nowMillis == null || deps == null || started.containsKey(txnId))
+        if (!measuring())
             return;
 
-        started.put(txnId, new Started(deps.txnIds().toArray(NO_TXNIDS), nowMillis.getAsLong()));
+        long now = nowMillis.getAsLong();
+        Timeline t = timeline(txnId);
+        if (t.startedAt < 0 && deps != null)
+        {
+            t.deps = deps.txnIds().toArray(NO_TXNIDS);
+            t.startedAt = now;
+            t.startedPath = path;
+        }
+        if (t.coordinatorStartedAt < 0 && txnId.node.equals(self) && path != ExecutePath.RECOVER)
+        {
+            t.coordinatorStartedAt = now;
+            t.coordinatorPath = path;
+        }
     }
 
-    void onExecuted(TxnId txnId)
+    void onExecuted(Node.Id self, TxnId txnId, Ballot ballot)
     {
         AtomicInteger count = executed.computeIfAbsent(txnId, ignore -> new AtomicInteger());
-        if (count.incrementAndGet() == 1 && nowMillis != null)
+        if (count.incrementAndGet() == 1 && measuring())
         {
-            Started s = started.get(txnId);
-            if (s != null)
-                s.executedAtMillis = nowMillis.getAsLong();
+            Timeline t = timeline(txnId);
+            t.executedAt = nowMillis.getAsLong();
+            t.executedBy = self;
+            t.executedByRecovery = ballot != null && !ballot.equals(Ballot.ZERO);
         }
     }
 
@@ -125,33 +183,33 @@ public class ExecutionStats
         return txnId.is(Key) && (txnId.is(Read) || txnId.is(Write));
     }
 
-    private @Nullable TxnId blocker(Started s)
+    private @Nullable TxnId blocker(Timeline t)
     {
+        if (t.deps == null || t.executedAt < 0)
+            return null;
+
         TxnId blocker = null;
-        long blockerExecutedAt = s.startedAtMillis;
-        for (TxnId dep : s.deps)
+        long blockerExecutedAt = t.startedAt;
+        for (TxnId dep : t.deps)
         {
-            Started d = started.get(dep);
-            if (d == null || d.executedAtMillis < 0)
+            Timeline d = timelines.get(dep);
+            if (d == null || d.executedAt < 0)
                 continue;
-            if (d.executedAtMillis > blockerExecutedAt && d.executedAtMillis <= s.executedAtMillis)
+            if (d.executedAt > blockerExecutedAt && d.executedAt <= t.executedAt)
             {
                 blocker = dep;
-                blockerExecutedAt = d.executedAtMillis;
+                blockerExecutedAt = d.executedAt;
             }
         }
         return blocker;
     }
 
     // [0]: wait depth; [1]: cross-DC wait depth
-    private int[] waitDepth(TxnId txnId, Started s)
+    private int[] waitDepth(TxnId txnId, Timeline t)
     {
         int[] result = new int[2];
-        if (s.executedAtMillis < 0)
-            return result;
-
         TxnId next = txnId;
-        Started cur = s;
+        Timeline cur = t;
         // guard against cycles amongst transactions completing at the same (logical) millisecond
         Set<TxnId> visited = new HashSet<>();
         visited.add(txnId);
@@ -160,8 +218,8 @@ public class ExecutionStats
             TxnId blocker = blocker(cur);
             if (blocker == null || !visited.add(blocker))
                 break;
-            Started b = started.get(blocker);
-            if (b.executedAtMillis <= s.startedAtMillis)
+            Timeline b = timelines.get(blocker);
+            if (b.executedAt <= t.startedAt)
                 break;
             ++result[0];
             if (!sameDc.test(next.node, blocker.node))
@@ -184,29 +242,108 @@ public class ExecutionStats
                              values[(int)(values.length * 0.99)], values[values.length - 1]);
     }
 
+    private static class Values
+    {
+        long[] values = new long[16];
+        int size;
+        void add(long v) { if (size == values.length) values = Arrays.copyOf(values, size * 2); values[size++] = v; }
+        long[] get() { return Arrays.copyOf(values, size); }
+        double mean() { long sum = 0; for (int i = 0 ; i < size ; ++i) sum += values[i]; return size == 0 ? 0 : (double)sum / size; }
+    }
+
     /**
      * @return a summary of the chains that key transactions waited on (see class javadoc)
      */
     public String chains()
     {
-        int count = 0;
-        long[] depths = new long[started.size()], crossDcDepths = new long[started.size()], waits = new long[started.size()];
-        int waitCount = 0;
-        for (Map.Entry<TxnId, Started> e : started.entrySet())
+        Values depths = new Values(), crossDcDepths = new Values(), waits = new Values();
+        for (Map.Entry<TxnId, Timeline> e : timelines.entrySet())
         {
-            if (!isMeasured(e.getKey()))
+            Timeline t = e.getValue();
+            if (!isMeasured(e.getKey()) || t.startedAt < 0 || t.executedAt < 0)
                 continue;
-            int[] d = waitDepth(e.getKey(), e.getValue());
-            depths[count] = d[0];
-            crossDcDepths[count] = d[1];
-            ++count;
-            Started s = e.getValue();
-            if (s.startedAtMillis >= 0 && s.executedAtMillis >= 0)
-                waits[waitCount++] = s.executedAtMillis - s.startedAtMillis;
+            int[] d = waitDepth(e.getKey(), t);
+            depths.add(d[0]);
+            crossDcDepths.add(d[1]);
+            waits.add(t.executedAt - t.startedAt);
         }
-        return "wait depth: " + distribution(Arrays.copyOf(depths, count))
-               + ", cross-DC wait depth: " + distribution(Arrays.copyOf(crossDcDepths, count))
-               + ", execution latency (ms): " + distribution(Arrays.copyOf(waits, waitCount));
+        return "wait depth: " + distribution(depths.get())
+               + ", cross-DC wait depth: " + distribution(crossDcDepths.get())
+               + ", execution latency (ms): " + distribution(waits.get());
+    }
+
+    /**
+     * @return the mean duration of each phase of the client latency of key transactions:
+     * <ul>
+     *   <li>submit: client to coordinator</li>
+     *   <li>coordinate: until the original coordinator begins to execute (by its path)</li>
+     *   <li>execute: until the first execution completes anywhere (by who completed it)</li>
+     *   <li>reply: until the client receives its reply</li>
+     * </ul>
+     */
+    public String phases()
+    {
+        Values submit = new Values(), reply = new Values(), total = new Values();
+        Map<ExecutePath, Values> coordinate = new EnumMap<>(ExecutePath.class);
+        Values[] execute = new Values[] { new Values(), new Values(), new Values() };
+        String[] executedBy = new String[] { "coordinator", "other", "recovery" };
+        for (Map.Entry<TxnId, Timeline> e : timelines.entrySet())
+        {
+            TxnId txnId = e.getKey();
+            Timeline t = e.getValue();
+            if (!isMeasured(txnId) || t.clientReplyAt < 0 || t.submittedAt < 0 || t.coordinatorStartedAt < 0 || t.executedAt < 0)
+                continue;
+            total.add(t.clientReplyAt - t.clientStartAt);
+            submit.add(t.submittedAt - t.clientStartAt);
+            coordinate.computeIfAbsent(t.coordinatorPath, ignore -> new Values()).add(t.coordinatorStartedAt - t.submittedAt);
+            int by = t.executedByRecovery ? 2 : t.executedBy.equals(txnId.node) ? 0 : 1;
+            execute[by].add(t.executedAt - t.coordinatorStartedAt);
+            reply.add(t.clientReplyAt - t.executedAt);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("n=%d total=%.0f submit=%.0f coordinate={", total.size, total.mean(), submit.mean()));
+        for (Map.Entry<ExecutePath, Values> e : coordinate.entrySet())
+            sb.append(String.format("%s:%.0f(n=%d) ", e.getKey(), e.getValue().mean(), e.getValue().size));
+        sb.setLength(sb.length() - 1);
+        sb.append("} execute={");
+        for (int i = 0 ; i < execute.length ; ++i)
+            sb.append(String.format("%s:%.0f(n=%d)%s", executedBy[i], execute[i].mean(), execute[i].size, i + 1 < execute.length ? " " : ""));
+        sb.append(String.format("} reply=%.0f", reply.mean()));
+        return sb.toString();
+    }
+
+    /**
+     * Write each key transaction's timeline to {@code file} as CSV, ordered by TxnId
+     */
+    public void dump(Path file) throws IOException
+    {
+        List<TxnId> txnIds = new ArrayList<>();
+        for (TxnId txnId : timelines.keySet())
+        {
+            if (isMeasured(txnId))
+                txnIds.add(txnId);
+        }
+        txnIds.sort(TxnId::compareTo);
+        Files.createDirectories(file.getParent());
+        try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(file)))
+        {
+            out.println("txnId,coordinator,keys,clientStart,submitted,coordinatorStarted,coordinatorPath,firstStarted,firstStartedPath,executed,executedBy,byRecovery,clientReply,blocker,blockerCoordinator,blockerExecuted,waitDepth,crossDcWaitDepth,deps");
+            for (TxnId txnId : txnIds)
+            {
+                Timeline t = timelines.get(txnId);
+                TxnId blocker = blocker(t);
+                Timeline b = blocker == null ? null : timelines.get(blocker);
+                int[] depth = t.startedAt < 0 || t.executedAt < 0 ? new int[2] : waitDepth(txnId, t);
+                out.println(String.join(",",
+                    txnId.toString().replace(',', ' '), String.valueOf(txnId.node.id), '"' + (t.keys == null ? "" : t.keys) + '"',
+                    String.valueOf(t.clientStartAt), String.valueOf(t.submittedAt), String.valueOf(t.coordinatorStartedAt), String.valueOf(t.coordinatorPath),
+                    String.valueOf(t.startedAt), String.valueOf(t.startedPath),
+                    String.valueOf(t.executedAt), t.executedBy == null ? "" : String.valueOf(t.executedBy.id), String.valueOf(t.executedByRecovery),
+                    String.valueOf(t.clientReplyAt),
+                    blocker == null ? "" : blocker.toString().replace(',', ' '), blocker == null ? "" : String.valueOf(blocker.node.id), b == null ? "" : String.valueOf(b.executedAt),
+                    String.valueOf(depth[0]), String.valueOf(depth[1]), t.deps == null ? "" : Arrays.stream(t.deps).map(d -> d.toString().replace(',', ' ')).collect(java.util.stream.Collectors.joining(";"))));
+            }
+        }
     }
 
     @Override

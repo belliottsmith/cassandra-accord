@@ -27,6 +27,9 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -72,6 +75,7 @@ import accord.api.ProtocolModifiers.Configure;
 import accord.api.ProtocolModifiers.CoordinatorBacklogExecution;
 import accord.api.ProtocolModifiers.FastExecution;
 import accord.api.ProtocolModifiers.ReplicaExecution;
+import accord.api.ProtocolModifiers.SendStableMessages;
 import accord.api.Scheduler;
 import accord.burn.random.FrequentLargeRange;
 import accord.impl.MessageListener;
@@ -145,6 +149,9 @@ public class BurnTestBase
     private static final Logger logger = LoggerFactory.getLogger(BurnTestBase.class);
 
     // read on demand, as subclasses (e.g. HappyBurnTest) may configure system properties after we are initialised
+    // the seed of the current run, for naming output files
+    static long currentSeed;
+
     static BurnWorkload workload()
     {
         return new BurnWorkload();
@@ -483,6 +490,12 @@ public class BurnTestBase
             coordinatorBacklogExecutionYieldToNearby = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_yield");
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionYieldToNearby", coordinatorBacklogExecutionYieldToNearby);
         logger.info("Backlog execution: {}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "");
+        if (System.getProperty("accord.burn.send_stable") != null)
+        {
+            SendStableMessages sendStable = SendStableMessages.valueOf(System.getProperty("accord.burn.send_stable"));
+            setUnsafe(ProtocolModifiers.class, "sendStableMessages", sendStable);
+            logger.info("Send stable: {}", sendStable);
+        }
         ReplicaExecution replicaExecution = workload().replicaExecution(random.pick(ReplicaExecution.values()));
         setUnsafe(ProtocolModifiers.class, "replicaExecution", replicaExecution);
         logger.info("Replica execution: {}; workload: {}", replicaExecution, workload());
@@ -592,6 +605,7 @@ public class BurnTestBase
 
                     case Applied:
                         appliedLatencyMillis[appliedCount.getAndIncrement()] = queue.nowInMillis() - startMillis[(int)packet.replyId];
+                        executionStats.onClientReply(reply.txnId, startMillis[(int)packet.replyId], reply.responseKeys + (reply.update == null ? "" : " w" + reply.update.keySet()));
                     case RecoveryApplied:
                         replies[(int)packet.replyId] = packet;
                         counters.get(reply.status).incrementAndGet();
@@ -663,6 +677,14 @@ public class BurnTestBase
         logger.info("Message counts: {}", statsInDescOrder(messageStatsMap));
         logger.info("Executions: {}", executionStats);
         logger.info("Chains: {}", executionStats.chains());
+        logger.info("Phases (ms): {}", executionStats.phases());
+        if (System.getProperty("accord.burn.dump_timeline") != null)
+        {
+            Path file = Paths.get(System.getProperty("accord.burn.dump_timeline"), "timeline-" + currentSeed + ".csv");
+            try { executionStats.dump(file); }
+            catch (IOException e) { throw new UncheckedIOException(e); }
+            logger.info("Wrote timeline to {}", file);
+        }
         {
             long[] latencies = Arrays.copyOf(appliedLatencyMillis, appliedCount.get());
             Arrays.sort(latencies);
@@ -789,6 +811,7 @@ public class BurnTestBase
     protected static void run(long seed, int operations, RunInvoker invoker)
     {
         logger.info("Seed: {}", seed);
+        currentSeed = seed;
         Cluster.trace.trace("Seed: {}", seed);
         RandomSource random = new DefaultRandom(seed);
         try

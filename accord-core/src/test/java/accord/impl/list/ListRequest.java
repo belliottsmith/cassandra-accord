@@ -322,6 +322,8 @@ public class ListRequest implements Request
         txn = gen.apply(node);
         id = txnIdGen.apply(node, txn);
         listener.onClientAction(MessageListener.ClientAction.SUBMIT, node.id(), id, txn);
+        if (node.agent() instanceof ListAgent)
+            ((ListAgent) node.agent()).onSubmitted(id);
         node.coordinate(id, txn).begin(new ResultCallback(node, client, replyContext, listener, id, txn));
         return null;
     }

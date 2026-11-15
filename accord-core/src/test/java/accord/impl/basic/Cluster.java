@@ -692,7 +692,7 @@ public class Cluster
                 AsyncExecutor nodeExecutor = nodeExecutorSupplier.apply(id);
                 Agent agent = agentSupplier.apply(ownershipEventListener, scheduler, timeouts);
                 if (agent instanceof ListAgent)
-                    ((ListAgent) agent).setSameDc(sinks::sameDc);
+                    ((ListAgent) agent).setLocality(id, sinks::sameDc);
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);

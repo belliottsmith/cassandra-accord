@@ -117,13 +117,26 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
         this.time = time;
     }
 
+    // the node we are the agent of, if known (for ExecutionStats)
+    Node.Id self;
+
     /**
-     * Tell our {@link ExecutionStats} (if any) which nodes are in the same DC
+     * Tell us (for our {@link ExecutionStats}, if any) which node we are the agent of, and which nodes are in the same DC
      */
-    public void setSameDc(BiPredicate<Node.Id, Node.Id> sameDc)
+    public void setLocality(Node.Id self, BiPredicate<Node.Id, Node.Id> sameDc)
     {
+        this.self = self;
         if (executionStats != null)
             executionStats.setSameDc(sameDc);
+    }
+
+    /**
+     * The coordinator (whose agent we are) has begun coordinating {@code txnId} for a client
+     */
+    void onSubmitted(TxnId txnId)
+    {
+        if (executionStats != null)
+            executionStats.onSubmitted(txnId);
     }
 
     public ListAgent withExecutionStats(@Nullable ExecutionStats executionStats)
@@ -136,14 +149,14 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     public void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path)
     {
         if (executionStats != null)
-            executionStats.onExecuting(txnId, deps, path);
+            executionStats.onExecuting(self, txnId, deps, path);
     }
 
     @Override
     public void onExecuted(TxnId txnId, Ballot ballot)
     {
         if (executionStats != null)
-            executionStats.onExecuted(txnId);
+            executionStats.onExecuted(self, txnId, ballot);
     }
 
     @Override

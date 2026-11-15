@@ -172,6 +172,23 @@ public class ExecuteTxnBacklog implements NotifySink
     }
 
     /**
+     * @return why there is no eligible backlog after {@code executeAt}, for logging
+     */
+    private static String describeNoBacklog(CommandsForKey cfk, Timestamp executeAt)
+    {
+        int i = cfk.unappliedCommittedIndexOf(executeAt);
+        if (i < 0) i = -1 - i;
+        else ++i;
+
+        if (i >= cfk.committedSize())
+            return "no committed successor";
+
+        TxnInfo next = cfk.committedByExecuteAt(i);
+        if (!next.is(STABLE)) return "successor " + next.plainTxnId() + " not stable: " + next.status();
+        return "successor " + next.plainTxnId() + " not eligible";
+    }
+
+    /**
      * @return true iff we should tell the original coordinator of {@code txnId} that we intend to execute it
      */
     private boolean mayClaim(TxnId txnId, Ballot promised)
@@ -215,7 +232,12 @@ public class ExecuteTxnBacklog implements NotifySink
                 TxnInfo next = nextBacklog(cfk, info.executeAt);
                 // if nothing eligible is queued behind this transaction then the backlog is exhausted once it is executed,
                 // so stop listening on this key; a later coordinator may decide to install us again
-                if (next == null || (yield && mayContinueBacklog(txnId, key))) safeCfk.overrideSink(null);
+                if (next == null || (yield && mayContinueBacklog(txnId, key)))
+                {
+                    if (logger.isTraceEnabled())
+                        logger.trace("{}: releasing backlog sink on {} ({})", txnId, key, next == null ? describeNoBacklog(cfk, info.executeAt) : "yield");
+                    safeCfk.overrideSink(null);
+                }
                 // if a single key transaction is queued behind this one then once we have executed this transaction it
                 // will be ready to execute, so we may claim it (see ExecuteBacklogTxn)
                 else if (!yield && next.is(SingleKey) && mayClaim(next, Ballot.ZERO) && !shouldYieldTo(next.plainTxnId())) claimAhead = next.plainTxnId();
@@ -320,7 +342,11 @@ public class ExecuteTxnBacklog implements NotifySink
         }
 
         if (!isCandidate(command))
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: not executing backlog as not a candidate ({})", txnId, command.saveStatus());
             return false;
+        }
 
         Ballot promised = command.promised();
         Node.Id recovering = promised.equals(Ballot.ZERO) ? null : promised.node;
