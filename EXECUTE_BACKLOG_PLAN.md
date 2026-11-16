@@ -784,7 +784,17 @@ and `ON_RECOVERY` keep the sink-based behaviour, for comparison).
     txn's own Stable at its coordinator (p90 245ms), plus the commit's trip to our DC. That matches
     "adopted during Accept, ~1 RTT extra".
   - Without `send_stable = TO_ALL` (which `DESIGNATED` forces), replicas that aren't read from may
-    receive no Stable message, so learn of a commit only from the Apply.
+    receive no Stable message, so learn of a commit only from the Apply. This only happens on the
+    fast path: `Propose` (medium/slow) and `Stabilise` execute with `CoordinationFlags.none()`, so
+    Stable goes to every replica whenever `executeAt != txnId`. Burn, default `send_stable`, backlog
+    disabled (txn, replica pairs without / with Stable):
+    - h4 r0.8 c40: `executeAt != txnId` 5 / 17,838; `executeAt == txnId` 215 / 95;
+    - no hot keys: 2 / 9,937 and 1,209 / 7,015.
+    So it's negligible under contention. Forcing `TO_ALL` for `DESIGNATED` therefore only matters on
+    the fast path, where (in single-DC mode) a coordinator could defer to a designated replica that
+    was never sent Stable. It costs extra Stable messages for uncontended fast-path txns.
+    - [ ] Refinement: send Stable on the fast path only to the designated replica(s), or don't defer
+      unless the designated replica was sent Stable.
 - **Happy burn, DC-coherent latencies** (3 DCs, 40 seeds, mean / p99 ms / duplicate executions;
   grace 2ms). Coordination is FAST ~200ms, MEDIUM ~360ms (MEDIUM ~95% of txns under contention).
 
