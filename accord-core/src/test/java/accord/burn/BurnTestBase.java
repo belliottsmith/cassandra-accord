@@ -514,7 +514,7 @@ public class BurnTestBase
         long coordinatorBacklogExecutionRemoteApplyDelayMillis = persistLocallyRandom.pickLong(0, 200, 500, 1000);
         if (System.getProperty("accord.burn.coordinator_backlog_execution_remote_apply_delay_millis") != null)
             coordinatorBacklogExecutionRemoteApplyDelayMillis = Long.getLong("accord.burn.coordinator_backlog_execution_remote_apply_delay_millis");
-        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionRemoteApplyDelayMicros", MILLISECONDS.toMicros(coordinatorBacklogExecutionRemoteApplyDelayMillis));
+        ListAgent.backlogRemoteApplyDelayMillis = coordinatorBacklogExecutionRemoteApplyDelayMillis;
         if (coordinatorBacklogExecution == CoordinatorBacklogExecution.DESIGNATED)
             logger.info("Designated backlog execution: {}, grace {}us{}", coordinatorBacklogExecutionPerDc ? "per DC" : "single", coordinatorBacklogExecutionGraceMicros,
                         ProtocolModifiers.coordinatorBacklogExecutionPersistLocally() ? ", persist locally (remote apply delay " + coordinatorBacklogExecutionRemoteApplyDelayMillis + "ms)" : "");
@@ -711,6 +711,8 @@ public class BurnTestBase
         logger.info("Chains: {}", executionStats.chains());
         logger.info("Phases (ms): {}", executionStats.phases());
         logger.info("Duplicates: {}", executionStats.duplicates());
+        if (ProtocolModifiers.coordinatorBacklogExecutionPersistLocally())
+            logger.info("Backlog applied: {}", executionStats.backlogApplied());
         if (System.getProperty("accord.burn.dump_timeline") != null)
         {
             Path file = Paths.get(System.getProperty("accord.burn.dump_timeline"), "timeline-" + currentSeed + ".csv");

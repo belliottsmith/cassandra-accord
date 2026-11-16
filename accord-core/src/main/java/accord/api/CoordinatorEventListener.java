@@ -18,6 +18,8 @@
 
 package accord.api;
 
+import java.util.concurrent.TimeUnit;
+
 import javax.annotation.Nullable;
 
 import accord.coordinate.Coordination;
@@ -38,6 +40,14 @@ public interface CoordinatorEventListener
     default void onExecuting(TxnId txnId, @Nullable Ballot ballot, Deps deps, @Nullable ExecutePath path) {}
     default void onExecuted(TxnId txnId, Ballot ballot) {}
     default void onDurable(Durability durability, @Nullable Ballot ballot, TxnId txnId) {}
+
+    /**
+     * As original coordinator, a designated replica has reported (see {@link accord.messages.BacklogApplied}) that it
+     * has applied {@code txnId} in its DC, {@code elapsed} after we began to persist it (zero if before). This is the
+     * natural basis for {@link Agent#backlogRemoteApplyDelay}. Note that reports that would arrive after our own Apply
+     * (because of a short delay) are typically not sent, as the designated replica finds the transaction already applied.
+     */
+    default void onBacklogApplied(TxnId txnId, long elapsed, TimeUnit units) {}
     default void onRecoveryStarted(TxnId txnId, Ballot ballot) {}
 
     /**

@@ -216,17 +216,25 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
      */
     static class EarlyResult implements BiConsumer<Result, Throwable>
     {
+        final Node node;
+        final TxnId txnId;
         final BiConsumer<? super Result, Throwable> callback;
         private final AtomicBoolean invoked = new AtomicBoolean();
 
-        EarlyResult(BiConsumer<? super Result, Throwable> callback)
+        EarlyResult(Node node, TxnId txnId, BiConsumer<? super Result, Throwable> callback)
         {
+            this.node = node;
+            this.txnId = txnId;
             this.callback = callback;
         }
 
         @Override
         public void accept(Result result, Throwable failure)
         {
+            // if we fail to execute the transaction we cannot take responsibility for its durability, so tell any
+            // designated replicas that report to us to persist it to every replica themselves
+            if (failure != null)
+                node.executeBacklogSink().failApplied(txnId);
             if (invoked.compareAndSet(false, true))
                 callback.accept(result, failure);
         }
@@ -235,7 +243,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     ExecuteTxn(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
         this(node, executor, topologies, route, ballot, path, flags, txnId, txn, executeAt, stableDeps, sendDeps, callback,
-             callback != null && ExecuteTxnBacklog.coordinatorOwnsDurability(node, txnId, ballot, topologies, executeAt, route) ? new EarlyResult(callback) : null);
+             callback != null && ExecuteTxnBacklog.coordinatorOwnsDurability(node, txnId, ballot) ? new EarlyResult(node, txnId, callback) : null);
     }
 
     private ExecuteTxn(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback, @Nullable EarlyResult earlyResult)

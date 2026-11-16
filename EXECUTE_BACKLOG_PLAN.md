@@ -51,8 +51,9 @@ Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnT
 - `coordinator_backlog_execution_linger` (Phase 2c; keep listening on a key after catching up)
 - `coordinator_backlog_execution: DESIGNATED`, `coordinator_backlog_execution_per_dc`,
   `coordinator_backlog_execution_grace` (Phase 2d)
-- `coordinator_backlog_execution_persist_locally` (new message), `coordinator_backlog_execution_remote_apply_delay`
-  (Phase 2e; with `DESIGNATED` and `per_dc`)
+- `coordinator_backlog_execution_persist_locally` (new message; Phase 2e; with `DESIGNATED` and `per_dc`), and
+  `coordinator_backlog_execution_remote_apply_delay` (a wait-strategy spec over the new `BacklogAppliedLatency`
+  metric, default `50ms <= p99(rw)*1.5 <= 1000ms`, via `Agent.backlogRemoteApplyDelay`)
 - `send_minimal: MINIMAL_NO_DEPS` (new encoding)
 
 The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `BacklogClaim`,
@@ -65,9 +66,9 @@ serialization version bump.
    (within ~1%), while cross-DC messages fall ~40% below per-DC and 10–20% *below* `DISABLED`, and
    cross-DC Applies fall ~97%. The extra cost is local: every DC executes every eligible txn
    (~1.45 extra executions per txn, with local reads and local Applies).
-   Phase 2e follow-ups: one Apply per remote DC (relayed within the DC) for the coordinator's
-   fallback; earlier reports; a `BacklogApplied` metric; a cheaper rule for DCs that don't replicate
-   everything (see Phase 2e).
+   This is only efficient if every DC replicates every shard; otherwise it is correct but slower
+   (documented, see Phase 2e). Phase 2e follow-ups: one Apply per remote DC (relayed within the DC)
+   for the coordinator's fallback; earlier reports; more metrics.
 1. **Make single-DC designated execution competitive** (Phase 2d). It is correct and nearly
    duplicate-free, but with a static per-key DC it gains only 2–20%, whereas per-DC execution gains
    24–45%. Next: "follow the predecessor" (see the options in Phase 2d), with claim-ahead to trigger
@@ -855,92 +856,133 @@ executor, and the original coordinator, each send `Apply` (with writes) to every
 cross-DC messages were ~1.4× `DISABLED`, and cross-DC Applies ~2.4×.
 
 Behind `ProtocolModifiers.coordinatorBacklogExecutionPersistLocally()` (only with `DESIGNATED` and
-`per_dc`; Cassandra `accord.coordinator_backlog_execution_persist_locally`, default off), plus
-`coordinatorBacklogExecutionRemoteApplyDelay` (Cassandra
-`accord.coordinator_backlog_execution_remote_apply_delay`, default 0):
+`per_dc`; Cassandra `accord.coordinator_backlog_execution_persist_locally`, default off). The delay
+is `Agent.backlogRemoteApplyDelay` (see below).
 - [x] **Designated replica (remote DC):** persists only to replicas in its own DC
   (`CoordinationFlags.persistNearbyOnly`, `Persist.contactNearby`). Once every nearby replica has
-  replied, it sends the original coordinator `BacklogApplied(txnId, appliedAt)`. It doesn't
-  `InformDurable`. It still sends `RemoteSuccess`, so the client may be answered early.
-  - If the coordinator doesn't acknowledge (`SimpleReply.Ok`) before the request times out, or no
-    nearby replica applied, it persists to every other replica itself (`Persist.persistGlobally`,
-    which then completes as a normal `Persist` and informs durability). This covers a failed
-    coordinator, and a coordinator whose own execution failed.
+  replied, it sends the original coordinator `BacklogApplied(txnId, appliedAt, notAppliedAt)`. It
+  doesn't `InformDurable`. It still sends `RemoteSuccess`, so the client may be answered early.
+  - `notAppliedAt` lists the nearby replicas that didn't apply (down, timed out, raced recovery). The
+    coordinator sends them its `Apply` at once, instead of waiting for the delay.
+  - If the designated replica can't execute the txn at all (e.g. replicas down, or it reads a shard
+    its DC doesn't replicate from another DC that has already applied it), it reports every replica
+    in its DC as not applied (`ExecuteTxnBacklog.reportNotApplied`). It doesn't retry, since the
+    coordinator executes anyway. The exception is `NotReady`, which is usually a Stable still in
+    flight to a sibling replica, so it retries that up to 3 times first.
+  - If the coordinator replies `Nack`, or nothing before the request times out, the designated replica
+    persists to every other replica itself (`Persist.persistGlobally`, which then completes as a normal
+    `Persist` and informs durability). This covers a failed coordinator, and one whose own
+    execution failed.
   - Designated replicas no longer wait for the grace period: each DC is now responsible for itself.
 - [x] **Original coordinator:** owns durability (`ExecuteTxnBacklog.coordinatorOwnsDurability`).
   - It doesn't stop on `RemoteSuccess`. It replies to the client (`ExecuteTxn.EarlyResult`, which
-    invokes the client callback at most once) and carries on executing, since nobody else will
-    apply the txn in its DC. It never pauses for claims.
-  - `Persist.tryDeferRemote`: sends `Apply` immediately to its own DC (and to DCs that can't execute
-    for themselves, see below), and defers the rest for `remote_apply_delay`. Reported replicas
-    count towards the durability tracker, so `InformDurable` happens as usual. When the delay expires
-    it sends `Apply` to the replicas not reported (`sendDeferred`; fire-and-forget if the `Persist`
-    has already reached quorum).
-  - It acknowledges reports once it has begun to persist (`ExecuteTxnBacklog.appliedReports`:
-    reports that arrive earlier are buffered with their reply contexts; after the deferral is
-    resolved they're still acknowledged, until expiry). If it never persists, the executors
-    persist globally.
+    invokes the client callback at most once) and carries on executing, since nobody else will apply
+    the txn in its DC. It never pauses for claims.
+  - `Persist.tryDeferRemote`: sends `Apply` immediately to its own DC, and defers the other DCs for
+    `Agent.backlogRemoteApplyDelay`. Reported replicas count towards the durability tracker, so
+    `InformDurable` happens as usual. When the delay expires it sends `Apply` to the replicas not
+    reported (`sendDeferred`; fire-and-forget if the `Persist` has already reached quorum).
+  - It acknowledges reports (`Ok`) once it has begun to persist (`ExecuteTxnBacklog.appliedReports`).
+    Reports that arrive earlier are buffered with their reply contexts. After the deferral is
+    resolved, reports are still acknowledged, until expiry.
+  - If its own execution fails (`EarlyResult` sees a failure), it rejects (`Nack`) buffered and later
+    reports (`ExecuteTxnBacklog.failApplied`), so the designated replicas persist globally at once.
   - `AbstractCoordination.awaitsExternal` lets a `Persist` wait for reports, or for the ack, with
     nothing in flight.
-- [x] **DCs that don't replicate every shard of the txn.** If the coordinator reads from a remote
-  replica, that replica may already have been applied by its DC's executor, so it replies
-  `Redundant` and the coordinator's execution fails. Burn found this (5 nodes, rf 4, 3 DCs: one DC
-  has a single node). Nobody then applied the txn in the coordinator's DC until the progress log
-  fetched it ~5s later (ephemeral reads waited on it). Rule now, using a new pairwise
-  `TopologySorter.Supplier.areNearby(a, b)` / `Node.areNearby` (burn: same simulated DC; Cassandra:
-  same snitch DC):
-  - the coordinator owns durability only if its DC replicates every shard of the txn at `executeAt`;
-    otherwise everybody behaves as in Phase 2d (executors persist globally, the coordinator stops on
-    `RemoteSuccess`);
-  - the coordinator defers `Apply` only to DCs that replicate every shard (`mayDeferApplyTo`), since
-    only they can be relied on to execute for themselves.
+- [x] **Topologies where some DC lacks a replica of some shard are supported, but not efficiently.**
+  We decided against a per-topology flag ("every DC replicates every shard") to disable the feature.
+  Instead, a designated replica that can't apply the txn in its DC hands it back to the coordinator,
+  and a coordinator that can't execute hands it back to the designated replicas, as above. Cassandra
+  doesn't generally support such topologies.
+  - What burn found: if the coordinator's DC lacks a shard, it reads that shard from another DC, whose
+    replica may already have been applied by its own DC's executor. The replica replies `Redundant`
+    and the coordinator's execution fails. Before the `Nack`, nobody applied the txn in the
+    coordinator's DC until the progress log fetched it ~5s later.
+  - Remaining inefficiency: a DC without a replica of the home shard has no designated replica, so it
+    waits for the delay (TODO: don't defer to such DCs).
+  - In asymmetric burn seeds, p99 is ~250–350ms worse than Phase 2d (table below).
+  - A first version gated the whole feature on the DC replicating every shard, using pairwise
+    locality (`TopologySorter.Supplier.areNearby(a, b)` / `Node.areNearby`; burn: same simulated DC;
+    Cassandra: same snitch DC). That gate has been removed. `areNearby` remains, for the relay below.
+- [x] **Remote apply delay** (`Agent.backlogRemoteApplyDelay`, default 0, i.e. send at once). Cassandra
+  implements it as a wait-strategy spec, like `slow_read`: `accord.coordinator_backlog_execution_remote_apply_delay`,
+  default `50ms <= p99(rw)*1.5 <= 1000ms`.
+  - Its latency source is a new metric, `AccordCoordinator.{ro,rw}.BacklogAppliedLatency`: the time from
+    the coordinator beginning to persist to receiving a report (`CoordinatorEventListener.onBacklogApplied`;
+    zero if the report arrived first). `TimeoutStrategyTest.testBacklogRemoteApplyDelayDefault` covers
+    the spec.
+  - The sample is censored: if the delay is short, the coordinator's Apply arrives first, the
+    designated replica finds the txn `Redundant` and sends no report. So the measured p99 is biased
+    towards the delay; the `50ms` floor stops it collapsing.
+  - Burn reports the distribution (`Backlog applied: reports: n, lag (ms): {...}`). Happy burn's report
+    lag p99 is ~270–320ms with a 500ms delay, and the max sits at ~200ms with a 200ms delay (i.e.
+    censored).
 - [x] Cassandra: `Verb.ACCORD_BACKLOG_APPLIED_REQ` (176, replies `ACCORD_SIMPLE_RSP`),
-  `BacklogClaimSerializers.applied`, the two config options, `AccordTopologySorter`/
-  `CompositeTopologySorter.areNearby`. `BacklogMessageSerializersTest.backlogApplied`.
-- [x] Burn randomises both (overrides `accord.burn.coordinator_backlog_execution_persist_locally`,
-  `accord.burn.coordinator_backlog_execution_remote_apply_delay_millis` ∈ {0, 200, 500, 1000}). They
-  are drawn from a separate random source, so as not to perturb the stream: Phase 2d's per-DC
-  numbers reproduce exactly. `Message counts` now also report cross-DC counts per type
-  (`(x-DC n)`), and `-Daccord.burn.log_slow_millis=<n>` logs client replies slower than `n`.
+  `BacklogClaimSerializers.applied`, the two config options, the metric, `AccordAgent.backlogRemoteApplyDelay`,
+  and `AccordTopologySorter`/`CompositeTopologySorter.areNearby`. `BacklogMessageSerializersTest.backlogApplied`.
+- [x] **Burn:**
+  - Randomises persisting locally and the delay (overrides
+    `accord.burn.coordinator_backlog_execution_persist_locally`,
+    `accord.burn.coordinator_backlog_execution_remote_apply_delay_millis` ∈ {0, 200, 500, 1000}; the delay
+    goes through `ListAgent.backlogRemoteApplyDelayMillis`). Both are drawn from a separate random
+    source, so as not to perturb the stream.
+  - `Message counts` now also report cross-DC counts per type (`(x-DC n)`), and
+    `-Daccord.burn.log_slow_millis=<n>` logs client replies slower than `n`.
+  - **DC assignment** (`Cluster.assignDcs`): nodes were assigned to DCs by id, which with
+    wrap-around replica placement often left some shard without a replica in some DC (e.g. 5 nodes,
+    rf 4, 3 DCs). Such asymmetric topologies are now rare: only 10% of seeds keep the by-id
+    assignment when it is asymmetric. Otherwise burn searches for a symmetric assignment, and if
+    none exists (as for 5 nodes, rf 4, 3 DCs) reduces the number of DCs, unless `accord.burn.dcs` is
+    forced. Override with `accord.burn.asymmetric_dcs`. Topology changes in non-happy burn may still
+    produce asymmetric topologies. Symmetric seeds' results are unchanged (by-id was already
+    symmetric for them).
 
-**Happy burn** (3 DCs, 40 seeds, grace 2ms for `dp`; mean / p99 ms; messages summed over 40 seeds;
-"dup" counts executions beyond the first, now mostly cheap local ones; `dpl<N>` = persist locally
-with a remote apply delay of N ms):
+**Happy burn**, after the changes above. 3 DCs (forced), 40 seeds, of which 32 are symmetric; the
+other 8 can't be symmetric with 3 DCs. Grace is 2ms for `dp`. Latency is the mean over seeds of
+each seed's mean / p99 (ms). Messages are summed over the symmetric seeds. "Extra executions"
+counts executions beyond the first, now mostly cheap local ones. `dpl<N>` means persisting locally
+with a remote apply delay of N ms.
 
-| workload | variant  | mean / p99    | all msgs | x-DC msgs | x-DC Apply | dup.   |
-|----------|----------|---------------|----------|-----------|------------|--------|
-| h4 r0.8 c40 | `DISABLED` | 1,204 / 1,929 | 2.57M | 1.86M | 160k | 1      |
-|          | `dp` (2d) | 577 / 779     | 3.51M    | 2.56M     | 380k       | 45.8k  |
-|          | `dpl0`   | 579 / 787     | 2.62M    | 1.77M     | 154k       | 52.7k  |
-|          | `dpl200` | 582 / 796     | 2.41M    | 1.54M     | 29k        | 58.3k  |
-|          | `dpl500` | 580 / 793     | 2.37M    | **1.50M** | **10k**    | 58.4k  |
-| h2 r0.8  | `DISABLED` | 949 / 1,669 | 2.46M    | 1.77M     | 159k       | 0      |
-|          | `dp`     | 524 / 744     | 3.26M    | 2.39M     | 347k       | 40.9k  |
-|          | `dpl0`   | 527 / 772     | 2.51M    | 1.71M     | 151k       | 50.0k  |
-|          | `dpl200` | 525 / 745     | 2.33M    | 1.50M     | 32k        | 57.8k  |
-|          | `dpl500` | 528 / 756     | 2.30M    | **1.47M** | **11k**    | 57.8k  |
-| no hot keys | `DISABLED` | 622 / 1,330 | 2.12M | 1.53M  | 157k       | 7      |
-|          | `dp`     | 445 / 686     | 3.21M    | 2.33M     | 362k       | 42.1k  |
-|          | `dpl0`   | 450 / 817     | 2.43M    | 1.64M     | 153k       | 48.3k  |
-|          | `dpl500` | 446 / 712     | 2.19M    | **1.37M** | **11k**    | 57.5k  |
+| workload, symmetric seeds | variant    | mean / p99  | all msgs | x-DC msgs | x-DC Apply | extra executions |
+|---------------------------|------------|-------------|----------|-----------|------------|------------------|
+| h4 r0.8 c40               | `DISABLED` | 1,234 / 1,968 | 2.28M  | 1.63M     | 141k       | 0                |
+|                           | `dp` (2d)  | 589 / 795   | 3.13M    | 2.26M     | 338k       | 37.3k            |
+|                           | `dpl200`   | 596 / 811   | 2.10M    | 1.32M     | 22k        | 48.0k            |
+|                           | `dpl500`   | 594 / 811   | 2.10M    | **1.31M** | **5.5k**   | 48.1k            |
+| h2 r0.8                   | `DISABLED` | 954 / 1,704 | 2.18M    | 1.55M     | 141k       | 0                |
+|                           | `dp`       | 535 / 764   | 2.90M    | 2.11M     | 308k       | 32.9k            |
+|                           | `dpl200`   | 536 / 771   | 2.11M    | 1.34M     | 28k        | 47.6k            |
+|                           | `dpl500`   | 537 / 779   | 2.03M    | **1.28M** | **6.6k**   | 47.6k            |
+| no hot keys               | `DISABLED` | 620 / 1,334 | 1.88M    | 1.35M     | 139k       | 7                |
+|                           | `dp`       | 445 / 689   | 2.85M    | 2.06M     | 322k       | 34.1k            |
+|                           | `dpl200`   | 444 / 682   | 1.97M    | 1.23M     | 26k        | 47.4k            |
+|                           | `dpl500`   | 444 / 710   | 1.93M    | **1.19M** | **6.0k**   | 47.4k            |
 
-- Latency is within ~1% of Phase 2d's per-DC numbers, and cross-DC traffic falls below `DISABLED`:
-  the coordinator no longer sends writes over the WAN, only Stable (which `DESIGNATED` already
-  sends everywhere) plus one small report and ack per remote DC.
+Asymmetric seeds (8), mean / p99: h4 `dp` 528 / 714 vs `dpl500` 548 / 1,062; h2 478 / 665 vs
+486 / 915; no hot keys 444 / 675 vs 465 / 990.
+
+- On symmetric topologies latency is within ~1% of Phase 2d's per-DC numbers (p99 within ~2–3%).
+  Cross-DC traffic falls ~40% below per-DC and 10–20% below `DISABLED`: the coordinator no longer
+  sends writes over the WAN, only Stable (which `DESIGNATED` already sends everywhere) plus one small
+  report and ack per remote DC.
 - With a long delay, a slower DC no longer benefits from a faster one's Apply. In `dp`, an early
-  Apply from another DC "pre-loads" a replica, which then applies as soon as its predecessors
-  have, with no read. This costs ~0–3ms mean. `dpl0` costs nothing in latency, but saves little.
-- Duplicates rise from ~1.1 to ~1.45 per txn, since every DC now always executes (in `dp` an earlier
-  remote Apply sometimes made the local executor redundant). These are local reads and local
+  Apply from another DC "pre-loads" a replica, which then applies as soon as its predecessors have,
+  with no read. This costs ~0–7ms mean.
+- Extra executions rise from ~1.1 to ~1.5 per txn, since every DC now always executes (in `dp` an
+  earlier remote Apply sometimes made the local executor redundant). These are local reads and local
   Applies.
-- 200ms already removes ~80% of cross-DC Applies. The remainder at 500ms are presumably mostly
-  txns that are ineligible, or whose DC can't execute for itself (not yet broken down).
+- 200ms already removes ~80–90% of cross-DC Applies.
 
-**Non-happy burn** (forced `DESIGNATED` per DC, seeds 1–80): before acknowledgements, persisting
-locally lost 4,414 txns vs 3,914 (Phase 2d), with mean latency up to 25% higher. Coordinators that
+**Non-happy burn** (forced `DESIGNATED` per DC): before acknowledgements, persisting locally lost
+4,414 txns vs 3,914 (Phase 2d, seeds 1–80), with mean latency up to 25% higher. Coordinators that
 failed left their txns applied only in the executors' DCs, with nobody informing durability. With
-acknowledgements: lost 3,678 vs 3,914, mean 3,719 / 3,320ms vs 3,941 / 3,108ms (seeds 1–40 / 41–80),
-i.e. within noise. 200 forced (seeds 1–200) and 200 random non-happy seeds pass; accord unit tests match baseline.
+acknowledgements (first version, seeds 1–80): lost 3,678 vs 3,914, mean 3,719 / 3,320ms vs
+3,941 / 3,108ms (seeds 1–40 / 41–80), i.e. within noise.
+
+After the gate's removal and the burn DC change, these pass: 100 forced seeds, 100 random seeds,
+and 40 forced seeds with 3 DCs and asymmetric assignments permitted (7 of them asymmetric).
+Earlier, 200 forced and 200 random seeds passed with the first version. Accord unit tests match
+baseline.
 
 **How this fits single-DC execution (A).** The common principle is that *each DC applies from one
 WAN message, and exactly one node owns durability, collecting per-DC reports and falling back to
@@ -965,14 +1007,10 @@ Follow-ups:
   `DISABLED`'s persist) cheaper.
 - [ ] Report sooner, e.g. once a quorum of the DC has replied, rather than every nearby replica. A
   dead local replica currently delays the report until its timeout.
-- [ ] A DC that doesn't replicate every shard could still execute for itself if it reads the
-  missing shards remotely before the remote DCs apply them, which isn't guaranteed. For now such
-  DCs always get the coordinator's Apply immediately.
-- [ ] Metrics: reports received, acks, fallbacks (`persistGlobally`), deferred Applies sent.
-- [ ] If the coordinator's own execution fails (e.g. `Redundant` because of a recovery), it has
-  already replied to the client from `RemoteSuccess`. Executors then persist globally after their
-  ack times out, which costs a request timeout of latency for successors in the coordinator's DC.
-  An explicit `Nack` on failure would make this prompt.
+- [ ] Don't defer `Apply` to DCs without a replica of the home shard (they have no designated replica).
+- [ ] More metrics: reports received (applied / not applied), acks and `Nack`s, fallbacks
+  (`persistGlobally`), deferred Applies sent. Track raw inter-DC link latencies (as
+  `AccordWaitStrategies.setSlowRead`'s TODO suggests): an uncensored basis for the delay.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
@@ -1110,6 +1148,8 @@ Follow-ups:
   - `accord.burn.coordinator_backlog_execution_persist_locally`,
     `accord.burn.coordinator_backlog_execution_remote_apply_delay_millis`
   - `accord.burn.log_slow_millis` (log client replies slower than this)
+  - `accord.burn.asymmetric_dcs` (permit DC assignments where some DC lacks a replica of some shard;
+    by default only 10% of seeds may)
 - Each run logs `Executions:` (attempts by path, duplicate executions), `Chains:` (wait depth,
   cross-DC wait depth, execution latency) and `Applied latency (ms)`.
 - Workload overrides (`BurnWorkload`; `HappyBurnTest` defaults in brackets): `accord.burn.keys`,

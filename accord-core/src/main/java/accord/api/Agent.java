@@ -144,6 +144,19 @@ public interface Agent extends UncaughtExceptionListener
      */
     long slowAwaitDelay(Node node, SafeCommandStore safeStore, TxnId txnId, int attempt, @Nullable BlockedUntil retrying, TimeUnit units);
 
+    /**
+     * With {@link ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()}, how long an original coordinator waits
+     * for designated replicas in other DCs to report they have applied a transaction (see {@link accord.messages.BacklogApplied})
+     * before sending its own Apply to the replicas that have not. If zero, the original coordinator sends Apply to every
+     * replica at once. This should typically exceed the time we expect a report to take to arrive (see
+     * {@link CoordinatorEventListener#onBacklogApplied}), but if it is too long remote DCs may wait for transactions
+     * their designated replica could not execute (e.g. because their DC has no replica of the home shard).
+     */
+    default long backlogRemoteApplyDelay(TxnId txnId, TimeUnit units)
+    {
+        return 0;
+    }
+
     long retrySyncPointDelay(Node node, int attempt, TimeUnit units);
     default long retryBackgroundSyncPointDelay(Node node, int attempt, int replicaIndex, int replicaCount, TimeUnit units)
     {

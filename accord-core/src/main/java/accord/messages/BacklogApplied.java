@@ -30,26 +30,33 @@ import static accord.messages.MessageType.StandardMessage.BACKLOG_APPLIED_REQ;
  * persisted it only to the replicas in its own DC, to tell the transaction's original coordinator which replicas have
  * applied it. The original coordinator counts these replicas towards the transaction's durability, and need not send
  * them its own Apply (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()}).
+ * Replicas the designated replica could not apply the transaction to (including, if it could not execute the
+ * transaction, every replica in its DC) are reported too, so that the original coordinator sends them its Apply at once.
  * The original coordinator replies {@link SimpleReply#Ok} once it has begun to persist the transaction (so has taken
- * responsibility for its durability); if the designated replica receives no reply, it persists the transaction to
- * every other replica itself (e.g. because the original coordinator has failed).
+ * responsibility for its durability), or {@link SimpleReply#Nack} if it failed to execute the transaction. If the
+ * designated replica receives a Nack or no reply (e.g. because the original coordinator has failed), it persists the
+ * transaction to every other replica itself.
  * Note: this message was introduced later, and so may only be sent once every replica understands it.
  */
 public class BacklogApplied implements Request
 {
     public final TxnId txnId;
-    public final SortedArrayList<Node.Id> appliedAt;
+    // the replicas that have applied the transaction, and those the designated replica could not apply it to
+    // (e.g. because they are down, or because the designated replica could not execute the transaction), which the
+    // original coordinator should send its own Apply to at once
+    public final SortedArrayList<Node.Id> appliedAt, notAppliedAt;
 
-    public BacklogApplied(TxnId txnId, SortedArrayList<Node.Id> appliedAt)
+    public BacklogApplied(TxnId txnId, SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> notAppliedAt)
     {
         this.txnId = txnId;
         this.appliedAt = appliedAt;
+        this.notAppliedAt = notAppliedAt;
     }
 
     @Override
     public Cancellable process(Node on, Node.Id from, ReplyContext replyContext)
     {
-        on.executeBacklogSink().onApplied(txnId, from, appliedAt, replyContext);
+        on.executeBacklogSink().onApplied(txnId, from, appliedAt, notAppliedAt, replyContext);
         return null;
     }
 
@@ -68,6 +75,6 @@ public class BacklogApplied implements Request
     @Override
     public String toString()
     {
-        return "BacklogApplied{" + txnId + ", appliedAt=" + appliedAt + '}';
+        return "BacklogApplied{" + txnId + ", appliedAt=" + appliedAt + ", notAppliedAt=" + notAppliedAt + '}';
     }
 }

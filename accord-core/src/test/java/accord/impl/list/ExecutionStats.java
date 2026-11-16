@@ -279,6 +279,23 @@ public class ExecutionStats
                              values[(int)(values.length * 0.99)], values[values.length - 1]);
     }
 
+    // the delay (ms) between an original coordinator beginning to persist and receiving a report that a designated replica
+    // has applied the transaction in its DC (see CoordinatorEventListener#onBacklogApplied)
+    private final Values backlogAppliedLag = new Values();
+
+    synchronized void onBacklogApplied(long elapsedMillis)
+    {
+        backlogAppliedLag.add(elapsedMillis);
+    }
+
+    /**
+     * @return the distribution of delays to receive reports from designated replicas persisting locally
+     */
+    public synchronized String backlogApplied()
+    {
+        return "reports: " + backlogAppliedLag.size + ", lag (ms): " + distribution(backlogAppliedLag.get());
+    }
+
     private static class Values
     {
         long[] values = new long[16];

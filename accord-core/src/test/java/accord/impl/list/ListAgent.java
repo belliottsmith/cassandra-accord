@@ -186,6 +186,22 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
             executionStats.onReplicaEvent(self, cmd.txnId(), ExecutionStats.ReplicaEvent.APPLIED);
     }
 
+    // see Agent#backlogRemoteApplyDelay; set by the burn test
+    public static volatile long backlogRemoteApplyDelayMillis = 0;
+
+    @Override
+    public long backlogRemoteApplyDelay(TxnId txnId, TimeUnit units)
+    {
+        return units.convert(backlogRemoteApplyDelayMillis, MILLISECONDS);
+    }
+
+    @Override
+    public void onBacklogApplied(TxnId txnId, long elapsed, TimeUnit units)
+    {
+        if (executionStats != null)
+            executionStats.onBacklogApplied(MILLISECONDS.convert(elapsed, units));
+    }
+
     @Override
     public void onExecuted(TxnId txnId, Ballot ballot)
     {

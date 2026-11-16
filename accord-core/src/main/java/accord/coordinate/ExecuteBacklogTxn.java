@@ -317,7 +317,7 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         // every replica we read from was ready to execute, so is Stable and need not be sent our deps again
         CoordinationFlags flags = CoordinationFlags.withStableSent(CoordinationFlags.none(), readFrom);
         // if the original coordinator is responsible for durability, we need only apply the transaction in our own DC
-        if (ExecuteTxnBacklog.persistsLocally(node, txnId, ballot, allTopologies, executeAt, route))
+        if (ExecuteTxnBacklog.persistsLocally(node, txnId, ballot))
             flags = CoordinationFlags.withPersistNearbyOnly(flags);
         CoordinationAdapter<Result> adapter = node.coordinationAdapter(txnId, Standard);
         adapter.persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, deps, writes, result, takeCallback());

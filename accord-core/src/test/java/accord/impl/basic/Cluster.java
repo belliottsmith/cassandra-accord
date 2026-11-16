@@ -106,12 +106,14 @@ import accord.primitives.SaveStatus;
 import accord.primitives.Status;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
+import accord.topology.Shard;
 import accord.topology.Topology;
 import accord.topology.TopologyRandomizer;
 import accord.utils.Gens;
 import accord.utils.Invariants;
 import accord.utils.LazyToString;
 import accord.utils.QueueScheduler;
+import accord.utils.DefaultRandom;
 import accord.utils.RandomSource;
 import accord.utils.ReflectionUtils;
 import accord.utils.Timestamped;
@@ -205,7 +207,8 @@ public class Cluster
 
     final RandomSource random;
     // the number of simulated DCs; nodes are assigned to DCs by their id. If 1, nodes have no locality information
-    final int dcs;
+    // may be reduced by assignDcs, if no assignment exists in which every DC replicates every shard
+    int dcs;
     // if true, simulate a healthy cluster: reliable delivery with stable latencies, and no partitions, restarts or
     // topology changes (see HappyBurnTest)
     final boolean happy = Boolean.getBoolean("accord.burn.happy");
@@ -237,9 +240,82 @@ public class Cluster
         this.links = linkConfig.defaultLinks;
     }
 
+    // the DC of each node, if assigned (see assignDcs); otherwise (e.g. for clients) by id
+    private final Map<Id, Integer> dcOf = new HashMap<>();
+
+    public int dc(Id id)
+    {
+        Integer dc = dcOf.get(id);
+        return dc != null ? dc : Math.floorMod(id.id, dcs);
+    }
+
     public boolean sameDc(Id a, Id b)
     {
-        return Math.floorMod(a.id, dcs) == Math.floorMod(b.id, dcs);
+        return dc(a) == dc(b);
+    }
+
+    /**
+     * Assign nodes to DCs. By default (by id) some shards may have no replica in some DC (e.g. 5 nodes, rf 4, 3 DCs).
+     * Such asymmetric topologies are not generally supported by Cassandra, and are uninformative for features that
+     * depend on locality (which may only be efficient if every DC replicates every shard), so unless overridden
+     * (accord.burn.asymmetric_dcs) we only rarely permit them, otherwise searching for an assignment in which every DC
+     * replicates every shard. Note that later topology changes may still produce asymmetric topologies.
+     */
+    void assignDcs(Topology topology, Id[] nodes)
+    {
+        if (dcs == 1)
+            return;
+
+        // a separate random source, so as not to perturb the random stream (to compare with earlier runs of the same seed)
+        RandomSource random = new DefaultRandom(topology.toString().hashCode() * 31L + dcs);
+        boolean permitAsymmetric = random.decide(0.1f);
+        if (System.getProperty("accord.burn.asymmetric_dcs") != null)
+            permitAsymmetric = Boolean.getBoolean("accord.burn.asymmetric_dcs");
+
+        boolean forced = Integer.getInteger("accord.burn.dcs") != null;
+        Map<Id, Integer> assignment;
+        while (true)
+        {
+            assignment = new HashMap<>();
+            for (Id id : nodes)
+                assignment.put(id, Math.floorMod(id.id, dcs));
+
+            if (permitAsymmetric || isSymmetric(topology, assignment))
+                break;
+
+            Map<Id, Integer> found = null;
+            List<Id> shuffle = new ArrayList<>(Arrays.asList(nodes));
+            for (int attempt = 0 ; found == null && attempt < 1000 ; ++attempt)
+            {
+                Collections.shuffle(shuffle, new java.util.Random(random.nextLong()));
+                Map<Id, Integer> candidate = new HashMap<>();
+                for (int i = 0 ; i < shuffle.size() ; ++i)
+                    candidate.put(shuffle.get(i), i % dcs);
+                if (isSymmetric(topology, candidate))
+                    found = candidate;
+            }
+
+            if (found != null) { assignment = found; break; }
+            // e.g. 5 nodes with rf 4 cannot be split symmetrically across 3 DCs (each DC needs at least two nodes)
+            if (forced || dcs == 2) break;
+            --dcs;
+        }
+
+        dcOf.putAll(assignment);
+        logger.info("DCs ({}): {} ({})", dcs, assignment, isSymmetric(topology, assignment) ? "every DC replicates every shard" : "asymmetric");
+    }
+
+    private boolean isSymmetric(Topology topology, Map<Id, Integer> assignment)
+    {
+        for (Shard shard : topology.shards())
+        {
+            Set<Integer> covered = new HashSet<>();
+            for (Id id : shard.nodes)
+                covered.add(assignment.get(id));
+            if (covered.size() < dcs)
+                return false;
+        }
+        return true;
     }
 
     TopologySorter.Supplier topologySorter(Id self)
@@ -638,6 +714,7 @@ public class Cluster
         {
             RandomSource random = randomSupplier.get();
             Cluster sinks = new Cluster(randomSupplier.get(), messageListener, queueSupplier, checkFailures, nodeMap::get, () -> topologyFactory.rf, responseSink);
+            sinks.assignDcs(topology, nodes);
             logger.info("Simulating {} DC(s){}", sinks.dcs, sinks.happy ? " (happy)" : "");
             TopologyUpdates topologyUpdates = new TopologyUpdates(executorMap::get);
             TopologyRandomizer.Listener schemaApply = t -> {
@@ -1304,7 +1381,7 @@ public class Cluster
         }
         else
         {
-            int a = Math.floorMod(from.id, dcs), b = Math.floorMod(to.id, dcs);
+            int a = dc(from), b = dc(to);
             long dcPair = ((long)Math.min(a, b) << 32) | Math.max(a, b);
             baseMicros = happyDcPairBaseMicros.computeIfAbsent(dcPair, ignore -> MILLISECONDS.toMicros(random.nextInt(MIN_INTER_DC_BASE_MILLIS, MAX_INTER_DC_BASE_MILLIS)));
         }
