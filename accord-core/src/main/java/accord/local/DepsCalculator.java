@@ -23,6 +23,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import javax.annotation.Nullable;
 
+import accord.api.RoutingKey;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.CommandSummaries.SummaryStatus;
 import accord.local.MaxDecidedRX.DecidedRX;
@@ -31,7 +32,10 @@ import accord.messages.ReplyList;
 import accord.primitives.Deps;
 import accord.primitives.EpochSupplier;
 import accord.primitives.Participants;
+import accord.primitives.Range;
 import accord.primitives.RangeDeps;
+import accord.primitives.Ranges;
+import accord.primitives.Routable.Domain;
 import accord.primitives.Status.Durability;
 import accord.primitives.Timestamp;
 import accord.primitives.TxnId;
@@ -52,6 +56,7 @@ import static accord.local.DepsCalculator.Initialised.DONE;
 import static accord.local.DepsCalculator.Initialised.INCOMPLETE;
 import static accord.local.DepsCalculator.Initialised.REJECTED;
 import static accord.local.LoadKeys.INCR;
+import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Txn.Kind.EphemeralRead;
 import static accord.primitives.Txn.Kind.ExclusiveSyncPoint;
 import static accord.utils.Invariants.illegalState;
@@ -61,35 +66,68 @@ public abstract class DepsCalculator extends Deps.Builder implements CommandSumm
     public static class MinDependencyCalculator
     {
         final MaxDecidedRX maxDecidedRX;
+        final RedundantBefore redundantBefore;
         final DecidedRX minDecidedRx;
         final TxnId txnId;
         Unseekable prevKeyOrRange;
         DecidedRX prevDecidedRx;
+        RoutingKey prevBoundsKey;
+        RedundantBefore.Bounds prevBounds;
 
-        MinDependencyCalculator(MaxDecidedRX maxDecidedRX, Unseekables<?> keysOrRanges, TxnId txnId)
+        MinDependencyCalculator(MaxDecidedRX maxDecidedRX, RedundantBefore redundantBefore, Unseekables<?> keysOrRanges, TxnId txnId)
         {
             this.maxDecidedRX = maxDecidedRX;
+            this.redundantBefore = redundantBefore;
             this.minDecidedRx = maxDecidedRX.forDeps(keysOrRanges, txnId);
             this.txnId = txnId;
         }
 
+        /**
+         * A dependency decided by an earlier sync point may be omitted only if this cannot mislead its recovery, which
+         * may treat a later sync point that did not witness it as evidence it did not take the fast path. That holds
+         * for sync points and durably committed transactions, and for any transaction a quorum has applied, as
+         * recovery will find its outcome.
+         */
         boolean include(Durability durability, Unseekable keyOrRange, TxnId depId)
         {
+            if (!isDecided(keyOrRange, depId))
+                return true;
+
             if (durability.isDurablyCommitted() || depId.isSyncPoint())
+                return false;
+
+            // TODO (expected): recovery could instead consider only the first sync point above it, so that we may omit
+            //  any decided dependency; but a recovery coordinator may not know of an intervening sync point, so we
+            //  would need to track the lowest superseding sync point
+            return !isQuorumApplied(keyOrRange, depId);
+        }
+
+        private boolean isDecided(Unseekable keyOrRange, TxnId depId)
+        {
+            if (minDecidedRx != null && minDecidedRx.excludeDecided(depId))
+                return true;
+
+            if (!keyOrRange.equals(prevKeyOrRange))
             {
-                if (minDecidedRx != null && minDecidedRx.excludeDecided(depId))
-                    return false;
-
-                if (!keyOrRange.equals(prevKeyOrRange))
-                {
-                    prevKeyOrRange = keyOrRange;
-                    prevDecidedRx = maxDecidedRX.forDeps(keyOrRange, txnId);
-                }
-
-                if (prevDecidedRx != null && prevDecidedRx.excludeDecided(depId))
-                    return false;
+                prevKeyOrRange = keyOrRange;
+                prevDecidedRx = maxDecidedRX.forDeps(keyOrRange, txnId);
             }
-            return true;
+
+            return prevDecidedRx != null && prevDecidedRx.excludeDecided(depId);
+        }
+
+        private boolean isQuorumApplied(Unseekable keyOrRange, TxnId depId)
+        {
+            if (keyOrRange.domain() == Domain.Range)
+                return redundantBefore.status(depId, null, Ranges.of((Range) keyOrRange)).all(QUORUM_APPLIED);
+
+            RoutingKey key = (RoutingKey) keyOrRange;
+            if (!key.equals(prevBoundsKey))
+            {
+                prevBoundsKey = key;
+                prevBounds = redundantBefore.get(key);
+            }
+            return prevBounds != null && prevBounds.get(depId, null).all(QUORUM_APPLIED);
         }
     }
 
@@ -336,7 +374,7 @@ public abstract class DepsCalculator extends Deps.Builder implements CommandSumm
 
         // the main difference between RX and RV is whether we apply this filtering
         if (txnId.is(ExclusiveSyncPoint))
-            minDepCalc = new MinDependencyCalculator(safeStore.maxDecidedRX(), touches, txnId);
+            minDepCalc = new MinDependencyCalculator(safeStore.maxDecidedRX(), safeStore.redundantBefore(), touches, txnId);
 
         safeStore.visit(touches, executeAt, txnId.witnesses(), this, executeAt == txnId ? null : txnId, minDepCalc);
         if (safeStore.context().keys().containsAll(touches))

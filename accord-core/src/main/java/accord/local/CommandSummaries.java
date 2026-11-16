@@ -55,6 +55,7 @@ import static accord.local.CommandSummaries.SummaryStatus.NOTACCEPTED;
 import static accord.local.CommandSummaries.SummaryStatus.PREACCEPTED;
 import static accord.local.FindKeys.DECLARED;
 import static accord.local.MaxDecidedRX.forDeps;
+import static accord.local.RedundantStatus.Property.QUORUM_APPLIED;
 import static accord.primitives.Known.KnownDeps.NoDeps;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.SaveStatus.PreAcceptedPrivCoord;
@@ -329,11 +330,17 @@ public interface CommandSummaries
                 return true;
 
             // TODO (expected): can we improve our inferences to avoid looping?
-            if (decidedRx != null && decidedRx.excludeDecided(last))
-                return false;
+            if (decidedRx == null || !decidedRx.excludeDecided(last))
+            {
+                DecidedRX decidedRx = maxDecidedRX.forDeps(key, primaryTxnId);
+                if (decidedRx == null || decidedRx.includeDecided(last))
+                    return true;
+            }
 
-            DecidedRX decidedRx = maxDecidedRX.forDeps(key, primaryTxnId);
-            return decidedRx == null || decidedRx.includeDecided(last);
+            // Every transaction of the key is decided by an earlier sync point, but skipping the key omits them all
+            // from our dependencies, which may mislead their recovery (see DepsCalculator.MinDependencyCalculator.include).
+            // We cannot see their durability here, so skip only if a quorum has applied them all.
+            return !redundantBefore.status(last, null, key).all(QUORUM_APPLIED);
         }
 
         public boolean shouldRecordFutureRx(TxnId txnId, SummaryStatus status)
