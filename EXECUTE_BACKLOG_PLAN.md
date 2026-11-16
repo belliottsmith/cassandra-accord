@@ -52,8 +52,8 @@ Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnT
 - `coordinator_backlog_execution: DESIGNATED`, `coordinator_backlog_execution_per_dc`,
   `coordinator_backlog_execution_grace` (Phase 2d)
 - `coordinator_backlog_execution_persist_locally` (new message; Phase 2e; with `DESIGNATED` and `per_dc`), and
-  `coordinator_backlog_execution_remote_apply_delay` (a wait-strategy spec over the new `BacklogAppliedLatency`
-  metric, default `50ms <= p99(rw)*1.5 <= 1000ms`, via `Agent.backlogRemoteApplyDelay`)
+  `coordinator_backlog_execution_remote_apply_delay` (a wait-strategy spec over PreAccept latency, as a proxy,
+  default `50ms <= p99(rw) <= 1000ms`, via `Agent.backlogRemoteApplyDelay`)
 - `send_minimal: MINIMAL_NO_DEPS` (new encoding)
 
 The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `BacklogClaim`,
@@ -862,13 +862,29 @@ is `Agent.backlogRemoteApplyDelay` (see below).
   (`CoordinationFlags.persistNearbyOnly`, `Persist.contactNearby`). Once every nearby replica has
   replied, it sends the original coordinator `BacklogApplied(txnId, appliedAt, notAppliedAt)`. It
   doesn't `InformDurable`. It still sends `RemoteSuccess`, so the client may be answered early.
-  - `notAppliedAt` lists the nearby replicas that didn't apply (down, timed out, raced recovery). The
-    coordinator sends them its `Apply` at once, instead of waiting for the delay.
+  - `failedAt` lists the nearby replicas it failed to apply to (down, timed out, raced recovery,
+    `UNAVAILABLE`). The coordinator records them as failures in its tracker, just as if it had tried
+    them itself, and doesn't try them. It only delivers `Apply` itself to replicas whose designated
+    replica never reports, i.e. after the delay.
   - If the designated replica can't execute the txn at all (e.g. replicas down, or it reads a shard
-    its DC doesn't replicate from another DC that has already applied it), it reports every replica
-    in its DC as not applied (`ExecuteTxnBacklog.reportNotApplied`). It doesn't retry, since the
-    coordinator executes anyway. The exception is `NotReady`, which is usually a Stable still in
-    flight to a sibling replica, so it retries that up to 3 times first.
+    its DC doesn't replicate from another DC that has already applied it), it sends no report, so the
+    coordinator delivers to its DC once the delay elapses. It doesn't retry, since the coordinator
+    executes anyway, with one exception (below).
+  - A replica that hasn't yet recorded the txn as Stable (usually its Stable is still in flight)
+    gets the full definition and deps, **at most once**, as in `ExecuteTxn`
+    (`ExecuteBacklogTxn.trySendMaximal`):
+    - on `InsufficientAndWaiting` it gets a maximal `Commit`, and we try an alternative replica;
+    - on `NotReady` (from `ReadTxnDataIfReady`) it gets a maximal `StableThenRead`, and we read
+      from it again.
+    This needs the full definition. While still collecting the definition (multi-key txns that the
+    designated replica doesn't fully replicate) we can't send it, so the designated replica instead
+    retries the execution once (5ms later).
+  - Likewise, if the data arrives before the complete definition (replies reordered, e.g. on
+    different connections), an obligated or designated execution reads once more rather than
+    abandoning. This is common in burn, which reorders every message.
+  - Tried and reverted: making `ReadTxnDataIfReady` wait for a Stable that is in flight and send a
+    further `ReadyWithDefinition` once it arrives. The late definition then routinely arrived after
+    the data (and once the final reply is in, later replies are dropped). That cost ~300ms of p99.
   - If the coordinator replies `Nack`, or nothing before the request times out, the designated replica
     persists to every other replica itself (`Persist.persistGlobally`, which then completes as a normal
     `Persist` and informs durability). This covers a failed coordinator, and one whose own
@@ -906,20 +922,21 @@ is `Agent.backlogRemoteApplyDelay` (see below).
     Cassandra: same snitch DC). That gate has been removed. `areNearby` remains, for the relay below.
 - [x] **Remote apply delay** (`Agent.backlogRemoteApplyDelay`, default 0, i.e. send at once). Cassandra
   implements it as a wait-strategy spec, like `slow_read`: `accord.coordinator_backlog_execution_remote_apply_delay`,
-  default `50ms <= p99(rw)*1.5 <= 1000ms`.
-  - Its latency source is a new metric, `AccordCoordinator.{ro,rw}.BacklogAppliedLatency`: the time from
-    the coordinator beginning to persist to receiving a report (`CoordinatorEventListener.onBacklogApplied`;
-    zero if the report arrived first). `TimeoutStrategyTest.testBacklogRemoteApplyDelayDefault` covers
-    the spec.
-  - The sample is censored: if the delay is short, the coordinator's Apply arrives first, the
-    designated replica finds the txn `Redundant` and sends no report. So the measured p99 is biased
-    towards the delay; the `50ms` floor stops it collapsing.
-  - Burn reports the distribution (`Backlog applied: reports: n, lag (ms): {...}`). Happy burn's report
-    lag p99 is ~270–320ms with a 500ms delay, and the max sits at ~200ms with a 200ms delay (i.e.
-    censored).
+  default `50ms <= p99(rw) <= 1000ms`.
+  - Better latency metrics are a broader problem, pursued separately. For now the latency source is
+    PreAccept latency (`AccordCoordinator.{ro,rw}.PreAcceptLatency`), as a proxy for a round trip to
+    remote DCs. A report should take about half a round trip, plus local processing, plus skew
+    between the DCs' readiness.
+  - `TimeoutStrategyTest.testBacklogRemoteApplyDelayDefault` covers the spec.
+  - A first version used a dedicated metric of report lag (since removed). Its sample was censored: if
+    the delay is short, the coordinator's Apply arrives first, the designated replica finds the txn
+    `Redundant` and sends no report.
+  - Accord keeps `CoordinatorEventListener.onBacklogApplied` (the time from beginning to persist to a
+    report), which burn reports (`Backlog applied: reports: n, lag (ms): {...}`). Happy burn's report
+    lag p99 is ~280–330ms with a 500ms delay.
 - [x] Cassandra: `Verb.ACCORD_BACKLOG_APPLIED_REQ` (176, replies `ACCORD_SIMPLE_RSP`),
-  `BacklogClaimSerializers.applied`, the two config options, the metric, `AccordAgent.backlogRemoteApplyDelay`,
-  and `AccordTopologySorter`/`CompositeTopologySorter.areNearby`. `BacklogMessageSerializersTest.backlogApplied`.
+  `BacklogClaimSerializers.applied`, the two config options, `AccordAgent.backlogRemoteApplyDelay`, and
+  `AccordTopologySorter`/`CompositeTopologySorter.areNearby`. `BacklogMessageSerializersTest.backlogApplied`.
 - [x] **Burn:**
   - Randomises persisting locally and the delay (overrides
     `accord.burn.coordinator_backlog_execution_persist_locally`,
@@ -961,6 +978,16 @@ with a remote apply delay of N ms.
 Asymmetric seeds (8), mean / p99: h4 `dp` 528 / 714 vs `dpl500` 548 / 1,062; h2 478 / 665 vs
 486 / 915; no hot keys 444 / 675 vs 465 / 990.
 
+After the latest changes (failures recorded rather than redelivered, one maximal or one retry instead
+of up to 3 retries), symmetric seeds, mean / p99 and cross-DC messages / Applies:
+- h4 `dpl200`: 595 / 814, 1.32M / 22k;
+- h4 `dpl500`: 597 / 863, 1.31M / 6.2k;
+- h2 `dpl500`: 539 / 781, 1.30M / 8.0k;
+- no hot keys `dpl500`: 447 / 717, 1.18M / 5.8k.
+
+These are essentially unchanged (h4 `dpl500`'s p99 is within the noise between seeds). Before
+reverting the `ReadTxnDataIfReady` change above, h4 `dpl500` was 614 / 1,130.
+
 - On symmetric topologies latency is within ~1% of Phase 2d's per-DC numbers (p99 within ~2–3%).
   Cross-DC traffic falls ~40% below per-DC and 10–20% below `DISABLED`: the coordinator no longer
   sends writes over the WAN, only Stable (which `DESIGNATED` already sends everywhere) plus one small
@@ -980,7 +1007,8 @@ acknowledgements (first version, seeds 1–80): lost 3,678 vs 3,914, mean 3,719 
 3,941 / 3,108ms (seeds 1–40 / 41–80), i.e. within noise.
 
 After the gate's removal and the burn DC change, these pass: 100 forced seeds, 100 random seeds,
-and 40 forced seeds with 3 DCs and asymmetric assignments permitted (7 of them asymmetric).
+and 40 forced seeds with 3 DCs and asymmetric assignments permitted (7 of them asymmetric). After the
+latest changes: 120 forced, 60 random and 40 forced-asymmetric seeds pass.
 Earlier, 200 forced and 200 random seeds passed with the first version. Accord unit tests match
 baseline.
 
@@ -1004,13 +1032,17 @@ direct Applies on timeout*. They differ in what that per-DC message is:
 
 Follow-ups:
 - [ ] Relay Apply within remote DCs (above). This would make the coordinator's fallback (and
-  `DISABLED`'s persist) cheaper.
+  `DISABLED`'s persist) cheaper. Pick the relay by the same mechanism as the DC's designated replica
+  (hash of the home key among that DC's replicas of the home shard), for consistency.
 - [ ] Report sooner, e.g. once a quorum of the DC has replied, rather than every nearby replica. A
   dead local replica currently delays the report until its timeout.
 - [ ] Don't defer `Apply` to DCs without a replica of the home shard (they have no designated replica).
-- [ ] More metrics: reports received (applied / not applied), acks and `Nack`s, fallbacks
-  (`persistGlobally`), deferred Applies sent. Track raw inter-DC link latencies (as
-  `AccordWaitStrategies.setSlowRead`'s TODO suggests): an uncensored basis for the delay.
+- [ ] More metrics: reports received (applied / failed), acks and `Nack`s, fallbacks
+  (`persistGlobally`), deferred Applies sent. A better basis for the delay than PreAccept latency,
+  e.g. raw inter-DC link latencies (as `AccordWaitStrategies.setSlowRead`'s TODO suggests); pursued
+  separately.
+- [ ] When collecting the definition, fetch only the missing definition (or ask the original
+  coordinator for it) rather than re-reading.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG

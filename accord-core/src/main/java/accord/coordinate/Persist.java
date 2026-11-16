@@ -102,6 +102,8 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     private boolean awaitingAck;
     // the nearby replicas that have (or have not) applied the transaction
     private @Nullable List<Id> appliedNearby, failedNearby;
+    // the nearby replicas we did not contact as they are UNAVAILABLE (recorded as failures when contacting)
+    private @Nullable List<Id> unavailableNearby;
 
     /*
      * Deferring Apply to remote replicas (see Agent#backlogRemoteApplyDelay)
@@ -215,13 +217,14 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
         Topologies topologies = tracker.topologies();
         appliedNearby = new ArrayList<>();
         failedNearby = new ArrayList<>();
+        unavailableNearby = new ArrayList<>();
         for (Id to : nodes())
         {
             if (!node.isNearby(to))
                 continue;
             // see AbstractCoordination.contact: we do not contact UNAVAILABLE replicas (except ourselves)
-            if (topologies.status(to) != UNAVAILABLE || to.equals(node.id()))
-                ++awaitingNearby;
+            if (topologies.status(to) != UNAVAILABLE || to.equals(node.id())) ++awaitingNearby;
+            else unavailableNearby.add(to);
         }
 
         // note: UNAVAILABLE replicas are recorded as failures (without being contacted)
@@ -239,10 +242,10 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     }
 
     /**
-     * We have heard from every nearby replica; tell the original coordinator which have (and have not) applied the
-     * transaction, so that it may send its own Apply at once to those that have not. If it does not acknowledge our
-     * report (e.g. because it has failed, or failed to execute the transaction itself), we persist the transaction to
-     * every other replica ourselves.
+     * We have heard from every nearby replica; tell the original coordinator which have applied the transaction, and
+     * which we failed to apply it to, so that it may update its durability tracker. If it does not acknowledge our report
+     * (e.g. because it has failed, or failed to execute the transaction itself), we persist the transaction to every
+     * other replica ourselves.
      * TODO (desired): report sooner (e.g. once a quorum of nearby replicas have replied)
      */
     private void finishNearby()
@@ -251,11 +254,13 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
             return;
 
         SortedArrayList<Id> applied = SortedArrayList.copyUnsorted(appliedNearby, Id[]::new);
-        SortedArrayList<Id> notApplied = SortedArrayList.copyUnsorted(failedNearby, Id[]::new);
+        List<Id> failed = new ArrayList<>(failedNearby);
+        failed.addAll(unavailableNearby);
+        SortedArrayList<Id> failedAt = SortedArrayList.copyUnsorted(failed, Id[]::new);
         if (logger.isTraceEnabled())
-            logger.trace("{}: reporting applied at {}, not applied at {} to {}", txnId, applied, notApplied, txnId.node);
+            logger.trace("{}: reporting applied at {}, failed at {} to {}", txnId, applied, failedAt, txnId.node);
         awaitingAck = true;
-        node.send(txnId.node, new BacklogApplied(txnId, applied, notApplied), executor, new Callback<SimpleReply>()
+        node.send(txnId.node, new BacklogApplied(txnId, applied, failedAt), executor, new Callback<SimpleReply>()
         {
             @Override
             public void onSuccess(Id from, SimpleReply reply)
@@ -364,11 +369,11 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     }
 
     /**
-     * A designated replica has reported that {@code appliedAt} have applied the transaction, and {@code notAppliedAt}
-     * have not (see {@link BacklogApplied}); send the latter our Apply at once
+     * A designated replica has reported that {@code appliedAt} have applied the transaction, and that it failed to apply
+     * it to {@code failedAt} (see {@link BacklogApplied}). We update our tracker as if we had contacted them ourselves.
      */
     @Override
-    public void onReported(SortedArrayList<Id> appliedAt, SortedArrayList<Id> notAppliedAt)
+    public void onReported(SortedArrayList<Id> appliedAt, SortedArrayList<Id> failedAt)
     {
         executor.executeMaybeImmediately(() -> {
             if (deferred == null)
@@ -383,20 +388,10 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
                     recordApplied(id);
             }
 
-            IntHashSet send = null;
-            for (Id id : notAppliedAt)
+            for (Id id : failedAt)
             {
-                if (deferred.remove(id.id))
-                {
-                    if (send == null) send = new IntHashSet();
-                    send.add(id.id);
-                }
-            }
-            if (send != null)
-            {
-                if (logger.isTraceEnabled())
-                    logger.trace("{}: sending Apply to {} as not applied by designated replica", txnId, send);
-                sendApply(send);
+                if (deferred.remove(id.id) && !isDone() && tracker.recordFailure(id) == RequestStatus.Failed)
+                    finishOnFailure();
             }
 
             if (deferred.isEmpty())

@@ -669,18 +669,15 @@ public class ExecuteTxnBacklog
                 boolean expected = isExpectedFailure(fail);
                 if (!expected) node.agent().onException(fail);
                 if (fail instanceof Redundant) return; // somebody else has executed the transaction
-                if (persistsLocally(node, txnId, ballot))
-                {
-                    // NotReady is typically transient (some replica we read from has not yet received its Stable), so
-                    // retry; otherwise (e.g. replicas are down) the original coordinator executes the transaction too,
-                    // so ask it to apply it in our DC without waiting
-                    if (!(fail instanceof NotReady) || !retryDesignated(commandStore, txnId, MAX_PERSIST_LOCALLY_RETRIES))
-                        reportNotApplied(txnId, route, executeAt);
-                }
-                else if (expected && coordinatorBacklogExecutionDesignated())
-                {
-                    retryDesignated(commandStore, txnId, MAX_DESIGNATED_RETRIES);
-                }
+                if (!expected || !coordinatorBacklogExecutionDesignated())
+                    return;
+                // if we persist locally, the original coordinator executes the transaction too, and will apply it in our
+                // DC itself once its remote apply delay elapses without a report from us; so we need not try hard.
+                // But a replica we read from may not yet have recorded the transaction as Stable (as its Stable is still
+                // in flight) and, if we are collecting the definition, we could not send it the transaction ourselves
+                // (see ExecuteBacklogTxn); so retry once
+                if (!persistsLocally(node, txnId, ballot)) retryDesignated(commandStore, txnId, MAX_DESIGNATED_RETRIES);
+                else if (fail instanceof NotReady) retryDesignated(commandStore, txnId, 1);
             });
         });
     }
@@ -690,8 +687,6 @@ public class ExecuteTxnBacklog
     // TODO (desired): configurable
     private static final long DESIGNATED_RETRY_MICROS = MILLISECONDS.toMicros(5), MAX_DESIGNATED_RETRY_MICROS = MILLISECONDS.toMicros(500);
     private static final int MAX_DESIGNATED_RETRIES = 20;
-    // if we persist locally the original coordinator executes the transaction too, so we need not try so hard
-    private static final int MAX_PERSIST_LOCALLY_RETRIES = 3;
 
     /**
      * We are designated to execute {@code txnId}, but our attempt failed without anybody else having executed it (e.g.
@@ -749,11 +744,11 @@ public class ExecuteTxnBacklog
      * designated replica in another DC executes it first (see {@link ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()}),
      * so must not stop executing the transaction on {@link accord.messages.RemoteSuccess}.
      * <p>
-     * This is only efficient if every DC replicates every shard of the transaction. Otherwise: a DC without a replica of the
-     * home shard has no designated replica, so receives our Apply only once our remote apply delay has elapsed; a
-     * designated replica that cannot apply the transaction in its DC tells us, so we send our Apply at once; and if we
-     * cannot execute the transaction ourselves (e.g. we read from a replica in another DC that has already applied it)
-     * we tell the designated replicas (see {@link #failApplied}), which then persist it to every replica themselves.
+     * This is only efficient if every DC replicates every shard of the transaction. Otherwise a DC whose designated replica
+     * cannot execute the transaction (e.g. because it must read a shard from another DC, whose replica has already applied
+     * it), or that has no designated replica (no replica of the home shard), receives our Apply only once our remote apply
+     * delay has elapsed without a report; and if we cannot execute the transaction ourselves (e.g. for the same reason) we
+     * tell the designated replicas (see {@link #failApplied}), which then persist it to every replica themselves.
      */
     public static boolean coordinatorOwnsDurability(Node node, TxnId txnId, Ballot ballot)
     {
@@ -761,40 +756,12 @@ public class ExecuteTxnBacklog
     }
 
     /**
-     * We (as a designated replica) failed to execute {@code txnId}, which we would have persisted only to replicas in
-     * our DC; tell the original coordinator, so that it sends them its own Apply without waiting
-     */
-    private void reportNotApplied(TxnId txnId, FullRoute<?> route, Timestamp executeAt)
-    {
-        SortedArrayList<Node.Id> nearby;
-        try
-        {
-            Topologies topologies = node.topology().active().forEpoch(route, executeAt.epoch(), accord.topology.SelectShards.ALL);
-            List<Node.Id> ids = new ArrayList<>();
-            for (Node.Id id : topologies.nodes())
-            {
-                if (node.isNearby(id))
-                    ids.add(id);
-            }
-            nearby = SortedArrayList.copyUnsorted(ids, Node.Id[]::new);
-        }
-        catch (Throwable t)
-        {
-            // if we do not know the topology, the original coordinator will send its Apply once its remote apply delay elapses
-            return;
-        }
-
-        if (logger.isTraceEnabled())
-            logger.trace("{}: reporting not applied at {} to {}", txnId, nearby, txnId.node);
-        node.send(txnId.node, new BacklogApplied(txnId, SortedArrayList.empty(), nearby), null);
-    }
-
-    /**
-     * Notified (as original coordinator) of replicas that a designated replica reports have (or have not) applied a transaction
+     * Notified (as original coordinator) of replicas that a designated replica reports have applied a transaction, or
+     * that it failed to apply it to
      */
     public interface AppliedListener
     {
-        void onReported(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> notAppliedAt);
+        void onReported(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt);
     }
 
     /**
@@ -803,14 +770,14 @@ public class ExecuteTxnBacklog
      */
     private static class BufferedApplied
     {
-        final SortedArrayList<Node.Id> appliedAt, notAppliedAt;
+        final SortedArrayList<Node.Id> appliedAt, failedAt;
         final List<PendingAck> acks;
         final long expiresAt;
 
-        BufferedApplied(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> notAppliedAt, List<PendingAck> acks, long expiresAt)
+        BufferedApplied(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt, List<PendingAck> acks, long expiresAt)
         {
             this.appliedAt = appliedAt;
-            this.notAppliedAt = notAppliedAt;
+            this.failedAt = failedAt;
             this.acks = acks;
             this.expiresAt = expiresAt;
         }
@@ -864,12 +831,12 @@ public class ExecuteTxnBacklog
 
     /**
      * A designated replica {@code from} reports (to us, as original coordinator) that {@code appliedAt} have applied
-     * {@code txnId}, and {@code notAppliedAt} could not. We acknowledge the report once we know we are responsible for
+     * {@code txnId}, and that it failed to apply it to {@code failedAt}. We acknowledge the report once we know we are responsible for
      * the transaction's durability, i.e. once we have begun to persist it. If we fail to execute the transaction we reject
      * the report, and if we never reply (e.g. because we have failed) the designated replica persists the transaction
      * more widely itself.
      */
-    public void onApplied(TxnId txnId, Node.Id from, SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> notAppliedAt, ReplyContext replyContext)
+    public void onApplied(TxnId txnId, Node.Id from, SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt, ReplyContext replyContext)
     {
         long now = node.elapsed(MICROSECONDS);
         if (appliedReports.size() >= PRUNE_ACTIVE_AT_SIZE)
@@ -883,23 +850,23 @@ public class ExecuteTxnBacklog
                 return cur;
             }
             List<PendingAck> acks = new ArrayList<>(2);
-            SortedArrayList<Node.Id> prevApplied = null, prevNotApplied = null;
+            SortedArrayList<Node.Id> prevApplied = null, prevFailed = null;
             if (cur instanceof BufferedApplied && !isExpired(cur, now))
             {
                 BufferedApplied buffered = (BufferedApplied) cur;
                 prevApplied = buffered.appliedAt;
-                prevNotApplied = buffered.notAppliedAt;
+                prevFailed = buffered.failedAt;
                 acks.addAll(buffered.acks);
             }
             acks.add(new PendingAck(from, replyContext));
-            return new BufferedApplied(SortedArrayList.union(prevApplied, appliedAt), SortedArrayList.union(prevNotApplied, notAppliedAt), acks, claimExpiresAt(txnId));
+            return new BufferedApplied(SortedArrayList.union(prevApplied, appliedAt), SortedArrayList.union(prevFailed, failedAt), acks, claimExpiresAt(txnId));
         });
 
         if (logger.isTraceEnabled())
-            logger.trace("{}: {} reports applied at {}, not applied at {}{}", txnId, from, appliedAt, notAppliedAt,
+            logger.trace("{}: {} reports applied at {}, not applied at {}{}", txnId, from, appliedAt, failedAt,
                          found[0] == null ? " (buffered)" : found[0] instanceof Resolved ? (((Resolved) found[0]).failed ? " (failed)" : " (resolved)") : "");
         if (found[0] instanceof AppliedListener)
-            ((AppliedListener) found[0]).onReported(appliedAt, notAppliedAt);
+            ((AppliedListener) found[0]).onReported(appliedAt, failedAt);
         if (found[0] != null)
             reply(from, replyContext, !(found[0] instanceof Resolved) || !((Resolved) found[0]).failed);
     }
@@ -914,7 +881,7 @@ public class ExecuteTxnBacklog
         if (prev instanceof BufferedApplied && !isExpired(prev, node.elapsed(MICROSECONDS)))
         {
             BufferedApplied buffered = (BufferedApplied) prev;
-            listener.onReported(buffered.appliedAt, buffered.notAppliedAt);
+            listener.onReported(buffered.appliedAt, buffered.failedAt);
             for (PendingAck ack : buffered.acks)
                 reply(ack.from, ack.replyContext, true);
         }
