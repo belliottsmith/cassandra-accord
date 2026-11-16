@@ -692,7 +692,7 @@ public class Cluster
                 AsyncExecutor nodeExecutor = nodeExecutorSupplier.apply(id);
                 Agent agent = agentSupplier.apply(ownershipEventListener, scheduler, timeouts);
                 if (agent instanceof ListAgent)
-                    ((ListAgent) agent).setLocality(id, sinks::sameDc);
+                    ((ListAgent) agent).setLocality(id, sinks::sameDc, sinks::happyMinLatencyMicros);
                 executorMap.put(id, nodeExecutor);
                 Journal journal = journalFactory.apply(id, random);
                 journalMap.put(id, journal);
@@ -1231,8 +1231,27 @@ public class Cluster
 
     private BiFunction<Id, Id, Link> defaultLinks(RandomSource random)
     {
-        return caching((from, to) -> healthy(sameDc(from, to) ? intraDcLatencyMicros(random)
-                                                             : interDcLatencyMicros(random)));
+        return caching((from, to) -> healthy(sameDc(from, to) ? intraDcLatencyMicros(random, from, to)
+                                                             : interDcLatencyMicros(random, from, to)));
+    }
+
+    // when happy, the minimum latency of each link (from.id, to.id), for analysis (see ExecutionStats)
+    private final Map<Long, Long> happyMinLinkMicros = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static long linkKey(Id from, Id to)
+    {
+        return ((long)from.id << 32) | (to.id & 0xffffffffL);
+    }
+
+    /**
+     * @return the minimum latency of the default link from {@code from} to {@code to} if happy, else -1
+     */
+    public long happyMinLatencyMicros(Id from, Id to)
+    {
+        if (!happy)
+            return -1;
+        linkConfig.defaultLinks.apply(from, to);
+        return happyMinLinkMicros.getOrDefault(linkKey(from, to), -1L);
     }
 
     // bounds on simulated link latencies (when happy, for intra-DC links), so that happy timeouts may be derived from them
@@ -1248,21 +1267,40 @@ public class Cluster
         return MICROSECONDS.toMillis(2 * maxOneWayMicros);
     }
 
-    private LongSupplier intraDcLatencyMicros(RandomSource random)
+    private LongSupplier intraDcLatencyMicros(RandomSource random, Id from, Id to)
+    {
+        return intraDcLatencyMicros(random, from, to, 0);
+    }
+
+    private LongSupplier intraDcLatencyMicros(RandomSource random, Id from, Id to, long baseMicros)
     {
         if (!happy)
             return defaultRandomWalkLatencyMicros(random);
 
         long minMicros = random.nextInt(200, 1000);
         long maxMicros = minMicros + random.nextInt(100, 2000);
+        happyMinLinkMicros.put(linkKey(from, to), baseMicros + minMicros);
         return () -> random.nextLong(minMicros, maxMicros);
     }
 
-    // a fixed (per link) base latency between DCs, plus the usual jitter
-    private LongSupplier interDcLatencyMicros(RandomSource random)
+    // when happy, a fixed base latency per (unordered) pair of DCs, as between real DCs; drawn on first use
+    private final Map<Long, Long> happyDcPairBaseMicros = new java.util.concurrent.ConcurrentHashMap<>();
+
+    // a fixed base latency between DCs (per link, or per pair of DCs if happy), plus the usual jitter
+    private LongSupplier interDcLatencyMicros(RandomSource random, Id from, Id to)
     {
-        long baseMicros = MILLISECONDS.toMicros(random.nextInt(MIN_INTER_DC_BASE_MILLIS, MAX_INTER_DC_BASE_MILLIS));
-        LongSupplier jitter = intraDcLatencyMicros(random);
+        long baseMicros;
+        if (!happy)
+        {
+            baseMicros = MILLISECONDS.toMicros(random.nextInt(MIN_INTER_DC_BASE_MILLIS, MAX_INTER_DC_BASE_MILLIS));
+        }
+        else
+        {
+            int a = Math.floorMod(from.id, dcs), b = Math.floorMod(to.id, dcs);
+            long dcPair = ((long)Math.min(a, b) << 32) | Math.max(a, b);
+            baseMicros = happyDcPairBaseMicros.computeIfAbsent(dcPair, ignore -> MILLISECONDS.toMicros(random.nextInt(MIN_INTER_DC_BASE_MILLIS, MAX_INTER_DC_BASE_MILLIS)));
+        }
+        LongSupplier jitter = intraDcLatencyMicros(random, from, to, baseMicros);
         return () -> baseMicros + jitter.getAsLong();
     }
 

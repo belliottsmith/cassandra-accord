@@ -161,6 +161,8 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected void contact(Id to)
     {
+        if (logger.isTraceEnabled())
+            logger.trace("{}: backlog read from {} on {} ({})", txnId, to, node.id(), node.isNearby(to) ? "nearby" : "remote");
         if (txn == null) node.send(to, new ReadTxnDataIfReady(to, allTopologies, txnId, route, executeAt, waitForReady), executor, this, tracing);
         else node.send(to, new ReadTxnData(to, allTopologies, txnId, route, null, executeAt, executeAt.epoch(), waitForReady ? ExecuteFlags.none() : ExecuteFlags.none().with(NO_WAIT)), executor, this, tracing);
     }

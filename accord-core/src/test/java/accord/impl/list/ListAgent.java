@@ -123,11 +123,14 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     /**
      * Tell us (for our {@link ExecutionStats}, if any) which node we are the agent of, and which nodes are in the same DC
      */
-    public void setLocality(Node.Id self, BiPredicate<Node.Id, Node.Id> sameDc)
+    public void setLocality(Node.Id self, BiPredicate<Node.Id, Node.Id> sameDc, java.util.function.ToLongBiFunction<Node.Id, Node.Id> minLatencyMicros)
     {
         this.self = self;
         if (executionStats != null)
+        {
             executionStats.setSameDc(sameDc);
+            executionStats.setMinLatencyMicros(minLatencyMicros);
+        }
     }
 
     /**
@@ -150,6 +153,30 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     {
         if (executionStats != null)
             executionStats.onExecuting(self, txnId, deps, path);
+    }
+
+    @Override
+    public void onStable(SafeCommandStore safeStore, Command cmd)
+    {
+        if (executionStats != null && self != null)
+        {
+            executionStats.onReplicaEvent(self, cmd.txnId(), ExecutionStats.ReplicaEvent.STABLE);
+            executionStats.onExecuteAt(cmd.txnId(), cmd.executeAt());
+        }
+    }
+
+    @Override
+    public void onReadStarted(SafeCommandStore safeStore, Command cmd)
+    {
+        if (executionStats != null && self != null)
+            executionStats.onReplicaEvent(self, cmd.txnId(), ExecutionStats.ReplicaEvent.READ);
+    }
+
+    @Override
+    public void onApplied(SafeCommandStore safeStore, Command cmd)
+    {
+        if (executionStats != null && self != null)
+            executionStats.onReplicaEvent(self, cmd.txnId(), ExecutionStats.ReplicaEvent.APPLIED);
     }
 
     @Override

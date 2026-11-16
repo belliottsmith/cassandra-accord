@@ -51,7 +51,8 @@ The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `
 version bump.
 
 **Next steps, in priority order (updated after Phase 2c):**
-0. **Make single-DC designated execution competitive** (Phase 2d). It is correct and nearly
+0. Per-DC designated execution is at the execution lower bound (Phase 2d, "Per-DC analysis").
+   **Make single-DC designated execution competitive** (Phase 2d). It is correct and nearly
    duplicate-free, but with a static per-key DC it gains only 2–20%, whereas per-DC execution gains
    24–45% at ~0.8 extra executions per txn. Next: "follow the predecessor" (see the options in
    Phase 2d). Keep per-DC as the opt-in for latency-first deployments (e.g. benchmarks); it does more
@@ -755,6 +756,40 @@ and `ON_RECOVERY` keep the sink-based behaviour, for comparison).
     keys are designated in different DCs, so joins hop between DCs, and remote-coordinated contended
     txns pay ~1 RTT for Stable-to-executor plus result-to-coordinator.
 - 100 seeds of non-happy burn pass with `DESIGNATED` forced (single and per DC) and random.
+
+**Per-DC analysis** (why h4 per-DC was ~3.4R rather than the predicted ~2.75R):
+- **Burn modelling bug:** happy burn drew the inter-DC base latency **per node pair** (20–150ms
+  each, asymmetric), so nodes in one DC received the same Stable or Apply up to ~100ms apart, and
+  each DC's chain was gated by its slowest relevant link. Happy burn now draws one base latency per
+  (unordered) DC pair, plus per-link jitter. Non-happy burn is unchanged. **Earlier happy tables
+  aren't comparable with later ones.**
+- **Grace** cost ~15ms; 2ms is as good as 0 (burn now picks 0, 2ms or 10ms).
+- **New instrumentation** (`-Daccord.burn.dump_timeline`):
+  - per-node replica events (Stable, read started, applied) in `replica-<seed>.csv`;
+  - minimum link latencies in `links-<seed>.csv`;
+  - each txn's `executeAt` and every executor.
+  - Analysis: for each txn T and DC X, "ready" = max(T Stable in X, every predecessor applied in X,
+    every dependency Stable in X), and lag = first applied in X − ready.
+- **Result:** once we account for waiting for every dependency to be **committed** in X (including
+  those that execute after T), the lag per link per DC is ~2ms mean (p90 4–7ms). Execution within
+  a DC is now essentially optimal.
+  - A lower bound on execution, from Stable arrival times and this commit-waiting, is at or above the
+    observed latency.
+  - What remains is waiting for the latest dependency to become Stable: on average 97ms after the
+    txn's own Stable at its coordinator (p90 245ms), plus that Stable's trip to our DC. That matches
+    "adopted during Accept, ~1 RTT extra".
+- **Happy burn, DC-coherent latencies** (3 DCs, 40 seeds, mean / p99 ms / duplicate executions;
+  grace 2ms). Coordination is FAST ~200ms, MEDIUM ~360ms (MEDIUM ~95% of txns under contention).
+
+  | variant                         | h4 r0.8 c40            | h2 r0.8               | no hot keys          |
+  |---------------------------------|------------------------|-----------------------|----------------------|
+  | `DISABLED`                      | 1,204 / 1,929 / 1      | 949 / 1,669 / 0       | 622 / 1,330 / 7      |
+  | `ALWAYS` + wait + linger 100ms  | 592 / 873 / 66.0k      | 541 / 828 / 46.2k     | 459 / 854 / 53.7k    |
+  | `DESIGNATED`, per DC            | **577 / 779 / 45.8k**  | **524 / 744 / 40.9k** | **445 / 686 / 42.1k** |
+  | `DESIGNATED`, single DC         | 1,001 / 1,753 / 187    | 743 / 1,356 / 380     | 582 / 1,423 / 460    |
+
+  Per DC is ~2.2–2.9 fast-path RTTs at the mean. Further gains need protocol changes (e.g. the fast
+  path succeeding under contention, or cheaper commit-waiting), not execution changes.
 
 **Options to explore** (from discussion; any simple strategy was fine to get started):
 - **Choosing the replica within a DC.**

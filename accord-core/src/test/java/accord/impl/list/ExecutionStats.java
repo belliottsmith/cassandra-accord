@@ -99,6 +99,28 @@ public class ExecutionStats
 
     private final ConcurrentHashMap<TxnId, Timeline> timelines = new ConcurrentHashMap<>();
 
+    public enum ReplicaEvent { STABLE, READ, APPLIED }
+    // the first time each node recorded each event for each transaction (in any of its stores): [node][event] -> millis
+    private final ConcurrentHashMap<TxnId, Map<Node.Id, long[]>> replicaEvents = new ConcurrentHashMap<>();
+
+    private final ConcurrentHashMap<TxnId, accord.primitives.Timestamp> executeAts = new ConcurrentHashMap<>();
+
+    void onExecuteAt(TxnId txnId, accord.primitives.Timestamp executeAt)
+    {
+        if (measuring() && executeAt != null)
+            executeAts.putIfAbsent(txnId, executeAt);
+    }
+
+    void onReplicaEvent(Node.Id node, TxnId txnId, ReplicaEvent event)
+    {
+        if (!measuring() || !isMeasured(txnId))
+            return;
+        long[] times = replicaEvents.computeIfAbsent(txnId, ignore -> new ConcurrentHashMap<>())
+                                    .computeIfAbsent(node, ignore -> { long[] t = new long[ReplicaEvent.values().length]; Arrays.fill(t, -1); return t; });
+        if (times[event.ordinal()] < 0)
+            times[event.ordinal()] = nowMillis.getAsLong();
+    }
+
     public ExecutionStats()
     {
         this(null);
@@ -114,6 +136,14 @@ public class ExecutionStats
     public void setSameDc(BiPredicate<Node.Id, Node.Id> sameDc)
     {
         this.sameDc = sameDc;
+    }
+
+    private volatile @Nullable java.util.function.ToLongBiFunction<Node.Id, Node.Id> minLatencyMicros;
+    private final Set<Node.Id> nodes = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    public void setMinLatencyMicros(java.util.function.ToLongBiFunction<Node.Id, Node.Id> minLatencyMicros)
+    {
+        this.minLatencyMicros = minLatencyMicros;
     }
 
     private Timeline timeline(TxnId txnId)
@@ -172,7 +202,10 @@ public class ExecutionStats
     {
         AtomicInteger count = executed.computeIfAbsent(txnId, ignore -> new AtomicInteger());
         if (measuring() && self != null)
+        {
             timeline(txnId).executors.add(self);
+            nodes.add(self);
+        }
         if (count.incrementAndGet() == 1 && measuring())
         {
             Timeline t = timeline(txnId);
@@ -360,9 +393,34 @@ public class ExecutionStats
         }
         txnIds.sort(TxnId::compareTo);
         Files.createDirectories(file.getParent());
+        java.util.function.ToLongBiFunction<Node.Id, Node.Id> latency = minLatencyMicros;
+        if (latency != null)
+        {
+            Set<Node.Id> all = new HashSet<>(nodes);
+            for (TxnId txnId : txnIds) all.add(txnId.node);
+            try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(file.resolveSibling(file.getFileName().toString().replace("timeline-", "links-")))))
+            {
+                out.println("from,to,minMicros,sameDc");
+                for (Node.Id from : all)
+                    for (Node.Id to : all)
+                        if (!from.equals(to))
+                            out.println(from.id + "," + to.id + "," + latency.applyAsLong(from, to) + "," + sameDc.test(from, to));
+            }
+        }
+        try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(file.resolveSibling(file.getFileName().toString().replace("timeline-", "replica-")))))
+        {
+            out.println("txnId,node,stable,read,applied");
+            for (TxnId txnId : txnIds)
+            {
+                Map<Node.Id, long[]> events = replicaEvents.get(txnId);
+                if (events == null) continue;
+                for (Map.Entry<Node.Id, long[]> e : events.entrySet())
+                    out.println(txnId.toString().replace(',', ' ') + ',' + e.getKey().id + ',' + e.getValue()[0] + ',' + e.getValue()[1] + ',' + e.getValue()[2]);
+            }
+        }
         try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(file)))
         {
-            out.println("txnId,coordinator,keys,clientStart,submitted,coordinatorStarted,coordinatorPath,firstStarted,firstStartedPath,executed,executedBy,byRecovery,clientReply,blocker,blockerCoordinator,blockerExecuted,waitDepth,crossDcWaitDepth,deps");
+            out.println("txnId,executeAt,coordinator,keys,clientStart,submitted,coordinatorStarted,coordinatorPath,firstStarted,firstStartedPath,executed,executedBy,byRecovery,clientReply,blocker,blockerCoordinator,blockerExecuted,waitDepth,crossDcWaitDepth,deps,executors");
             for (TxnId txnId : txnIds)
             {
                 Timeline t = timelines.get(txnId);
@@ -370,13 +428,14 @@ public class ExecutionStats
                 Timeline b = blocker == null ? null : timelines.get(blocker);
                 int[] depth = t.startedAt < 0 || t.executedAt < 0 ? new int[2] : waitDepth(txnId, t);
                 out.println(String.join(",",
-                    txnId.toString().replace(',', ' '), String.valueOf(txnId.node.id), '"' + (t.keys == null ? "" : t.keys) + '"',
+                    txnId.toString().replace(',', ' '), executeAts.containsKey(txnId) ? executeAts.get(txnId).toString().replace(',', ' ') : "", String.valueOf(txnId.node.id), '"' + (t.keys == null ? "" : t.keys) + '"',
                     String.valueOf(t.clientStartAt), String.valueOf(t.submittedAt), String.valueOf(t.coordinatorStartedAt), String.valueOf(t.coordinatorPath),
                     String.valueOf(t.startedAt), String.valueOf(t.startedPath),
                     String.valueOf(t.executedAt), t.executedBy == null ? "" : String.valueOf(t.executedBy.id), String.valueOf(t.executedByRecovery),
                     String.valueOf(t.clientReplyAt),
                     blocker == null ? "" : blocker.toString().replace(',', ' '), blocker == null ? "" : String.valueOf(blocker.node.id), b == null ? "" : String.valueOf(b.executedAt),
-                    String.valueOf(depth[0]), String.valueOf(depth[1]), t.deps == null ? "" : Arrays.stream(t.deps).map(d -> d.toString().replace(',', ' ')).collect(java.util.stream.Collectors.joining(";"))));
+                    String.valueOf(depth[0]), String.valueOf(depth[1]), t.deps == null ? "" : Arrays.stream(t.deps).map(d -> d.toString().replace(',', ' ')).collect(java.util.stream.Collectors.joining(";")),
+                    t.executors.stream().map(id -> String.valueOf(id.id)).collect(java.util.stream.Collectors.joining(";"))));
             }
         }
     }

@@ -386,7 +386,11 @@ public class ExecuteTxnBacklog
                 ++nearby;
         }
         if (nearby == 0)
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("no replica of {} near {}", homeKey, node.id());
             return null;
+        }
 
         int pick = Math.floorMod(hash, nearby);
         for (int i = 0, size = shard.nodes.size() ; i < size ; ++i)
