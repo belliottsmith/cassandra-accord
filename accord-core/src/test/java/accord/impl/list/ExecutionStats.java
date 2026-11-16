@@ -93,6 +93,8 @@ public class ExecutionStats
         long executedAt = -1;
         Node.Id executedBy;
         boolean executedByRecovery;
+        // every node that completed an execution (with repetition)
+        final List<Node.Id> executors = new ArrayList<>(2);
     }
 
     private final ConcurrentHashMap<TxnId, Timeline> timelines = new ConcurrentHashMap<>();
@@ -169,6 +171,8 @@ public class ExecutionStats
     void onExecuted(Node.Id self, TxnId txnId, Ballot ballot)
     {
         AtomicInteger count = executed.computeIfAbsent(txnId, ignore -> new AtomicInteger());
+        if (measuring() && self != null)
+            timeline(txnId).executors.add(self);
         if (count.incrementAndGet() == 1 && measuring())
         {
             Timeline t = timeline(txnId);
@@ -310,6 +314,37 @@ public class ExecutionStats
             sb.append(String.format("%s:%.0f(n=%d)%s", executedBy[i], execute[i].mean(), execute[i].size, i + 1 < execute.length ? " " : ""));
         sb.append(String.format("} reply=%.0f", reply.mean()));
         return sb.toString();
+    }
+
+    /**
+     * @return a breakdown of duplicate executions of key transactions: those by the same node, by another node in the
+     * same DC as an earlier execution, and by a node in a DC that had not yet executed the transaction
+     */
+    public String duplicates()
+    {
+        long sameNode = 0, sameDcDup = 0, otherDc = 0, coordinatorDup = 0;
+        for (Map.Entry<TxnId, Timeline> e : timelines.entrySet())
+        {
+            if (!isMeasured(e.getKey()))
+                continue;
+            List<Node.Id> executors = e.getValue().executors;
+            for (int i = 1 ; i < executors.size() ; ++i)
+            {
+                Node.Id id = executors.get(i);
+                boolean node = false, dc = false;
+                for (int j = 0 ; j < i ; ++j)
+                {
+                    node |= executors.get(j).equals(id);
+                    dc |= sameDc.test(executors.get(j), id);
+                }
+                if (node) ++sameNode;
+                else if (dc) ++sameDcDup;
+                else ++otherDc;
+            }
+            if (executors.size() > 1 && executors.contains(e.getKey().node))
+                ++coordinatorDup;
+        }
+        return "same node=" + sameNode + ", same DC=" + sameDcDup + ", new DC=" + otherDc + ", txns duplicated involving their coordinator=" + coordinatorDup;
     }
 
     /**

@@ -687,6 +687,7 @@ public class BurnTestBase
         logger.info("Executions: {}", executionStats);
         logger.info("Chains: {}", executionStats.chains());
         logger.info("Phases (ms): {}", executionStats.phases());
+        logger.info("Duplicates: {}", executionStats.duplicates());
         if (System.getProperty("accord.burn.dump_timeline") != null)
         {
             Path file = Paths.get(System.getProperty("accord.burn.dump_timeline"), "timeline-" + currentSeed + ".csv");
