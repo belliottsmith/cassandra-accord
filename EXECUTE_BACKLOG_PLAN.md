@@ -23,7 +23,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped
 | `f0820a0f` | `0be15692c71` | Phase 2c: follow the chain onto every key; wait; linger |
 | `8bdd38f6`…`8caddd67` | `95300afea03`…`ec4e79d5957` | Phase 2d: `DESIGNATED` (single / per DC), grace, retries; DC-coherent happy latencies; per-DC analysis |
 | `7666518d`…`4c31d66e` | `94916a4a6cc`…`08c5a5b0de2` | Phase 2e: per-DC executors persist locally; the original coordinator owns durability (`BacklogApplied`) |
-| branch HEAD | branch HEAD | `ApplyRelay`: one Apply per remote DC, relayed by that DC's designated replica (`relay_remote_apply`) |
+| `e1059f75` | `6ec4697c466` | `ApplyRelay`: one Apply per remote DC, relayed by that DC's designated replica (`relay_remote_apply`) |
+| `c46f8356` (HEAD) | `4f8ad9d06d7` (HEAD) | Phase 2e: always report (`unsentAt`); `ReadTxnDataIfReady` waits for Stable; deferred maximal; fetch late definition |
+
+Uncommitted in the Cassandra root (not part of the feature): `handover/backlog-harness/` holds the
+javac/burn/unit scripts and summarisers used for every number in this document (see its README;
+they normally live in `/tmp/probe` and `/tmp/acc`). Build accord with `build.sh /tmp/accK all`.
 
 A standalone patch for the `ReadData` sliced-definition bug is in the Cassandra root
 (`accord-readdata-sliced-definition.patch`), applicable to unmodified `fc4a7698`.
@@ -36,12 +41,18 @@ A standalone patch for the `ReadData` sliced-definition bug is in the Cassandra 
 - `accord.messages.BacklogClaim`; `ExecuteTxn.onClaimed`/`Paused`.
 - `Apply.Kind.NoDeps`; `CoordinationFlags.withStableSent`.
 - `TopologySorter.Supplier.isNearby`, `areNearby`.
-- Phase 2e: `accord.messages.BacklogApplied`; `Persist` (`contactNearby`/`finishNearby`/`persistGlobally`
-  on the executor, `tryDeferRemote`/`sendDeferred` on the coordinator); `CoordinationFlags.persistNearbyOnly`;
-  `ExecuteTxn.EarlyResult`; `ExecuteTxnBacklog.coordinatorOwnsDurability`/`persistsLocally` and the
-  `appliedReports` bookkeeping.
+- Phase 2e: `accord.messages.BacklogApplied` (`appliedAt`/`failedAt`/`unsentAt`, acked `Ok`/`Nack`);
+  `Persist`: partial mode (`contactPartial`/`finishPartial`/`reportToCoordinator`/`persistGlobally`) for a
+  designated replica or a relay, and `tryDeferRemote`/`onReported`/`sendDeferred` for the coordinator;
+  `CoordinationFlags.persistNearbyOnly`; `ExecuteTxn.EarlyResult`; `ExecuteTxnBacklog.coordinatorOwnsDurability`/
+  `persistsLocally`/`reportUnsent`/`failApplied` and the `appliedReports` bookkeeping; `Agent.backlogRemoteApplyDelay`;
+  `ExecuteBacklogTxn.trySendMaximal`/`onReconstituted`/`fetchDefinition`; `ReadData.onWaitingForStable`/`onWaitingUpdate`.
+- Relay: `accord.messages.ApplyRelay` (+ `ApplyRelayReply`), `PersistTxn.relay`, `Persist.contactRemote`/`relay`/
+  `sendRelay`, `ExecuteTxnBacklog.designatedExecutorIn`.
 
-Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnTest`.
+Burn: `Cluster` (`dcs`, `happy`, `assignDcs`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnTest`, `ListAgent`
+(`backlogRemoteApplyDelayMillis`). Cassandra: `BacklogClaimSerializers` (claim, applied), `ApplyRelaySerializers`,
+verbs 175–178, `AccordWaitStrategies.backlogRemoteApplyDelay`, `AccordTopologySorter.areNearby`.
 
 **Config (all off or unchanged by default):**
 - `coordinator_backlog_execution` (existing)
@@ -62,47 +73,50 @@ The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `
 `BacklogApplied`, `ApplyRelay`, `Apply.Kind.NoDeps`) are only sent when the corresponding option is enabled; no
 serialization version bump.
 
-**Next steps, in priority order (updated after Phase 2e):**
-0. [x] **Make per-DC execution cheap** (Phase 2e). Per-DC executors now apply only within their own DC
-   and report to the original coordinator, which owns durability. Latency stays at the per-DC level
-   (within ~1%), while cross-DC messages fall ~40% below per-DC and 10–20% *below* `DISABLED`, and
-   cross-DC Applies fall ~97%. The extra cost is local: every DC executes every eligible txn
-   (~1.45 extra executions per txn, with local reads and local Applies).
-   This is only efficient if every DC replicates every shard; otherwise it is correct but slower
-   (documented, see Phase 2e). Phase 2e follow-ups: one Apply per remote DC (relayed within the DC)
-   for the coordinator's fallback; earlier reports; more metrics.
-1. **Make single-DC designated execution competitive** (Phase 2d). It is correct and nearly
-   duplicate-free, but with a static per-key DC it gains only 2–20%, whereas per-DC execution gains
-   24–45%. Next: "follow the predecessor" (see the options in Phase 2d), with claim-ahead to trigger
-   deferral (see "How this fits single-DC execution" in Phase 2e). Single-DC execution is now
-   mostly attractive if local reads/execution are the scarce resource rather than WAN bandwidth.
-1b. **Evaluate in a real multi-DC environment.** Burn can't establish efficacy: it has high fault and
-   recovery rates and synthetic latencies. Measure client latency, duplicate executions (coordinator
-   vs backlog executor vs recovery), `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, and claim
-   outcomes (paused / completed / resumed). Add metrics for these first (§6, Phase 2b follow-ups).
-2. [x] **`HappyBurnTest` modelling gaps** (fixed, see "Happy burn evaluation" in Phase 2b):
-   - The p99 of ~60s was a startup artifact. `Cluster.run` spends at least a minute of logical time
-     starting up, and the initial requests' latency clock started before then. It now starts at
-     submission. This also inflated the means (but not p50/p90) in the non-happy table below.
-   - The ~10% recovery attempts came from `ListAgent.slowCoordinatorDelay` (100–1000ms × attempt),
-     `slowReplicaDelay` and `Cluster`'s message slow/expiry timeouts, not from `BurnTestBase`
-     `coordinationDelays`/`progressDelays`/`timeoutDelays`, which are unused (left in place).
-     Happy mode now models Cassandra's defaults: `recover_txn` 5s × attempt, `fetch_txn` 2s × attempt,
-     `expire_txn` 5s, and a slow delay of twice the maximum simulated RTT.
-3. [x] **Re-run the backlog A/B under `HappyBurnTest`.** With the default (uncontended) happy
-   workload the effect on latency is noise-level. With hot keys accessed together (`BurnWorkload`),
-   backlog execution cuts mean client latency by 16–24%, at the cost of up to ~20% duplicate
-   executions. See "Contended happy evaluation" in Phase 2b.
-4. **Phase 3:** replica-side claims and tokens, to suppress the original coordinator's in-flight reads
-   (~70% of backlog-attributable duplicates under contention; claims to the coordinator don't reduce
-   them), then superseding tokens (§4.7). Competing backlog executors cause the other ~30%, which is
-   Phase 3 tokens / Phase 4's deterministic pick.
-5. **Phase 2b leftovers:** coordinator liveness in `shouldYieldTo`; wait for or fetch the definition
-   if an obligated `ExecuteBacklogTxn` gets data before the definition; defer to live local recovery
+**State at handover.** Two complete strategies for geo-distributed contended execution exist:
+- **Per-DC designated execution with local persistence** (`DESIGNATED` + `per_dc` + `persist_locally`,
+  Phase 2d/2e). Happy-burn latency is at the per-DC lower bound (e.g. h4 590 / 799ms vs `DISABLED`
+  1,234 / 1,968ms). Cross-DC messages are ~20% below `DISABLED` and ~40% below plain per-DC, at the
+  cost of executing every eligible contended txn in every DC (local reads/Applies). It is correct
+  but inefficient when some DC lacks a replica of some shard (documented).
+- **Single-DC designated execution** (`DESIGNATED` without `per_dc`, Phase 2d). Nearly duplicate-free,
+  but only 2–20% faster than `DISABLED`, because the DC is fixed per home key.
+- Independently, **`relay_remote_apply`** cuts the cross-DC messages carrying writes by ~55–60% for
+  any persist (e.g. `DISABLED`).
+
+Everything is off by default. The user expects the feature to stay off at first, and to lean towards
+single-DC execution as the eventual default once enabled.
+
+**Next steps, in priority order (updated at handover):**
+1. **Make single-DC designated execution competitive** (Phase 2d, options; Phase 2e, "How this fits
+   single-DC execution"):
+   - "follow the predecessor": execute in the DC that executed the txn's predecessor on its home key,
+     learnt from the Apply sender and recorded transiently on the CFK; with no recent predecessor,
+     use the coordinator's DC;
+   - trigger the coordinator's deferral by a claim-ahead from the executor, rather than computing it
+     independently, so that disagreement yields a duplicate rather than a stall;
+   - the executor owns durability, using `ApplyRelay` for the other DCs and the same report/ack
+     pattern as Phase 2e.
+2. **Evaluate in a real multi-DC environment** (the user's team is working on cluster simulations and
+   on latency metrics in parallel). Burn can't establish efficacy: it has high fault and recovery
+   rates and synthetic latencies. Metrics are a broader problem being pursued separately. For now
+   the remote apply delay uses PreAccept latency as a proxy. Measure: client latency, duplicate
+   executions, `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, `BacklogApplied` reports
+   (applied / failed / unsent) and acks / `Nack`s, fallbacks, and relay outcomes.
+3. Phase 2e follow-ups: report sooner (once a quorum of the DC has replied); don't defer to DCs without
+   a replica of the home shard. Relay follow-ups: omit deps when every recipient is Stable; treat a
+   slow relay as failed. Relaying `InformDurable` was considered and isn't worthwhile: it is a very
+   cheap message.
+4. **Phase 3:** replica-side claims and tokens. These matter mostly for the sink-based modes (`ALWAYS`)
+   and single-DC execution; per-DC execution duplicates by design.
+5. **Phase 2b leftovers:** coordinator liveness in `shouldYieldTo`; defer to live local recovery
    coordinators.
 6. **Side-quest follow-ups:** an `Insufficient` metric and deferral window; investigate the high
    volume of `Maximal` Applies in burn; `TinyEnumSet.equals` is broken for subclasses (e.g.
-   `ExecuteFlags`).
+   `ExecuteFlags`); `designatedExecutor` uses `topology().current()` rather than the txn's epoch.
+
+Earlier items, now done: the `HappyBurnTest` modelling gaps and the backlog A/B (Phase 2b), per-DC
+execution made cheap (Phase 2e), and the relay.
 
 **Known limitations, by design for now:**
 - A coordinator paused by a claim resumes only after `selfExpiresAt(READ_REQ)`. If the claimant
@@ -110,7 +124,12 @@ serialization version bump.
 - Cassandra only reports `txn_data` results remotely (`AccordAgent.reportRemoteSuccess`). For other
   result kinds, a paused coordinator always resumes by timeout and may then fail with `Exhausted`.
 - Claims for multi-key txns are sent at the readiness point, after which some data replies may
-  still arrive out of order, so the executor abandons (rare).
+  still arrive out of order. An obligated or designated executor then fetches the late definition
+  (`fetchDefinition`); otherwise it abandons as before.
+- Persisting locally: if the original coordinator fails after answering its client (`EarlyResult`)
+  but before persisting, designated replicas persist globally only after their `BacklogApplied`
+  request times out.
+- `Persist.relay`/`tryDeferRemote` only apply to `PersistTxn` (not sync points or interop).
 
 ---
 
@@ -1102,8 +1121,8 @@ a designated replica's `persistGlobally`.
 - The `x-DC msgs` totals fall less, as replies cross the DC boundary too.
 - With Phase 2e, the coordinator rarely sends Apply to remote DCs anyway, so relaying makes little
   difference there.
-- `InformDurable` is now the largest cross-DC message type for `DISABLED` (~200k per 32 seeds); it
-  could be relayed (or piggybacked) the same way.
+- `InformDurable` is now the largest cross-DC message type for `DISABLED` (~200k per 32 seeds), but it
+  is very cheap, so it isn't worth relaying.
 - Non-happy burn passes 50 forced-relay seeds with `DESIGNATED` per DC and persisting locally, 100
   forced-relay seeds with otherwise random configuration, and 50 random seeds. Forced relay vs no
   relay on seeds 1–50 / 51–100: lost 2,008 vs 2,533 and 3,538 vs 3,052, i.e. within noise.
@@ -1112,7 +1131,7 @@ a designated replica's `persistGlobally`.
   `NoDeps` Apply carries only the writes, once per replica.
 
 Follow-ups:
-- [ ] Relay `InformDurable` (and perhaps Stable/Commit) the same way.
+- [-] Relay `InformDurable`: not worthwhile, as it is a very cheap message.
 - [ ] Omit deps from `ApplyRelay` when every recipient is expected to be Stable (then fetch them if
   one replies `Insufficient`).
 - [ ] Treat a slow relay (not only a failed one) as a reason to contact the replicas directly.
@@ -1271,6 +1290,10 @@ Follow-ups:
 - Burn latency is measured from submission. The initial requests are only submitted after
   `Cluster.run` has spent at least a minute of logical time starting up.
 
+- The harness used for all numbers here is in the Cassandra root's `handover/backlog-harness/`
+  (README: restore into `/tmp/probe` and `/tmp/acc`). Typical happy A/B: `runB.sh <name> h4 dpl500 $(cat seeds40.txt)`,
+  then `symsum.py --sym <names>`. Report symmetric seeds separately from asymmetric ones: with
+  `accord.burn.dcs=3` forced, 8 of seeds 1–40 can't be symmetric.
 - The accord module can be built without gradle: `javac` all of `accord-core/src/{main,test}/java`
   against `accord-core/build/dependencies/{main,test}/libs`, then run
   `accord.burn.BurnTest -c N` (or `-s seed`) with `-Dlogback.configurationFile=burn-logback.xml`.
