@@ -56,6 +56,7 @@ import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.QuorumEpochIntersections;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionWait;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionDesignated;
 import static accord.coordinate.CoordinationAdapter.Factory.Kind.Standard;
 import static accord.coordinate.ExecuteFlag.NO_WAIT;
 import static accord.coordinate.ExecutePath.BACKLOG;
@@ -117,7 +118,8 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         this.deps = deps;
         this.collectDefinition = txn == null;
         this.obligated = obligated;
-        this.waitForReady = obligated || coordinatorBacklogExecutionWait();
+        // a designated executor always waits, as the original coordinator may have deferred to it
+        this.waitForReady = obligated || coordinatorBacklogExecutionWait() || coordinatorBacklogExecutionDesignated();
         this.mayClaim = mayClaim;
         this.beforePersist = beforePersist;
     }
@@ -218,7 +220,7 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
                 return waitForReady ? Action.TryAlternative : abandon(from, reply, NotReady.notReady(txnId, route));
             // the replica was not ready (without NO_WAIT: has not yet recorded the transaction as Stable)
             case NotReady:
-                return obligated ? Action.Reject : abandon(from, reply, NotReady.notReady(txnId, route));
+                return obligated || coordinatorBacklogExecutionDesignated() ? Action.Reject : abandon(from, reply, NotReady.notReady(txnId, route));
 
             case Redundant:
                 return abandon(from, reply, new Redundant(txnId, route.homeKey(), executeAt));

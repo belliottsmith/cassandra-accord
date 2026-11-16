@@ -203,6 +203,8 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     private long uniqueHlc;
     private boolean isPrivilegedVoteCommitting;
     private boolean pausedForClaim;
+    // whether we have already deferred to a designated executor (see CoordinatorBacklogExecution#DESIGNATED), so may not again
+    private boolean deferred;
 
     ExecuteTxn(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
@@ -450,6 +452,14 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
                     start(Collections.emptyList(), Collections.singletonList(node.id()));
                     isPrivilegedVoteCommitting = false;
                 }
+                // we must wait for some dependency to execute, so the transaction is contended; if it is designated
+                // to be executed in another DC, defer to it (resuming if it does not report success promptly)
+                if (!deferred && path != RECOVER && node.executeBacklogSink().shouldDeferToDesignated(txnId, route.homeKey()) && pauseForClaim())
+                {
+                    if (tracing != null)
+                        tracing.trace(null, "Deferred to designated executor");
+                    return Action.Aborted;
+                }
                 return Action.None;
 
             case Redundant:
@@ -576,21 +586,25 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         });
     }
 
-    private void pauseForClaim()
+    /**
+     * @return true iff we paused
+     */
+    private boolean pauseForClaim()
     {
         // we must not abandon the privileged coordinator fast path, as it requires we update our own state machine first
         if (isPrivilegedVoteCommitting || !ballot.equals(Ballot.ZERO))
-            return;
+            return false;
 
         BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
         if (callback == null || !trySetDone())
-            return;
+            return false;
 
         stable.setDone();
         pausedForClaim = true;
         if (tracing != null)
             tracing.trace(null, "Paused for BacklogClaim");
         node.executeBacklogSink().pause(txnId, new Paused(callback));
+        return true;
     }
 
     /**
@@ -632,8 +646,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         public void resume()
         {
             executor.executeMaybeImmediately(() -> {
-                new ExecuteTxn(node, executor, allTopologies, route, ballot, path, flags, txnId, txn, executeAt, stableDeps, sendDeps, callback)
-                .start();
+                ExecuteTxn resumed = new ExecuteTxn(node, executor, allTopologies, route, ballot, path, flags, txnId, txn, executeAt, stableDeps, sendDeps, callback);
+                resumed.deferred = true;
+                resumed.start();
             });
         }
     }

@@ -497,6 +497,16 @@ public class BurnTestBase
         if (System.getProperty("accord.burn.coordinator_backlog_execution_linger_millis") != null)
             coordinatorBacklogExecutionLingerMillis = Long.getLong("accord.burn.coordinator_backlog_execution_linger_millis");
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionLingerMicros", MILLISECONDS.toMicros(coordinatorBacklogExecutionLingerMillis));
+        boolean coordinatorBacklogExecutionPerDc = random.nextBoolean();
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_per_dc") != null)
+            coordinatorBacklogExecutionPerDc = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_per_dc");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionPerDc", coordinatorBacklogExecutionPerDc);
+        long coordinatorBacklogExecutionGraceMicros = random.pickLong(0, 2000, 10000);
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_grace_micros") != null)
+            coordinatorBacklogExecutionGraceMicros = Long.getLong("accord.burn.coordinator_backlog_execution_grace_micros");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionGraceMicros", coordinatorBacklogExecutionGraceMicros);
+        if (coordinatorBacklogExecution == CoordinatorBacklogExecution.DESIGNATED)
+            logger.info("Designated backlog execution: {}, grace {}us", coordinatorBacklogExecutionPerDc ? "per DC" : "single", coordinatorBacklogExecutionGraceMicros);
         logger.info("Backlog execution: {}{}{}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "",
                     coordinatorBacklogExecutionWait ? " (waiting for ready)" : "", coordinatorBacklogExecutionLingerMillis > 0 ? " (lingering " + coordinatorBacklogExecutionLingerMillis + "ms)" : "");
         if (System.getProperty("accord.burn.send_stable") != null)

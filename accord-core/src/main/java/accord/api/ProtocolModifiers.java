@@ -103,7 +103,23 @@ public class ProtocolModifiers
 
     public enum FastExecution { DISABLED, MAY_BYPASS_COMMANDSFORKEY, MAY_BYPASS_SAFESTORE }
 
-    public enum CoordinatorBacklogExecution { DISABLED, ON_RECOVERY, ALWAYS }
+    public enum CoordinatorBacklogExecution
+    {
+        DISABLED,
+        /** Recovery coordinators continue to execute the backlog behind the transaction they recover */
+        ON_RECOVERY,
+        /** Coordinators that execute locally continue to execute any backlog behind their transaction */
+        ALWAYS,
+        /**
+         * A designated replica of each transaction's home key executes the transaction on behalf of its original coordinator
+         * once it becomes ready to execute, if the coordinator is not nearby (see {@link accord.local.cfk.ExecuteTxnBacklog}).
+         * Unless {@link #coordinatorBacklogExecutionPerDc()}, there is one designated replica, and coordinators in other
+         * DCs defer to it; otherwise there is one per DC, and coordinators do not defer.
+         * Must not be enabled until every replica supports {@link accord.messages.ReadTxnDataIfReady} without
+         * {@link accord.coordinate.ExecuteFlag#NO_WAIT}.
+         */
+        DESIGNATED
+    }
 
     /**
      * How much information to include in messages, assuming earlier messages have been delivered.
@@ -247,6 +263,12 @@ public class ProtocolModifiers
         private static boolean coordinatorBacklogExecutionYieldToNearby = true;
         public static synchronized void setCoordinatorBacklogExecutionYieldToNearby(boolean newCoordinatorBacklogExecutionYieldToNearby) { pre(); coordinatorBacklogExecutionYieldToNearby = newCoordinatorBacklogExecutionYieldToNearby; }
 
+        private static boolean coordinatorBacklogExecutionPerDc = false;
+        public static synchronized void setCoordinatorBacklogExecutionPerDc(boolean newCoordinatorBacklogExecutionPerDc) { pre(); coordinatorBacklogExecutionPerDc = newCoordinatorBacklogExecutionPerDc; }
+
+        private static long coordinatorBacklogExecutionGraceMicros = 0;
+        public static synchronized void setCoordinatorBacklogExecutionGrace(long grace, TimeUnit units) { pre(); coordinatorBacklogExecutionGraceMicros = units.toMicros(grace); }
+
         private static boolean coordinatorBacklogExecutionWait = false;
         public static synchronized void setCoordinatorBacklogExecutionWait(boolean newCoordinatorBacklogExecutionWait) { pre(); coordinatorBacklogExecutionWait = newCoordinatorBacklogExecutionWait; }
 
@@ -317,8 +339,10 @@ public class ProtocolModifiers
     public static boolean filterDuplicateDependenciesFromAcceptReply() { return filterDuplicateDependenciesFromAcceptReply; }
 
     private static SendStableMessages sendStableMessages = Configure.sendStableMessages;
-    public static boolean sendOnlyReadStableMessages(TxnId txnId) { return sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && !mayExecuteAtReplica(txnId)); }
-    public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC; }
+    // with designated backlog execution, every replica must learn the transaction is Stable, as any may be designated to
+    // execute it (or be read from by the designated replica); so we behave as TO_ALL
+    public static boolean sendOnlyReadStableMessages(TxnId txnId) { return !coordinatorBacklogExecutionDesignated() && (sendStableMessages.compareTo(FOR_READS) >= 0 || (sendStableMessages == TO_ALL_REPLICA_EXECUTABLE_ELSE_FOR_READS && !mayExecuteAtReplica(txnId))); }
+    public static boolean sendNoStableIfFastExec() { return sendStableMessages == FOR_READS_OR_NONE_IF_FASTEXEC && !coordinatorBacklogExecutionDesignated(); }
 
     private static final boolean sendMinimal = Configure.sendMinimal != SendMinimal.MAXIMAL;
     public static boolean sendMinimal() { return sendMinimal; }
@@ -396,11 +420,36 @@ public class ProtocolModifiers
         switch (coordinatorBacklogExecution)
         {
             default: throw new UnhandledEnum(coordinatorBacklogExecution);
-            case DISABLED: return false;
+            case DISABLED:
+            case DESIGNATED: return false;
             case ALWAYS: return true;
             case ON_RECOVERY: return !ballot.equals(Ballot.ZERO);
         }
     }
+
+    /**
+     * @return true iff a designated replica executes transactions on behalf of their (remote) coordinators
+     * (see {@link CoordinatorBacklogExecution#DESIGNATED}); if so, no backlog sinks are installed
+     */
+    public static boolean coordinatorBacklogExecutionDesignated() { return coordinatorBacklogExecution == CoordinatorBacklogExecution.DESIGNATED; }
+
+    private static boolean coordinatorBacklogExecutionPerDc = Configure.coordinatorBacklogExecutionPerDc;
+
+    /**
+     * With {@link CoordinatorBacklogExecution#DESIGNATED}, whether to designate a replica in every DC (so that every DC
+     * executes contended transactions in parallel, minimising latency at the cost of duplicated work), rather than one
+     * replica overall (to which coordinators in other DCs defer)
+     */
+    public static boolean coordinatorBacklogExecutionPerDc() { return coordinatorBacklogExecutionPerDc; }
+
+    private static long coordinatorBacklogExecutionGraceMicros = Configure.coordinatorBacklogExecutionGraceMicros;
+
+    /**
+     * With {@link CoordinatorBacklogExecution#DESIGNATED}, how long a designated replica waits before executing a
+     * transaction that was ready to execute as soon as it became Stable. Such a transaction is probably uncontended, so its
+     * original coordinator will probably execute it promptly, and we expect its Apply to arrive about when its Stable did.
+     */
+    public static long coordinatorBacklogExecutionGrace(TimeUnit units) { return units.convert(coordinatorBacklogExecutionGraceMicros, TimeUnit.MICROSECONDS); }
 
     private static boolean coordinatorBacklogExecutionMultiKey = Configure.coordinatorBacklogExecutionMultiKey;
 

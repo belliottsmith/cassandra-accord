@@ -46,6 +46,11 @@ public interface NodeCommandStoreService extends TimeService, UniqueTimeService,
     boolean isReplaying();
     void reportLocalExecution(TxnId txnId, Route<?> route, Ballot ballot, Timestamp applyAt, Writes writes, Result result);
 
+    /**
+     * @return the node's backlog execution service (see {@link accord.local.cfk.ExecuteTxnBacklog}), if any
+     */
+    default @javax.annotation.Nullable accord.local.cfk.ExecuteTxnBacklog executeBacklogSink() { return null; }
+
     default Timestamp uniqueTimestamp()
     {
         return uniqueTimestamp(Timestamp::fromValues);

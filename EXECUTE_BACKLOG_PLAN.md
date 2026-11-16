@@ -42,6 +42,8 @@ Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnT
 - `coordinator_backlog_execution_yield_to_nearby` (default on)
 - `coordinator_backlog_execution_wait` (Phase 2c; wait for replicas to become ready rather than abandon)
 - `coordinator_backlog_execution_linger` (Phase 2c; keep listening on a key after catching up)
+- `coordinator_backlog_execution: DESIGNATED`, `coordinator_backlog_execution_per_dc`,
+  `coordinator_backlog_execution_grace` (Phase 2d)
 - `send_minimal: MINIMAL_NO_DEPS` (new encoding)
 
 The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `BacklogClaim`,
@@ -49,9 +51,11 @@ The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `
 version bump.
 
 **Next steps, in priority order (updated after Phase 2c):**
-0. **Converge contended chains on a single DC** (preferred default), keeping parallel per-DC execution
-   as an opt-in for latency-first deployments (e.g. benchmarks). With wait + linger we now run
-   roughly one executor per DC, i.e. 1–1.4 extra executions per contended txn. See Phase 2c.
+0. **Make single-DC designated execution competitive** (Phase 2d). It is correct and nearly
+   duplicate-free, but with a static per-key DC it gains only 2–20%, whereas per-DC execution gains
+   24–45% at ~0.8 extra executions per txn. Next: "follow the predecessor" (see the options in
+   Phase 2d). Keep per-DC as the opt-in for latency-first deployments (e.g. benchmarks); it does more
+   total work, so it shouldn't be the default.
 1. **Evaluate in a real multi-DC environment.** Burn can't establish efficacy: it has high fault and
    recovery rates and synthetic latencies. Measure client latency, duplicate executions (coordinator
    vs backlog executor vs recovery), `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, and claim
@@ -707,6 +711,75 @@ Yield and claims variants (`ALWAYS` + multi-key):
   With wait + linger, client latency falls 46% / 39% / 23%, and coordination (~360ms, the medium
   path) is now the larger share. But every DC's executor executes each contended txn (up to 1.4
   extra executions per txn): this is parallel per-DC execution, not convergence.
+
+### Phase 2d: Designated execution (done; simple strategies)
+Replaces sinks with a service, for the new mode `CoordinatorBacklogExecution.DESIGNATED` (`ALWAYS`
+and `ON_RECOVERY` keep the sink-based behaviour, for comparison).
+- [x] **Trigger:** `Commands.maybeExecute` calls `ExecuteTxnBacklog.onReadyToExecute` whenever a
+      command becomes `ReadyToExecute`, saying whether it was ready on arrival of Stable.
+- [x] **Designation** (`ExecuteTxnBacklog.designatedExecutor`): a replica of the txn's home-key
+      shard, picked by a hash of the home key. It acts only if the txn's coordinator is not nearby
+      (otherwise the coordinator executes it).
+  - With `coordinatorBacklogExecutionPerDc`, the pick is among nearby replicas, i.e. one executor
+    per DC, and coordinators never defer.
+  - Otherwise there is one executor overall, which fixes the DC per home key. A coordinator whose
+    read replies `Waiting` (i.e. the txn is contended) defers to it if it isn't nearby. It pauses
+    (reusing the claim pause/resume) and awaits `RemoteSuccess`; a resumed execution doesn't defer
+    again.
+- [x] **Grace** (`coordinatorBacklogExecutionGrace`): a txn that was ready on arrival of Stable is
+      probably uncontended, so the designated replica waits this long for the coordinator's Apply.
+- [x] Designated executions always wait for readiness, and treat `NotReady` as `Reject`. On
+      failure (other than `Redundant`) they **retry with backoff** (5ms doubling to 500ms, up to 20
+      attempts), since the coordinator may have deferred to them.
+- [x] With `DESIGNATED`, Stable messages go to every replica (we behave as `send_stable = TO_ALL`):
+      any replica may be designated, or be read from by the designated replica. Without this, ~40%
+      of deferring coordinators waited for the 5s resume.
+- [x] A `MaybeRecover` (a status check, e.g. because a deferred txn is blocking others) no longer
+      stops a backlog execution; actual recovery still does.
+- Bugs found on the way:
+  - the designated replica's read raced a Stable still in flight to another replica
+    (`AcceptedSlowWithDefinition` → `NotReady` → `Exhausted`), and nobody executed the txn until the
+    coordinator resumed 5s later; hence the retries;
+  - a `MaybeRecover` blocked dedupe.
+- **Happy burn** (3 DCs, 40 seeds, mean ms / p99 / duplicate executions; grace 10ms):
+
+  | variant                              | h4 r0.8 c40         | h2 r0.8            | no hot keys        |
+  |--------------------------------------|---------------------|--------------------|--------------------|
+  | `DISABLED`                           | 1,105 / 1,697 / 6   | 920 / 1,522 / 0    | 595 / 1,173 / 0    |
+  | `ALWAYS` + wait + linger 100ms       | 601 / 919 / 55.4k   | 543 / 860 / 38.4k  | 465 / 875 / 36.8k  |
+  | `DESIGNATED`, per DC                 | **608 / 849 / 32.8k** | **545 / 823 / 29.5k** | **450 / 738 / 32.0k** |
+  | `DESIGNATED`, single DC              | 976 / 1,618 / 91    | 740 / 1,325 / 183  | 581 / 1,305 / 272  |
+
+  - Per-DC matches the best sink-based latency with ~40% fewer duplicates, none of them within a DC.
+  - Single DC is nearly duplicate-free but gains only 2–20%. A static per-key DC means correlated hot
+    keys are designated in different DCs, so joins hop between DCs, and remote-coordinated contended
+    txns pay ~1 RTT for Stable-to-executor plus result-to-coordinator.
+- 100 seeds of non-happy burn pass with `DESIGNATED` forced (single and per DC) and random.
+
+**Options to explore** (from discussion; any simple strategy was fine to get started):
+- **Choosing the replica within a DC.**
+  - By key (implemented: a hash of the home key), or by permuting the coordinator: with the
+    coordinator at index i of its DC's N replicas and M replicas in our DC, pick (i + hash(key)) % M.
+    That spreads one key's load across replicas, but moves its chain between nodes in a DC.
+  - Either way, txns with different but intersecting keys have different home keys, so chains jump
+    between nodes. We could let backlog execution discount home keys to exploit long chains (the same
+    node completing a chain), but would then need another way to dedupe within a DC.
+- **Choosing the DC.**
+  - A static per-key DC preference (implemented, via the hash) breaks correlated chains.
+  - "The highest-preference DC of the key with the longest chain" isn't consistently observable:
+    views of a chain differ by in-flight Stables, so candidates disagree (duplicates, or nobody
+    executes).
+  - Preferred direction: **follow the predecessor**. Execute in the DC that executed the txn's
+    immediate predecessors (replicas learn the executor from the Apply sender: record it transiently
+    on the CFK, and report it in read replies for keys the reader doesn't replicate). At a join,
+    break the tie with the static per-key preference, or a chain token if flip-flopping matters. With
+    no recent predecessor, use the coordinator's DC.
+  - The original coordinator applies the same rule to the facts in its own read replies, deferring
+    only if the chosen DC isn't its own.
+- **Health** (the designated replica could be down) and tuning the resume timeout (currently
+  `selfExpiresAt(READ_REQ)`) and the grace.
+- **Retire sinks** (`ALWAYS`, `ON_RECOVERY`) once designated execution subsumes them, including
+  recovery: e.g. take over txns whose coordinator looks slow.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG

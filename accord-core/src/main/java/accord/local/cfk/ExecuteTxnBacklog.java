@@ -26,11 +26,14 @@ import org.slf4j.LoggerFactory;
 
 import accord.api.LocalListeners;
 import accord.api.ProtocolModifiers;
+import accord.api.ProtocolModifiers.CoordinatorBacklogExecution;
 import accord.api.ProgressLog.BlockedUntil;
 import accord.api.Result;
 import accord.api.RoutingKey;
 import accord.api.Timeouts;
+import accord.coordinate.Coordination.CoordinationKind;
 import accord.coordinate.ExecuteBacklogTxn;
+import accord.utils.TinyEnumSet;
 import accord.coordinate.Exhausted;
 import accord.coordinate.ExecuteTxn;
 import accord.coordinate.NotReady;
@@ -64,8 +67,12 @@ import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionMultiKey;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionYieldToNearby;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionLinger;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionWait;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionDesignated;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionGrace;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionPerDc;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
+import static accord.coordinate.Coordination.CoordinationKind.MaybeRecover;
 import static accord.local.CommandSummaries.SummaryStatus.STABLE;
 import static accord.primitives.Routable.Domain.Key;
 import static accord.primitives.Routables.Slice.Minimal;
@@ -75,6 +82,7 @@ import static accord.primitives.Txn.Kind.Write;
 import static accord.primitives.TxnId.Cardinality.SingleKey;
 import static accord.messages.MessageType.StandardMessage.READ_REQ;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
@@ -133,6 +141,7 @@ public class ExecuteTxnBacklog
     private static final int PRUNE_ACTIVE_AT_SIZE = 1 << 10;
 
     private static final Logger logger = LoggerFactory.getLogger(ExecuteTxnBacklog.class);
+    private static final TinyEnumSet<CoordinationKind> COORDINATES_STATE_MACHINE_EXCEPT_MAYBE_RECOVER = COORDINATES_STATE_MACHINE.not(TinyEnumSet.of(MaybeRecover));
 
     final Node node;
 
@@ -345,6 +354,107 @@ public class ExecuteTxnBacklog
         execute(safeStore.commandStore(), txnId, claimAhead);
     }
 
+    /*
+     * Designated execution (see CoordinatorBacklogExecution#DESIGNATED)
+     */
+
+    /**
+     * @return the replica designated to execute {@code txnId} (with home key {@code homeKey}) on behalf of its original
+     * coordinator, from the perspective of {@code node}: a deterministic choice amongst the replicas of the home key's
+     * shard (only those nearby {@code node} if {@link ProtocolModifiers#coordinatorBacklogExecutionPerDc}), so that every
+     * node computes the same choice (given the same topology), and the choice is spread across replicas by key.
+     * Choosing by key (rather than e.g. by transaction) means the same replica executes consecutive transactions with
+     * the same home key.
+     * TODO (desired): consider replica health; consider other choices (see EXECUTE_BACKLOG_PLAN)
+     */
+    public static @Nullable Node.Id designatedExecutor(Node node, RoutingKey homeKey)
+    {
+        Topology topology = node.topology().current();
+        int shardIndex = topology.indexForKey(homeKey);
+        if (shardIndex < 0)
+            return null;
+
+        accord.topology.Shard shard = topology.get(shardIndex);
+        int hash = mix(homeKey.hashCode());
+        if (!coordinatorBacklogExecutionPerDc())
+            return shard.nodes.get(Math.floorMod(hash, shard.nodes.size()));
+
+        int nearby = 0;
+        for (int i = 0, size = shard.nodes.size() ; i < size ; ++i)
+        {
+            if (node.isNearby(shard.nodes.get(i)))
+                ++nearby;
+        }
+        if (nearby == 0)
+            return null;
+
+        int pick = Math.floorMod(hash, nearby);
+        for (int i = 0, size = shard.nodes.size() ; i < size ; ++i)
+        {
+            Node.Id id = shard.nodes.get(i);
+            if (node.isNearby(id) && pick-- == 0)
+                return id;
+        }
+        throw new IllegalStateException();
+    }
+
+    private static int mix(int hash)
+    {
+        hash *= 0x9E3779B9;
+        return hash ^ (hash >>> 16);
+    }
+
+    /**
+     * @return true iff the original coordinator of {@code txnId} should defer to a designated replica in another DC,
+     * as {@code txnId} is contended (it had to wait to execute); see {@link CoordinatorBacklogExecution#DESIGNATED}
+     */
+    public boolean shouldDeferToDesignated(TxnId txnId, RoutingKey homeKey)
+    {
+        if (!coordinatorBacklogExecutionDesignated() || coordinatorBacklogExecutionPerDc() || !mayExecute(txnId))
+            return false;
+        Node.Id designated = designatedExecutor(node, homeKey);
+        return designated != null && !node.isNearby(designated);
+    }
+
+    /**
+     * A command has become ready to execute in {@code safeStore}; if we are its designated executor and its coordinator
+     * is not nearby, execute it on its coordinator's behalf. If it was ready as soon as it became Stable it is probably
+     * uncontended, so its coordinator will probably execute it promptly: wait a grace period first, so that we may
+     * receive its Apply (see {@link ProtocolModifiers#coordinatorBacklogExecutionGrace}).
+     */
+    public void onReadyToExecute(SafeCommandStore safeStore, Command command, boolean onStable)
+    {
+        TxnId txnId = command.txnId();
+        if (!mayExecute(txnId) || txnId.node.equals(node.id()) || node.isNearby(txnId.node) || !command.promised().equals(Ballot.ZERO))
+            return;
+
+        Route<?> route = command.route();
+        if (route == null)
+            return;
+
+        Node.Id designated = designatedExecutor(node, route.homeKey());
+        if (!node.id().equals(designated))
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: ready on {} but designated is {}", txnId, node.id(), designated);
+            return;
+        }
+
+        if (!Route.isFullRoute(route))
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: designated to execute on {} but do not know full route: {}", txnId, node.id(), route);
+            return;
+        }
+
+        CommandStore commandStore = safeStore.commandStore();
+        long grace = onStable ? coordinatorBacklogExecutionGrace(MICROSECONDS) : 0;
+        if (logger.isTraceEnabled())
+            logger.trace("{}: designated to execute on {}{}", txnId, node.id(), grace > 0 ? " after grace" : "");
+        if (grace <= 0) execute(commandStore, txnId, null);
+        else node.scheduler().once(() -> execute(commandStore, txnId, null), grace, MICROSECONDS);
+    }
+
     /**
      * @return true iff the original coordinator of {@code txnId} is nearby (e.g. in the same DC) and plausibly still
      * coordinating it, in which case it will receive its replies about as promptly as we would, so we should leave
@@ -379,8 +489,13 @@ public class ExecuteTxnBacklog
 
     private void execute(CommandStore commandStore, TxnId txnId, @Nullable TxnId claimAhead)
     {
-        if (tryMarkActive(txnId))
-            executeActive(commandStore, txnId, claimAhead);
+        if (tryMarkActive(txnId)) executeActive(commandStore, txnId, claimAhead);
+        else if (logger.isTraceEnabled())
+        {
+            StringBuilder kinds = new StringBuilder();
+            node.coordinations().forEach(txnId, c -> kinds.append(c.kind()).append(' '));
+            logger.trace("{}: not executing backlog as already active or coordinating on {} ({})", txnId, node.id(), kinds);
+        }
     }
 
     private void executeActive(CommandStore commandStore, TxnId txnId, @Nullable TxnId claimAhead)
@@ -399,7 +514,10 @@ public class ExecuteTxnBacklog
     private void tryExecuteOrRelease(SafeCommandStore safeStore, TxnId txnId, @Nullable TxnId claimAhead)
     {
         if (!tryExecute(safeStore, txnId, claimAhead))
+        {
+            designatedRetries.remove(txnId);
             release(txnId);
+        }
     }
 
     private void release(TxnId txnId)
@@ -415,7 +533,11 @@ public class ExecuteTxnBacklog
     {
         SafeCommand safeCommand = safeStore.ifInitialised(txnId);
         if (safeCommand == null)
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: not executing backlog as not initialised in {}", txnId, safeStore.commandStore());
             return false;
+        }
 
         Command command = safeCommand.current();
         boolean obligated = isObligated(txnId);
@@ -436,7 +558,11 @@ public class ExecuteTxnBacklog
         Ballot promised = command.promised();
         Node.Id recovering = promised.equals(Ballot.ZERO) ? null : promised.node;
         if (node.id().equals(recovering))
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: not executing backlog as we are recovering it", txnId);
             return false; // we are already recovering the transaction
+        }
 
         FullRoute<?> route = (FullRoute<?>) command.route();
         Timestamp executeAt = command.executeAt();
@@ -455,7 +581,7 @@ public class ExecuteTxnBacklog
             CommandStore commandStore = safeStore.commandStore();
             beforePersist = () -> claimAhead(claimAhead, commandStore);
         }
-        start(txnId, route, txn, executeAt, deps, ballot, promised, obligated, beforePersist);
+        start(safeStore.commandStore(), txnId, route, txn, executeAt, deps, ballot, promised, obligated, beforePersist);
         return true;
     }
 
@@ -477,7 +603,9 @@ public class ExecuteTxnBacklog
 
     private boolean tryMarkActive(TxnId txnId)
     {
-        if (node.coordinations().anyMatch(txnId, COORDINATES_STATE_MACHINE))
+        // a MaybeRecover only checks the transaction's status (e.g. because it is blocking others, perhaps because its
+        // coordinator has deferred to us), so should not stop us executing it; but a recovery should
+        if (node.coordinations().anyMatch(txnId, COORDINATES_STATE_MACHINE_EXCEPT_MAYBE_RECOVER))
             return false;
 
         long now = node.elapsed(NANOSECONDS);
@@ -488,7 +616,7 @@ public class ExecuteTxnBacklog
         return prev == null || (now - prev > ACTIVE_EXPIRES_AFTER_NANOS && active.replace(txnId, prev, now));
     }
 
-    private void start(TxnId txnId, FullRoute<?> route, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, Ballot ballot, Ballot promised, boolean obligated, @Nullable Runnable beforePersist)
+    private void start(CommandStore commandStore, TxnId txnId, FullRoute<?> route, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, Ballot ballot, Ballot promised, boolean obligated, @Nullable Runnable beforePersist)
     {
         if (logger.isTraceEnabled())
             logger.trace("{}: executing backlog{}{}", txnId, txn == null ? ", collecting definition" : "", obligated ? ", as claimed" : "");
@@ -496,7 +624,8 @@ public class ExecuteTxnBacklog
         boolean mayClaim = !obligated && mayClaim(txnId, promised);
         Runnable claimBeforePersist = beforePersist;
         Runnable installAndClaimBeforePersist = () -> {
-            installOnEveryKey(txnId, route, executeAt);
+            if (!coordinatorBacklogExecutionDesignated())
+                installOnEveryKey(txnId, route, executeAt);
             if (claimBeforePersist != null)
                 claimBeforePersist.run();
         };
@@ -509,10 +638,41 @@ public class ExecuteTxnBacklog
                 if (logger.isTraceEnabled())
                     logger.trace("{}: executed backlog with outcome {} on {}", txnId, fail == null ? "success" : fail.getClass().getSimpleName(), node.id());
 
+                if (fail == null) designatedRetries.remove(txnId);
                 if (fail == null) node.reportLocalExecution(txnId, route, promised, null, null, result);
                 else if (!isExpectedFailure(fail)) node.agent().onException(fail);
+                else if (coordinatorBacklogExecutionDesignated() && !(fail instanceof Redundant)) retryDesignated(commandStore, txnId);
             });
         });
+    }
+
+    // the number of times we have retried executing a transaction we are designated to execute
+    private final ConcurrentHashMap<TxnId, Integer> designatedRetries = new ConcurrentHashMap<>();
+    // TODO (desired): configurable
+    private static final long DESIGNATED_RETRY_MICROS = MILLISECONDS.toMicros(5), MAX_DESIGNATED_RETRY_MICROS = MILLISECONDS.toMicros(500);
+    private static final int MAX_DESIGNATED_RETRIES = 20;
+
+    /**
+     * We are designated to execute {@code txnId}, but our attempt failed without anybody else having executed it (e.g.
+     * because some replica we read from had not yet received its Stable message); since its original coordinator may
+     * have deferred to us we should not give up, so we retry with backoff. We stop once it is no longer a candidate
+     * (e.g. it has been executed) or after a number of attempts (after which the original coordinator will resume).
+     */
+    private void retryDesignated(CommandStore commandStore, TxnId txnId)
+    {
+        int attempt = designatedRetries.merge(txnId, 1, Integer::sum);
+        if (attempt > MAX_DESIGNATED_RETRIES)
+        {
+            designatedRetries.remove(txnId);
+            return;
+        }
+        if (designatedRetries.size() >= PRUNE_ACTIVE_AT_SIZE)
+            designatedRetries.keySet().removeIf(id -> !active.containsKey(id) && !id.equals(txnId));
+
+        long delay = Math.min(MAX_DESIGNATED_RETRY_MICROS, DESIGNATED_RETRY_MICROS << Math.min(attempt - 1, 16));
+        if (logger.isTraceEnabled())
+            logger.trace("{}: retrying designated execution on {} (attempt {})", txnId, node.id(), attempt);
+        node.scheduler().once(() -> execute(commandStore, txnId, null), delay, MICROSECONDS);
     }
 
     /**
@@ -524,7 +684,7 @@ public class ExecuteTxnBacklog
             return true;
         // if we wait for replicas to become ready, we may time out (e.g. if they are waiting on a slow predecessor)
         // or run out of replicas to try (e.g. if none has yet recorded the transaction as Stable)
-        return (coordinatorBacklogExecutionWait() || coordinatorBacklogExecutionClaims()) && (fail instanceof Timeout || fail instanceof Exhausted);
+        return (coordinatorBacklogExecutionWait() || coordinatorBacklogExecutionDesignated() || coordinatorBacklogExecutionClaims()) && (fail instanceof Timeout || fail instanceof Exhausted);
     }
 
     /*

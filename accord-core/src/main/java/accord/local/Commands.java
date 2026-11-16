@@ -39,6 +39,7 @@ import accord.local.CommandStores.RangesForEpochSupplier;
 import accord.local.MinimalCommand.MinimalWithConcreteDeps;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.RedundantBefore.RedundantBeforeSupplier;
+import accord.local.cfk.ExecuteTxnBacklog;
 import accord.local.cfk.CommandsForKey;
 import accord.local.cfk.SafeCommandsForKey;
 import accord.messages.Accept;
@@ -120,6 +121,7 @@ import static accord.primitives.SaveStatus.PreAcceptedPrivCoord;
 import static accord.primitives.SaveStatus.PreAcceptedWithDeps;
 import static accord.primitives.SaveStatus.PreAcceptedWithVote;
 import static accord.primitives.SaveStatus.ReadyToExecute;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionDesignated;
 import static accord.primitives.SaveStatus.TruncatedApply;
 import static accord.primitives.SaveStatus.Uninitialised;
 import static accord.primitives.Status.Applied;
@@ -422,7 +424,7 @@ public class Commands
             WaitingOn waitingOn = initialiseWaitingOn(safeStore, txnId, executeAt, participants, partialDeps);
             committed = safeCommand.stable(safeStore, participants, ballot, executeAt, partialTxn, partialDeps, waitingOn);
             safeStore.agent().replicaEvents().onStable(safeStore, committed);
-            maybeExecute(safeStore, safeCommand, true, true);
+            maybeExecute(safeStore, safeCommand, safeCommand.current(), true, true, MaybeExecuteAdapter.DEFAULT, true);
         }
         else
         {
@@ -841,6 +843,15 @@ public class Commands
     // TODO (desired): merge notifyListeners and notifyWaitingOn into MaybeExecuteAdapter without allocation/megamorphic despatch penalty
     public static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, boolean alwaysNotifyListeners, boolean notifyWaitingOn, MaybeExecuteAdapter adapter)
     {
+        return maybeExecute(safeStore, safeCommand, command, alwaysNotifyListeners, notifyWaitingOn, adapter, false);
+    }
+
+    /**
+     * @param onStable true iff we are invoked as the command becomes Stable, so that if it is ready to execute it did not
+     *                 wait on any dependency here
+     */
+    private static boolean maybeExecute(SafeCommandStore safeStore, SafeCommand safeCommand, Command command, boolean alwaysNotifyListeners, boolean notifyWaitingOn, MaybeExecuteAdapter adapter, boolean onStable)
+    {
         if (logger.isTraceEnabled())
             logger.trace("{}: Maybe executing with status {}. Will notify listeners on noop: {}",
                          command.txnId(), command.status(), alwaysNotifyListeners);
@@ -889,6 +900,9 @@ public class Commands
                     safeCommand.readyToExecute(safeStore);
                     logger.trace("{}: set to ReadyToExecute", txnId);
                     safeStore.notifyListeners(safeCommand, command);
+                    ExecuteTxnBacklog backlog = coordinatorBacklogExecutionDesignated() ? safeStore.commandStore().node().executeBacklogSink() : null;
+                    if (backlog != null)
+                        backlog.onReadyToExecute(safeStore, safeCommand.current(), onStable);
                     break;
                 }
 
