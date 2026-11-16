@@ -864,29 +864,34 @@ is `Agent.backlogRemoteApplyDelay` (see below).
   (`CoordinationFlags.persistNearbyOnly`, `Persist.contactNearby`). Once every nearby replica has
   replied, it sends the original coordinator `BacklogApplied(txnId, appliedAt, notAppliedAt)`. It
   doesn't `InformDurable`. It still sends `RemoteSuccess`, so the client may be answered early.
-  - `failedAt` lists the nearby replicas it failed to apply to (down, timed out, raced recovery,
-    `UNAVAILABLE`). The coordinator records them as failures in its tracker, just as if it had tried
-    them itself, and doesn't try them. It only delivers `Apply` itself to replicas whose designated
-    replica never reports, i.e. after the delay.
-  - If the designated replica can't execute the txn at all (e.g. replicas down, or it reads a shard
-    its DC doesn't replicate from another DC that has already applied it), it sends no report, so the
-    coordinator delivers to its DC once the delay elapses. It doesn't retry, since the coordinator
-    executes anyway, with one exception (below).
-  - A replica that hasn't yet recorded the txn as Stable (usually its Stable is still in flight)
-    gets the full definition and deps, **at most once**, as in `ExecuteTxn`
-    (`ExecuteBacklogTxn.trySendMaximal`):
-    - on `InsufficientAndWaiting` it gets a maximal `Commit`, and we try an alternative replica;
-    - on `NotReady` (from `ReadTxnDataIfReady`) it gets a maximal `StableThenRead`, and we read
-      from it again.
-    This needs the full definition. While still collecting the definition (multi-key txns that the
-    designated replica doesn't fully replicate) we can't send it, so the designated replica instead
-    retries the execution once (5ms later).
-  - Likewise, if the data arrives before the complete definition (replies reordered, e.g. on
-    different connections), an obligated or designated execution reads once more rather than
-    abandoning. This is common in burn, which reorders every message.
-  - Tried and reverted: making `ReadTxnDataIfReady` wait for a Stable that is in flight and send a
-    further `ReadyWithDefinition` once it arrives. The late definition then routinely arrived after
-    the data (and once the final reply is in, later replies are dropped). That cost ~300ms of p99.
+  - The designated replica always reports what it knows, if it can:
+    - `failedAt`: nearby replicas it failed to apply to (down, timed out, raced recovery,
+      `UNAVAILABLE`). The coordinator records them as failures in its tracker, as if it had tried them
+      itself, and doesn't try them.
+    - `unsentAt`: if it couldn't execute the txn at all (e.g. it reads a shard its DC doesn't
+      replicate from another DC that has already applied it), it reports every replica in its DC as
+      unsent (`ExecuteTxnBacklog.reportUnsent`), and the coordinator sends them its Apply at once. It
+      doesn't retry, since the coordinator executes anyway.
+    - Only if no report arrives (the designated replica failed, or the DC has none) does the
+      coordinator deliver itself after the delay.
+  - **`NotReady` now only means "not ready to execute, and asked not to wait" (`NO_WAIT`).** Its
+    meaning had been overloaded. `ReadTxnDataIfReady` without `NO_WAIT` used to reply `NotReady` if a
+    store had yet to record the txn as Stable. Now it waits for such a store, as `ReadTxnData` does:
+    it replies `InsufficientAndWaiting`, and once the store is Stable sends a further
+    `ReadyWithDefinition` (`ReadData.onWaitingForStable`/`onWaitingUpdate` hooks), then the data.
+  - On `InsufficientAndWaiting`, as in `ExecuteTxn`, the executor sends the replica its full
+    definition and deps (a maximal `Commit`) at most once (`ExecuteBacklogTxn.trySendMaximal`), and
+    tries an alternative in the meantime. While still collecting the definition it can't, so it notes
+    the replica and sends the maximal `Commit` as soon as the definition is complete (`onReconstituted`).
+  - If every read has arrived but the definition isn't complete, the executor keeps the data. This
+    happens when a replica's `ReadyWithDefinition` is reordered after its final reply; non-final
+    replies after the final one are dropped, in burn and in Cassandra (`AccordResponseVerbHandler`).
+    The executor then fetches the definition from the replicas it read from (`CheckStatus` with
+    `IncludeInfo.All`, `fetchDefinition`), rather than re-reading or abandoning. This is rare outside
+    simulation; in burn it's ~15 per seed, and all succeeded.
+  - Superseded: retrying the whole execution once (5ms later) when collecting the definition, and
+    re-reading once when the definition was incomplete. An earlier attempt at waiting for Stable in
+    `ReadTxnDataIfReady` without the fetch cost ~300ms of p99, because of the reordering above.
   - If the coordinator replies `Nack`, or nothing before the request times out, the designated replica
     persists to every other replica itself (`Persist.persistGlobally`, which then completes as a normal
     `Persist` and informs durability). This covers a failed coordinator, and one whose own
@@ -980,15 +985,25 @@ with a remote apply delay of N ms.
 Asymmetric seeds (8), mean / p99: h4 `dp` 528 / 714 vs `dpl500` 548 / 1,062; h2 478 / 665 vs
 486 / 915; no hot keys 444 / 675 vs 465 / 990.
 
-After the latest changes (failures recorded rather than redelivered, one maximal or one retry instead
-of up to 3 retries), symmetric seeds, mean / p99 and cross-DC messages / Applies:
+After recording failures rather than redelivering, and one maximal or one retry instead of up to 3
+retries, symmetric seeds, mean / p99 and cross-DC messages / Applies:
 - h4 `dpl200`: 595 / 814, 1.32M / 22k;
 - h4 `dpl500`: 597 / 863, 1.31M / 6.2k;
 - h2 `dpl500`: 539 / 781, 1.30M / 8.0k;
 - no hot keys `dpl500`: 447 / 717, 1.18M / 5.8k.
 
-These are essentially unchanged (h4 `dpl500`'s p99 is within the noise between seeds). Before
-reverting the `ReadTxnDataIfReady` change above, h4 `dpl500` was 614 / 1,130.
+These are essentially unchanged (h4 `dpl500`'s p99 is within the noise between seeds).
+
+After always reporting (including `unsentAt`), waiting for Stable in `ReadTxnDataIfReady`, deferring
+the maximal until the definition is collected, and fetching a late definition, this now matches Phase
+2d's per-DC latency:
+- h4 `dpl200`: 591 / 813;
+- h4 `dpl500`: 590 / 799 (vs `dp` 589 / 795), 1.31M / 5.3k;
+- h2 `dpl500`: 537 / 764 (vs 535 / 764);
+- no hot keys `dpl500`: 443 / 686 (vs 445 / 689).
+
+In 3 traced seeds there were no failed designated executions, 14 maximal `Commit`s, 48 definition
+fetches (all successful) and 4 deferred Applies.
 
 - On symmetric topologies latency is within ~1% of Phase 2d's per-DC numbers (p99 within ~2–3%).
   Cross-DC traffic falls ~40% below per-DC and 10–20% below `DISABLED`: the coordinator no longer
@@ -1010,7 +1025,8 @@ acknowledgements (first version, seeds 1–80): lost 3,678 vs 3,914, mean 3,719 
 
 After the gate's removal and the burn DC change, these pass: 100 forced seeds, 100 random seeds,
 and 40 forced seeds with 3 DCs and asymmetric assignments permitted (7 of them asymmetric). After the
-latest changes: 120 forced, 60 random and 40 forced-asymmetric seeds pass.
+latest changes: 120 forced, 60 random and 40 forced-asymmetric seeds pass; and again after always
+reporting and fetching late definitions (with relaying forced for the asymmetric batch).
 Earlier, 200 forced and 200 random seeds passed with the first version. Accord unit tests match
 baseline.
 
@@ -1041,8 +1057,6 @@ Follow-ups:
   (`persistGlobally`), deferred Applies sent. A better basis for the delay than PreAccept latency,
   e.g. raw inter-DC link latencies (as `AccordWaitStrategies.setSlowRead`'s TODO suggests); pursued
   separately.
-- [ ] When collecting the definition, fetch only the missing definition (or ask the original
-  coordinator for it) rather than re-reading.
 
 ### Relaying Apply (`ApplyRelay`; done, prototype)
 Behind `ProtocolModifiers.relayRemoteApply()` (Cassandra `accord.relay_remote_apply`, default off),

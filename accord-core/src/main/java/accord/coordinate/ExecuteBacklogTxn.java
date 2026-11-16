@@ -32,6 +32,11 @@ import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.local.cfk.ExecuteTxnBacklog;
+import accord.messages.Callback;
+import accord.messages.CheckStatus;
+import accord.messages.CheckStatus.CheckStatusOkFull;
+import accord.messages.CheckStatus.CheckStatusReply;
+import accord.messages.CheckStatus.IncludeInfo;
 import accord.messages.Commit;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
@@ -39,7 +44,6 @@ import accord.messages.ReadData.ReadReply;
 import accord.messages.ReadData.ReadyWithDefinition;
 import accord.messages.ReadTxnData;
 import accord.messages.ReadTxnDataIfReady;
-import accord.messages.StableThenRead;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -83,7 +87,7 @@ import static accord.coordinate.ReadCoordinator.Action.ApprovePartial;
  * We do not ordinarily send any Stable messages: every replica we read from is already Stable, and any other replica
  * will be sent our deps with {@link accord.messages.Apply}. But if we must try to complete the transaction (we have
  * claimed it, or are designated to execute it) and a replica has not yet recorded it as Stable, we send that replica
- * our full definition and deps, at most once (as {@link ExecuteTxn} does).
+ * our full definition and deps, at most once (as {@link ExecuteTxn} does), as soon as we know them.
  */
 public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
 {
@@ -108,18 +112,20 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     private @Nullable PartialTxn collectTxn;
     private @Nullable PartialDeps collectDeps;
     private final IntHashSet readFrom = new IntHashSet();
-    // whether we are re-reading, having previously received our data but not the complete definition
-    private final boolean isRetry;
     // the replicas we have sent our full definition and deps (see trySendMaximal)
     private @Nullable IntHashSet sentMaximal;
+    // the replicas that have not yet recorded the transaction as Stable, to which we will send our full definition and
+    // deps once we have collected them (see trySendMaximal)
+    private @Nullable IntHashSet awaitingDefinition;
+    // if we have every read but not the complete definition, the number of replicas we await the definition from
+    private int fetchingDefinition;
     private Data data;
     private long uniqueHlc;
 
     private ExecuteBacklogTxn(Node node, Topologies allTopologies, FullRoute<?> route, Ballot ballot, TxnId txnId, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps,
-                              boolean obligated, boolean mayClaim, @Nullable Runnable beforePersist, boolean isRetry, BiConsumer<? super Result, Throwable> callback)
+                              boolean obligated, boolean mayClaim, @Nullable Runnable beforePersist, BiConsumer<? super Result, Throwable> callback)
     {
         super(node, node.someExclusiveExecutor(), allTopologies.forEpoch(executeAt.epoch()), txnId, route, callback);
-        this.isRetry = isRetry;
         Invariants.require((txn == null) == (deps == null));
         this.route = route;
         this.ballot = ballot;
@@ -145,19 +151,13 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     public static void execute(Node node, FullRoute<?> route, Ballot ballot, TxnId txnId, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps,
                                boolean obligated, boolean mayClaim, @Nullable Runnable beforePersist, BiConsumer<? super Result, Throwable> callback)
     {
-        execute(node, route, ballot, txnId, txn, executeAt, deps, obligated, mayClaim, beforePersist, false, callback);
-    }
-
-    private static void execute(Node node, FullRoute<?> route, Ballot ballot, TxnId txnId, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps,
-                                boolean obligated, boolean mayClaim, @Nullable Runnable beforePersist, boolean isRetry, BiConsumer<? super Result, Throwable> callback)
-    {
         ExecuteBacklogTxn execute;
         try
         {
             ActiveEpochs epochs = node.topology().active();
             Topologies all = epochs.reselect(null, QuorumEpochIntersections.preacceptOrCommit,
                                              route, txnId, executeAt, txnId.selectsShards(), QuorumEpochIntersections.stable);
-            execute = new ExecuteBacklogTxn(node, all, route, ballot, txnId, txn, executeAt, deps, obligated, mayClaim, beforePersist, isRetry, callback);
+            execute = new ExecuteBacklogTxn(node, all, route, ballot, txnId, txn, executeAt, deps, obligated, mayClaim, beforePersist, callback);
         }
         catch (Throwable t)
         {
@@ -201,10 +201,12 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
             ReadyWithDefinition definition = (ReadyWithDefinition) reply;
             if (definition.partialTxn != null) collectTxn = PartialTxn.merge(collectTxn, definition.partialTxn);
             if (definition.partialDeps != null) collectDeps = collectDeps == null ? definition.partialDeps : collectDeps.with(definition.partialDeps);
-            if (txn == null && tryReconstitute() && mayClaim && !obligated)
+            if (txn == null && tryReconstitute())
             {
+                onReconstituted();
                 // every shard has told us it is ready, so we expect to succeed; claim the transaction
-                claim("ready");
+                if (mayClaim && !obligated)
+                    claim("ready");
             }
             return Action.None;
         }
@@ -235,21 +237,18 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
             case Waiting:
                 return waitForReady ? Action.None : abandon(from, reply, NotReady.notReady(txnId, route));
             // the replica has not yet recorded the transaction as Stable (typically its Stable is still in flight; we do
-            // not ordinarily send Stable messages); as ExecuteTxn, send it everything once (if we know it), and try
-            // another replica in the meantime (the replica will reply once it is ready)
+            // not ordinarily send Stable messages), and will reply once it is ready (with ReadTxnDataIfReady, first
+            // reporting its definition); as ExecuteTxn, send it everything once, as soon as we know it, and try another
+            // replica in the meantime
             case InsufficientAndWaiting:
                 if (!waitForReady)
                     return abandon(from, reply, NotReady.notReady(txnId, route));
-                trySendMaximal(from, false);
+                if (txn != null) trySendMaximal(from);
+                else (awaitingDefinition == null ? awaitingDefinition = new IntHashSet() : awaitingDefinition).add(from.id);
                 return Action.TryAlternative;
-            // the replica was not ready (with ReadTxnDataIfReady, without NO_WAIT: has not yet recorded the transaction
-            // as Stable, typically because its Stable is still in flight); if we must try to execute the transaction,
-            // send it everything (at most once, if we know it) and read from it again. If we are still collecting the
-            // definition we cannot, so the caller may retry once (see ExecuteTxnBacklog)
+            // the replica was not ready to execute, and we asked it not to wait (NO_WAIT)
             case NotReady:
-                if (!obligated && !coordinatorBacklogExecutionDesignated())
-                    return abandon(from, reply, NotReady.notReady(txnId, route));
-                return trySendMaximal(from, true) ? Action.None : Action.Reject;
+                return obligated || coordinatorBacklogExecutionDesignated() ? Action.Reject : abandon(from, reply, NotReady.notReady(txnId, route));
 
             case Redundant:
                 return abandon(from, reply, new Redundant(txnId, route.homeKey(), executeAt));
@@ -260,31 +259,43 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
     }
 
     /**
-     * Send {@code to} the full definition and deps of the transaction, so that it may record it as Stable (if we know
-     * them, and have not already done so)
-     * @param read whether to read from {@code to} again (its earlier read having completed)
-     * @return true iff we sent the message
+     * Send {@code to} our full definition and deps, so that it may record the transaction as Stable (at most once)
      */
-    private boolean trySendMaximal(Id to, boolean read)
+    private void trySendMaximal(Id to)
     {
-        if (txn == null || deps == null)
-            return false;
         if (sentMaximal == null)
             sentMaximal = new IntHashSet();
         if (!sentMaximal.add(to.id))
-            return false;
+            return;
 
         if (logger.isTraceEnabled())
-            logger.trace("{}: sending maximal Stable{} to {} on {}", txnId, read ? " and read" : "", to, node.id());
-        if (read) node.send(to, new StableThenRead(StableWithTxnAndDeps, to, allTopologies, txnId, txn, route, executeAt, deps), executor, this, tracing);
-        else node.send(to, new Commit(StableWithTxnAndDeps, to, allTopologies, txnId, txn, route, ballot, executeAt, deps), tracing);
-        return true;
+            logger.trace("{}: sending maximal Stable to {} on {}", txnId, to, node.id());
+        node.send(to, new Commit(StableWithTxnAndDeps, to, allTopologies, txnId, txn, route, ballot, executeAt, deps), tracing);
+    }
+
+    /**
+     * We have collected the full definition and deps; send them to any replica waiting to record the transaction as Stable
+     */
+    private void onReconstituted()
+    {
+        if (awaitingDefinition == null)
+            return;
+
+        for (IntHashSet.IntIterator it = awaitingDefinition.iterator() ; it.hasNext() ; )
+        {
+            int id = it.nextValue();
+            if (!readFrom.contains(id))
+                trySendMaximal(new Id(id));
+        }
+        awaitingDefinition = null;
     }
 
     private void mergeAndRecord(Id from, ReadOk ok)
     {
         if (ok.data != null)
             data = data == null ? ok.data : data.merge(ok.data);
+        if (awaitingDefinition != null)
+            awaitingDefinition.remove(from.id);
 
         if (txnId.is(Txn.Kind.Write) && ok.uniqueHlc > 0)
         {
@@ -335,17 +346,81 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
 
         if (txn == null && !tryReconstitute())
         {
-            // we may receive our data before the definition from the same replica if messages are reordered (the
-            // definition may be sent on a different connection), after which the definition is not delivered to us.
-            // If we must try to execute the transaction, read again once; otherwise simply abandon (as for any other failure)
-            // TODO (desired): fetch only the definition
-            boolean retry = !isRetry && (obligated || coordinatorBacklogExecutionDesignated());
+            // we may receive our data before the definition from the same replica if messages are reordered (e.g. the
+            // definition may be sent on a different connection), after which its definition is not delivered to us, as
+            // replies after the final reply are dropped; so keep our data, and fetch the definition from the replicas we
+            // read from (this is rare outside of simulation)
             if (logger.isTraceEnabled())
-                logger.trace("{}: {} backlog execution as definition incomplete: {}, {}", txnId, retry ? "retrying" : "abandoning", collectTxn, collectDeps);
-            if (retry) execute(node, route, ballot, txnId, null, executeAt, null, obligated, mayClaim, beforePersist, true, takeCallback());
-            else invokeCallback(null, NotReady.notReady(txnId, route));
+                logger.trace("{}: fetching definition, as incomplete once we have every read: {}, {}", txnId, collectTxn, collectDeps);
+            fetchDefinition();
             return;
         }
+
+        persist();
+    }
+
+    /**
+     * We have every read, but not the complete definition; fetch it from the replicas we read from, then persist
+     */
+    private void fetchDefinition()
+    {
+        fetchingDefinition = readFrom.size();
+        for (IntHashSet.IntIterator it = readFrom.iterator() ; it.hasNext() ; )
+        {
+            Id to = new Id(it.nextValue());
+            node.send(to, new CheckStatus(to, allTopologies, txnId, route, executeAt.epoch(), IncludeInfo.All, null), executor, new Callback<CheckStatusReply>()
+            {
+                @Override
+                public void onSuccess(Id from, CheckStatusReply reply)
+                {
+                    if (reply instanceof CheckStatusOkFull)
+                    {
+                        CheckStatusOkFull full = (CheckStatusOkFull) reply;
+                        if (full.partialTxn != null) collectTxn = PartialTxn.merge(collectTxn, full.partialTxn);
+                        if (full.stableDeps != null) collectDeps = collectDeps == null ? full.stableDeps : collectDeps.with(full.stableDeps);
+                    }
+                    onFetched();
+                }
+
+                @Override
+                public void onFailure(Id from, Throwable failure)
+                {
+                    onFetched();
+                }
+
+                @Override
+                public boolean onCallbackFailure(Id from, Throwable failure)
+                {
+                    node.agent().onException(failure);
+                    return true;
+                }
+            }, tracing);
+        }
+    }
+
+    private void onFetched()
+    {
+        if (fetchingDefinition <= 0)
+            return;
+
+        if (tryReconstitute())
+        {
+            fetchingDefinition = 0;
+            persist();
+        }
+        else if (--fetchingDefinition == 0)
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: abandoning backlog execution as definition incomplete: {}, {}", txnId, collectTxn, collectDeps);
+            invokeCallback(null, NotReady.notReady(txnId, route));
+        }
+    }
+
+    /**
+     * We have every read and the full definition and deps; compute our result, and persist
+     */
+    private void persist()
+    {
 
         // we have every read, so claim the transaction (if we have not already) so that the original coordinator may
         // stop its own attempt, and claim any successor we will execute next

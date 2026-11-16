@@ -209,6 +209,18 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
      */
     protected void onSetupComplete() {}
 
+    /**
+     * Invoked (while holding this object's lock) in {@link #applyInternal} for each store we will wait on that has not
+     * yet recorded the transaction as Stable
+     */
+    protected void onWaitingForStable(int storeId) {}
+
+    /**
+     * Invoked (while holding this object's lock) whenever {@code command} changes on a store we are waiting on
+     * @return a reply to send (outside of the lock), if any
+     */
+    protected @Nullable ReadReply onWaitingUpdate(int storeId, Command command) { return null; }
+
     public final @Nullable PartialTxn partialTxn()
     {
         return partialTxn;
@@ -330,8 +342,8 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     listeners.put(storeId, safeStore.register(txnId, this));
                     waitingOn.add(storeId);
                     ++waitingOnCount;
-                    if (c >= 0)
-                        onSetup(command);
+                    if (c >= 0) onSetup(command);
+                    else onWaitingForStable(storeId);
 
                     if (c < 0) safeStore.progressLog().waiting(HasStableDeps, safeStore, safeCommand, null, null, participants);
                     else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
@@ -471,12 +483,16 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             logger.trace("{}: updating as listener in response to change on {} with status {} ({})",
                          this, command.txnId(), command.status(), command);
 
-        boolean execute;
+        boolean execute = false;
+        // if non-null, we return this once we have sent any update
+        Boolean result = null;
+        ReadReply update;
         synchronized (this)
         {
             if (state != State.PENDING)
                 return false;
 
+            update = onWaitingUpdate(storeId, command);
             SaveStatus saveStatus = command.saveStatus();
             StoreAction action = actionFor(command);
             switch (action)
@@ -486,9 +502,13 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     if (flags.contains(NO_WAIT) && saveStatus.compareTo(SaveStatus.Stable) >= 0)
                     {
                         onOneSuccess(storeId, safeStore.ranges().allAt(executeAtEpoch));
-                        return false;
+                        result = false;
                     }
-                    return true;
+                    else
+                    {
+                        result = true;
+                    }
+                    break;
 
                 case OBSOLETE:
                     execute = false;
@@ -496,7 +516,10 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
 
                 case EXECUTE:
                     if (!reading.add(storeId))
-                        return true;
+                    {
+                        result = true;
+                        break;
+                    }
 
                     if (waitingOn.add(storeId))
                         ++waitingOnCount;
@@ -507,6 +530,11 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     execute = true;
             }
         }
+
+        if (update != null)
+            reply(update, null);
+        if (result != null)
+            return result;
 
         if (execute)
         {

@@ -307,7 +307,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
         if (logger.isTraceEnabled())
             logger.trace("{}: reporting applied at {}, failed at {} to {}", txnId, applied, failedAt, txnId.node);
         awaitingAck = true;
-        node.send(txnId.node, new BacklogApplied(txnId, applied, failedAt), executor, new Callback<SimpleReply>()
+        node.send(txnId.node, new BacklogApplied(txnId, applied, failedAt, SortedArrayList.empty()), executor, new Callback<SimpleReply>()
         {
             @Override
             public void onSuccess(Id from, SimpleReply reply)
@@ -548,11 +548,12 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     }
 
     /**
-     * A designated replica has reported that {@code appliedAt} have applied the transaction, and that it failed to apply
-     * it to {@code failedAt} (see {@link BacklogApplied}). We update our tracker as if we had contacted them ourselves.
+     * A designated replica has reported that {@code appliedAt} have applied the transaction, that it failed to apply it to
+     * {@code failedAt}, and that it did not send Apply to {@code unsentAt} (see {@link BacklogApplied}). We update our
+     * tracker as if we had contacted the former two ourselves, and send our Apply to the latter.
      */
     @Override
-    public void onReported(SortedArrayList<Id> appliedAt, SortedArrayList<Id> failedAt)
+    public void onReported(SortedArrayList<Id> appliedAt, SortedArrayList<Id> failedAt, SortedArrayList<Id> unsentAt)
     {
         executor.executeMaybeImmediately(() -> {
             if (deferred == null)
@@ -571,6 +572,19 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
             {
                 if (deferred.remove(id.id) && !isDone() && tracker.recordFailure(id) == RequestStatus.Failed)
                     finishOnFailure();
+            }
+
+            IntHashSet send = null;
+            for (Id id : unsentAt)
+            {
+                if (deferred.remove(id.id))
+                    (send == null ? send = new IntHashSet() : send).add(id.id);
+            }
+            if (send != null)
+            {
+                if (logger.isTraceEnabled())
+                    logger.trace("{}: sending Apply to {}, which the designated replica did not", txnId, send);
+                sendApply(send);
             }
 
             if (deferred.isEmpty())

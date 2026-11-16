@@ -20,6 +20,8 @@ package accord.messages;
 
 import javax.annotation.Nullable;
 
+import org.agrona.collections.IntHashSet;
+
 import accord.coordinate.ExecuteFlag;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Command;
@@ -43,9 +45,12 @@ import static accord.coordinate.ExecuteFlag.NO_WAIT;
  * <p>
  * With {@link ExecuteFlag#NO_WAIT}, the read is opportunistic: as soon as we encounter a store that is not ready to
  * execute we abandon the read, replying {@link ReadData.CommitOrReadNack#NotReady}; so the coordinator knows every
- * replica it reads from is ready before any data arrives. Otherwise, we wait for stores that are Stable to become
- * ready to execute (as {@link ReadTxnData}), only abandoning if a store has yet to record the transaction as Stable
- * (so that we cannot report its definition and deps).
+ * replica it reads from is ready before any data arrives. Otherwise, we wait for stores to become ready to execute
+ * (as {@link ReadTxnData}). A store that has yet to record the transaction as Stable (typically because its Stable
+ * message is still in flight) replies {@link ReadData.CommitOrReadNack#InsufficientAndWaiting}, and once it becomes
+ * Stable we send a further {@link ReadData.ReadyWithDefinition} with its definition and deps.
+ * <p>
+ * So {@link ReadData.CommitOrReadNack#NotReady} only ever means a store was not ready and we were asked not to wait.
  *
  * TODO (desired): retain the reads we have started so that we may cancel them when we abandon
  */
@@ -75,10 +80,34 @@ public class ReadTxnDataIfReady extends ReadTxnData
         super(txnId, scope, null, executeAt, executeAtEpoch, flags);
     }
 
+    // stores we are waiting on that had not yet recorded the transaction as Stable when we set up, so whose definition
+    // and deps we have not yet reported (see onWaitingUpdate); guarded by this object's lock
+    private @Nullable IntHashSet awaitingStable;
+
     @Override
     protected boolean abandonIfNotReady(Command command)
     {
-        return flags.contains(NO_WAIT) || command.saveStatus().compareTo(SaveStatus.Stable) < 0;
+        return flags.contains(NO_WAIT);
+    }
+
+    @Override
+    protected void onWaitingForStable(int storeId)
+    {
+        if (awaitingStable == null)
+            awaitingStable = new IntHashSet();
+        awaitingStable.add(storeId);
+    }
+
+    @Override
+    protected @Nullable ReadReply onWaitingUpdate(int storeId, Command command)
+    {
+        if (awaitingStable == null || command.saveStatus().compareTo(SaveStatus.Stable) < 0 || !awaitingStable.remove(storeId))
+            return null;
+
+        // this store has now recorded the transaction as Stable (e.g. its Stable message was still in flight when we set
+        // up), so report its definition and deps (before any data, which requires it to be ready to execute). Note that
+        // the coordinator may nonetheless receive this after our data, if messages are reordered (see ExecuteBacklogTxn)
+        return new ReadyWithDefinition(command.partialTxn(), command.partialDeps());
     }
 
     @Override

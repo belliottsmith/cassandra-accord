@@ -685,15 +685,14 @@ public class ExecuteTxnBacklog
                 boolean expected = isExpectedFailure(fail);
                 if (!expected) node.agent().onException(fail);
                 if (fail instanceof Redundant) return; // somebody else has executed the transaction
-                if (!expected || !coordinatorBacklogExecutionDesignated())
+                if (!coordinatorBacklogExecutionDesignated())
                     return;
-                // if we persist locally, the original coordinator executes the transaction too, and will apply it in our
-                // DC itself once its remote apply delay elapses without a report from us; so we need not try hard.
-                // But a replica we read from may not yet have recorded the transaction as Stable (as its Stable is still
-                // in flight) and, if we are collecting the definition, we could not send it the transaction ourselves
-                // (see ExecuteBacklogTxn); so retry once
-                if (!persistsLocally(node, txnId, ballot)) retryDesignated(commandStore, txnId, MAX_DESIGNATED_RETRIES);
-                else if (fail instanceof NotReady) retryDesignated(commandStore, txnId, 1);
+                if (!expected && !persistsLocally(node, txnId, ballot))
+                    return;
+                // if we persist locally, the original coordinator executes the transaction too, so rather than retry we
+                // tell it we have not applied the transaction in our DC, so that it may do so itself without waiting
+                if (persistsLocally(node, txnId, ballot)) reportUnsent(txnId, route, executeAt);
+                else retryDesignated(commandStore, txnId, MAX_DESIGNATED_RETRIES);
             });
         });
     }
@@ -762,9 +761,10 @@ public class ExecuteTxnBacklog
      * <p>
      * This is only efficient if every DC replicates every shard of the transaction. Otherwise a DC whose designated replica
      * cannot execute the transaction (e.g. because it must read a shard from another DC, whose replica has already applied
-     * it), or that has no designated replica (no replica of the home shard), receives our Apply only once our remote apply
-     * delay has elapsed without a report; and if we cannot execute the transaction ourselves (e.g. for the same reason) we
-     * tell the designated replicas (see {@link #failApplied}), which then persist it to every replica themselves.
+     * it) tells us, so that we send it our Apply at once; a DC that has no designated replica (no replica of the home shard),
+     * or whose designated replica has failed, receives our Apply only once our remote apply delay has elapsed without a
+     * report; and if we cannot execute the transaction ourselves (e.g. for the same reason) we tell the designated replicas
+     * (see {@link #failApplied}), which then persist it to every replica themselves.
      */
     public static boolean coordinatorOwnsDurability(Node node, TxnId txnId, Ballot ballot)
     {
@@ -772,12 +772,42 @@ public class ExecuteTxnBacklog
     }
 
     /**
-     * Notified (as original coordinator) of replicas that a designated replica reports have applied a transaction, or
-     * that it failed to apply it to
+     * We (as a designated replica) failed to execute {@code txnId}, which we would have persisted only to replicas in
+     * our DC; tell the original coordinator we have not sent Apply to any of them, so that it may do so itself without
+     * waiting for its remote apply delay (we always report what we know, if we can)
+     */
+    private void reportUnsent(TxnId txnId, FullRoute<?> route, Timestamp executeAt)
+    {
+        SortedArrayList<Node.Id> nearby;
+        try
+        {
+            Topologies topologies = node.topology().active().forEpoch(route, executeAt.epoch(), accord.topology.SelectShards.ALL);
+            List<Node.Id> ids = new ArrayList<>();
+            for (Node.Id id : topologies.nodes())
+            {
+                if (node.isNearby(id))
+                    ids.add(id);
+            }
+            nearby = SortedArrayList.copyUnsorted(ids, Node.Id[]::new);
+        }
+        catch (Throwable t)
+        {
+            // if we do not know the topology, the original coordinator will send its Apply once its remote apply delay elapses
+            return;
+        }
+
+        if (logger.isTraceEnabled())
+            logger.trace("{}: reporting unsent to {} to {}", txnId, nearby, txnId.node);
+        node.send(txnId.node, new BacklogApplied(txnId, SortedArrayList.empty(), SortedArrayList.empty(), nearby), null);
+    }
+
+    /**
+     * Notified (as original coordinator) of replicas that a designated replica reports have applied a transaction, that
+     * it failed to apply it to, and that it did not send Apply to
      */
     public interface AppliedListener
     {
-        void onReported(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt);
+        void onReported(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt, SortedArrayList<Node.Id> unsentAt);
     }
 
     /**
@@ -786,14 +816,15 @@ public class ExecuteTxnBacklog
      */
     private static class BufferedApplied
     {
-        final SortedArrayList<Node.Id> appliedAt, failedAt;
+        final SortedArrayList<Node.Id> appliedAt, failedAt, unsentAt;
         final List<PendingAck> acks;
         final long expiresAt;
 
-        BufferedApplied(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt, List<PendingAck> acks, long expiresAt)
+        BufferedApplied(SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt, SortedArrayList<Node.Id> unsentAt, List<PendingAck> acks, long expiresAt)
         {
             this.appliedAt = appliedAt;
             this.failedAt = failedAt;
+            this.unsentAt = unsentAt;
             this.acks = acks;
             this.expiresAt = expiresAt;
         }
@@ -847,12 +878,12 @@ public class ExecuteTxnBacklog
 
     /**
      * A designated replica {@code from} reports (to us, as original coordinator) that {@code appliedAt} have applied
-     * {@code txnId}, and that it failed to apply it to {@code failedAt}. We acknowledge the report once we know we are responsible for
+     * {@code txnId}, that it failed to apply it to {@code failedAt}, and did not send Apply to {@code unsentAt}. We acknowledge the report once we know we are responsible for
      * the transaction's durability, i.e. once we have begun to persist it. If we fail to execute the transaction we reject
      * the report, and if we never reply (e.g. because we have failed) the designated replica persists the transaction
      * more widely itself.
      */
-    public void onApplied(TxnId txnId, Node.Id from, SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt, ReplyContext replyContext)
+    public void onApplied(TxnId txnId, Node.Id from, SortedArrayList<Node.Id> appliedAt, SortedArrayList<Node.Id> failedAt, SortedArrayList<Node.Id> unsentAt, ReplyContext replyContext)
     {
         long now = node.elapsed(MICROSECONDS);
         if (appliedReports.size() >= PRUNE_ACTIVE_AT_SIZE)
@@ -866,23 +897,25 @@ public class ExecuteTxnBacklog
                 return cur;
             }
             List<PendingAck> acks = new ArrayList<>(2);
-            SortedArrayList<Node.Id> prevApplied = null, prevFailed = null;
+            SortedArrayList<Node.Id> prevApplied = null, prevFailed = null, prevUnsent = null;
             if (cur instanceof BufferedApplied && !isExpired(cur, now))
             {
                 BufferedApplied buffered = (BufferedApplied) cur;
                 prevApplied = buffered.appliedAt;
                 prevFailed = buffered.failedAt;
+                prevUnsent = buffered.unsentAt;
                 acks.addAll(buffered.acks);
             }
             acks.add(new PendingAck(from, replyContext));
-            return new BufferedApplied(SortedArrayList.union(prevApplied, appliedAt), SortedArrayList.union(prevFailed, failedAt), acks, claimExpiresAt(txnId));
+            return new BufferedApplied(SortedArrayList.union(prevApplied, appliedAt), SortedArrayList.union(prevFailed, failedAt),
+                                       SortedArrayList.union(prevUnsent, unsentAt), acks, claimExpiresAt(txnId));
         });
 
         if (logger.isTraceEnabled())
-            logger.trace("{}: {} reports applied at {}, not applied at {}{}", txnId, from, appliedAt, failedAt,
+            logger.trace("{}: {} reports applied at {}, failed at {}, unsent to {}{}", txnId, from, appliedAt, failedAt, unsentAt,
                          found[0] == null ? " (buffered)" : found[0] instanceof Resolved ? (((Resolved) found[0]).failed ? " (failed)" : " (resolved)") : "");
         if (found[0] instanceof AppliedListener)
-            ((AppliedListener) found[0]).onReported(appliedAt, failedAt);
+            ((AppliedListener) found[0]).onReported(appliedAt, failedAt, unsentAt);
         if (found[0] != null)
             reply(from, replyContext, !(found[0] instanceof Resolved) || !((Resolved) found[0]).failed);
     }
@@ -897,7 +930,7 @@ public class ExecuteTxnBacklog
         if (prev instanceof BufferedApplied && !isExpired(prev, node.elapsed(MICROSECONDS)))
         {
             BufferedApplied buffered = (BufferedApplied) prev;
-            listener.onReported(buffered.appliedAt, buffered.failedAt);
+            listener.onReported(buffered.appliedAt, buffered.failedAt, buffered.unsentAt);
             for (PendingAck ack : buffered.acks)
                 reply(ack.from, ack.replyContext, true);
         }
