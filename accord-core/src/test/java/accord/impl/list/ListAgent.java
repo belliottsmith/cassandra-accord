@@ -166,6 +166,13 @@ public class ListAgent implements InMemoryAgent, CoordinatorEventListener, Owner
     }
 
     @Override
+    public void onCommitted(SafeCommandStore safeStore, Command cmd)
+    {
+        if (executionStats != null && self != null)
+            executionStats.onReplicaEvent(self, cmd.txnId(), ExecutionStats.ReplicaEvent.COMMITTED);
+    }
+
+    @Override
     public void onReadStarted(SafeCommandStore safeStore, Command cmd)
     {
         if (executionStats != null && self != null)

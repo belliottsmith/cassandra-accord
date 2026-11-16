@@ -769,15 +769,22 @@ and `ON_RECOVERY` keep the sink-based behaviour, for comparison).
   - minimum link latencies in `links-<seed>.csv`;
   - each txn's `executeAt` and every executor.
   - Analysis: for each txn T and DC X, "ready" = max(T Stable in X, every predecessor applied in X,
-    every dependency Stable in X), and lag = first applied in X − ready.
-- **Result:** once we account for waiting for every dependency to be **committed** in X (including
-  those that execute after T), the lag per link per DC is ~2ms mean (p90 4–7ms). Execution within
+    every dependency committed in X), and lag = first applied in X − ready.
+  - Replicas wait for dependencies to be **Committed** (`CommandsForKey.notifyManaged` counts
+    undecided txns until `COMMITTED`; `WaitingOn` requires `PreCommitted`), not Stable. In burn no
+    replica ever recorded Committed before Stable (0 of 23,278 (txn, replica) pairs), as fast- and
+    medium-path coordinators send one `StableFastPath`/`StableMediumPath` message that commits and
+    stabilises together. So a dependency's Stable time at a replica is when its commit arrived.
+- **Result:** once we account for waiting for every dependency's commit to reach X (including those
+  that turn out to execute after T), the lag per link per DC is ~2ms mean (p90 4–7ms). Execution within
   a DC is now essentially optimal.
   - A lower bound on execution, from Stable arrival times and this commit-waiting, is at or above the
     observed latency.
-  - What remains is waiting for the latest dependency to become Stable: on average 97ms after the
-    txn's own Stable at its coordinator (p90 245ms), plus that Stable's trip to our DC. That matches
+  - What remains is waiting for the latest dependency to be committed: on average 97ms after the
+    txn's own Stable at its coordinator (p90 245ms), plus the commit's trip to our DC. That matches
     "adopted during Accept, ~1 RTT extra".
+  - Without `send_stable = TO_ALL` (which `DESIGNATED` forces), replicas that aren't read from may
+    receive no Stable message, so learn of a commit only from the Apply.
 - **Happy burn, DC-coherent latencies** (3 DCs, 40 seeds, mean / p99 ms / duplicate executions;
   grace 2ms). Coordination is FAST ~200ms, MEDIUM ~360ms (MEDIUM ~95% of txns under contention).
 

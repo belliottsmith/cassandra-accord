@@ -99,7 +99,7 @@ public class ExecutionStats
 
     private final ConcurrentHashMap<TxnId, Timeline> timelines = new ConcurrentHashMap<>();
 
-    public enum ReplicaEvent { STABLE, READ, APPLIED }
+    public enum ReplicaEvent { STABLE, READ, APPLIED, COMMITTED }
     // the first time each node recorded each event for each transaction (in any of its stores): [node][event] -> millis
     private final ConcurrentHashMap<TxnId, Map<Node.Id, long[]>> replicaEvents = new ConcurrentHashMap<>();
 
@@ -409,13 +409,13 @@ public class ExecutionStats
         }
         try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(file.resolveSibling(file.getFileName().toString().replace("timeline-", "replica-")))))
         {
-            out.println("txnId,node,stable,read,applied");
+            out.println("txnId,node,stable,read,applied,committed");
             for (TxnId txnId : txnIds)
             {
                 Map<Node.Id, long[]> events = replicaEvents.get(txnId);
                 if (events == null) continue;
                 for (Map.Entry<Node.Id, long[]> e : events.entrySet())
-                    out.println(txnId.toString().replace(',', ' ') + ',' + e.getKey().id + ',' + e.getValue()[0] + ',' + e.getValue()[1] + ',' + e.getValue()[2]);
+                    out.println(txnId.toString().replace(',', ' ') + ',' + e.getKey().id + ',' + e.getValue()[0] + ',' + e.getValue()[1] + ',' + e.getValue()[2] + ',' + e.getValue()[3]);
             }
         }
         try (PrintWriter out = new PrintWriter(Files.newBufferedWriter(file)))
