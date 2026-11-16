@@ -47,7 +47,8 @@ public interface MessageType
         GET_DURABLE_BEFORE_REQ, GET_DURABLE_BEFORE_RSP,
         SET_SHARD_DURABLE_REQ, SET_GLOBALLY_DURABLE_REQ,
         REMOTE_SUCCESS_REQ,
-        BACKLOG_CLAIM_REQ;
+        BACKLOG_CLAIM_REQ,
+        BACKLOG_APPLIED_REQ;
 
         private volatile Object mapToImplementation;
         public static void initialise(Map<StandardMessage, ?> mapToImplementation)

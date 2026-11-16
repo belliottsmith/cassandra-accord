@@ -505,8 +505,19 @@ public class BurnTestBase
         if (System.getProperty("accord.burn.coordinator_backlog_execution_grace_micros") != null)
             coordinatorBacklogExecutionGraceMicros = Long.getLong("accord.burn.coordinator_backlog_execution_grace_micros");
         setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionGraceMicros", coordinatorBacklogExecutionGraceMicros);
+        // a separate random source, so as not to perturb the random stream (to compare with earlier runs of the same seed)
+        RandomSource persistLocallyRandom = new DefaultRandom(currentSeed * 31 + 17);
+        boolean coordinatorBacklogExecutionPersistLocally = persistLocallyRandom.nextBoolean();
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_persist_locally") != null)
+            coordinatorBacklogExecutionPersistLocally = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_persist_locally");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionPersistLocally", coordinatorBacklogExecutionPersistLocally);
+        long coordinatorBacklogExecutionRemoteApplyDelayMillis = persistLocallyRandom.pickLong(0, 200, 500, 1000);
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_remote_apply_delay_millis") != null)
+            coordinatorBacklogExecutionRemoteApplyDelayMillis = Long.getLong("accord.burn.coordinator_backlog_execution_remote_apply_delay_millis");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionRemoteApplyDelayMicros", MILLISECONDS.toMicros(coordinatorBacklogExecutionRemoteApplyDelayMillis));
         if (coordinatorBacklogExecution == CoordinatorBacklogExecution.DESIGNATED)
-            logger.info("Designated backlog execution: {}, grace {}us", coordinatorBacklogExecutionPerDc ? "per DC" : "single", coordinatorBacklogExecutionGraceMicros);
+            logger.info("Designated backlog execution: {}, grace {}us{}", coordinatorBacklogExecutionPerDc ? "per DC" : "single", coordinatorBacklogExecutionGraceMicros,
+                        ProtocolModifiers.coordinatorBacklogExecutionPersistLocally() ? ", persist locally (remote apply delay " + coordinatorBacklogExecutionRemoteApplyDelayMillis + "ms)" : "");
         logger.info("Backlog execution: {}{}{}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "",
                     coordinatorBacklogExecutionWait ? " (waiting for ready)" : "", coordinatorBacklogExecutionLingerMillis > 0 ? " (lingering " + coordinatorBacklogExecutionLingerMillis + "ms)" : "");
         if (System.getProperty("accord.burn.send_stable") != null)
@@ -624,6 +635,8 @@ public class BurnTestBase
 
                     case Applied:
                         appliedLatencyMillis[appliedCount.getAndIncrement()] = queue.nowInMillis() - startMillis[(int)packet.replyId];
+                        if (Long.getLong("accord.burn.log_slow_millis") != null && queue.nowInMillis() - startMillis[(int)packet.replyId] >= Long.getLong("accord.burn.log_slow_millis"))
+                            logger.info("Slow reply ({}ms) to {}: {}", queue.nowInMillis() - startMillis[(int)packet.replyId], requests[(int)packet.replyId], packet);
                         executionStats.onClientReply(reply.txnId, startMillis[(int)packet.replyId], reply.responseKeys + (reply.update == null ? "" : " w" + reply.update.keySet()));
                     case RecoveryApplied:
                         replies[(int)packet.replyId] = packet;

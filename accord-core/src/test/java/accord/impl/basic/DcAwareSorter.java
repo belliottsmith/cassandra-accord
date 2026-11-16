@@ -62,6 +62,12 @@ public class DcAwareSorter implements TopologySorter
             return sameDc.test(self, node);
         }
 
+        @Override
+        public boolean areNearby(Node.Id a, Node.Id b)
+        {
+            return sameDc.test(a, b);
+        }
+
         int rank(Node.Id node)
         {
             return node.equals(self) ? 2 : isNearby(node) ? 1 : 0;

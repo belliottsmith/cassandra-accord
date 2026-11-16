@@ -20,6 +20,7 @@ package accord.coordinate;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 
 import javax.annotation.Nullable;
@@ -206,9 +207,41 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     // whether we have already deferred to a designated executor (see CoordinatorBacklogExecution#DESIGNATED), so may not again
     private boolean deferred;
 
+    // if we are responsible for the transaction's durability even if a designated replica in another DC executes it
+    // (see ExecuteTxnBacklog#coordinatorOwnsDurability), we may reply to our client on RemoteSuccess, but continue to execute
+    private final @Nullable EarlyResult earlyResult;
+
+    /**
+     * Invokes the wrapped callback at most once, so that we may reply to our client early
+     */
+    static class EarlyResult implements BiConsumer<Result, Throwable>
+    {
+        final BiConsumer<? super Result, Throwable> callback;
+        private final AtomicBoolean invoked = new AtomicBoolean();
+
+        EarlyResult(BiConsumer<? super Result, Throwable> callback)
+        {
+            this.callback = callback;
+        }
+
+        @Override
+        public void accept(Result result, Throwable failure)
+        {
+            if (invoked.compareAndSet(false, true))
+                callback.accept(result, failure);
+        }
+    }
+
     ExecuteTxn(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback)
     {
-        super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId, route, callback);
+        this(node, executor, topologies, route, ballot, path, flags, txnId, txn, executeAt, stableDeps, sendDeps, callback,
+             callback != null && ExecuteTxnBacklog.coordinatorOwnsDurability(node, txnId, ballot, topologies, executeAt, route) ? new EarlyResult(callback) : null);
+    }
+
+    private ExecuteTxn(Node node, ExclusiveAsyncExecutor executor, Topologies topologies, FullRoute<?> route, Ballot ballot, ExecutePath path, CoordinationFlags flags, TxnId txnId, Txn txn, Timestamp executeAt, Deps stableDeps, Deps sendDeps, BiConsumer<? super Result, Throwable> callback, @Nullable EarlyResult earlyResult)
+    {
+        super(node, executor, topologies.forEpoch(executeAt.epoch()), txnId, route, earlyResult != null ? earlyResult : callback);
+        this.earlyResult = earlyResult;
         if (!ballot.equals(Ballot.ZERO))
         {
             path = RECOVER;
@@ -237,11 +270,18 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
             if (result != null)
             {
                 // a backlog executor has already executed this transaction
-                onExternalSuccess(result);
-                return;
+                if (earlyResult != null)
+                {
+                    earlyResult.accept(result, null);
+                }
+                else
+                {
+                    onExternalSuccess(result);
+                    return;
+                }
             }
 
-            if (node.executeBacklogSink().consumeClaim(txnId))
+            if (earlyResult == null && node.executeBacklogSink().consumeClaim(txnId))
             {
                 // a backlog executor has told us it will execute this transaction
                 pauseForClaim();
@@ -591,8 +631,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
      */
     private boolean pauseForClaim()
     {
-        // we must not abandon the privileged coordinator fast path, as it requires we update our own state machine first
-        if (isPrivilegedVoteCommitting || !ballot.equals(Ballot.ZERO))
+        // we must not abandon the privileged coordinator fast path, as it requires we update our own state machine first;
+        // and if we are responsible for durability, we must persist the transaction ourselves
+        if (isPrivilegedVoteCommitting || !ballot.equals(Ballot.ZERO) || earlyResult != null)
             return false;
 
         BiConsumer<? super Result, Throwable> callback = tryTakeCallback();
@@ -657,6 +698,12 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     {
         if (tracing != null)
             tracing.trace(null, "Remote Success");
+        if (earlyResult != null)
+        {
+            // reply to our client, but continue to execute, as we are responsible for durability
+            executor.executeMaybeImmediately(() -> earlyResult.accept(result, null));
+            return;
+        }
         onExternalSuccess(result);
     }
 

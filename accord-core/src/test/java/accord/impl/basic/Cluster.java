@@ -151,6 +151,8 @@ public class Cluster
     {
         final Object key;
         int count;
+        // the number of messages between DCs (if there is more than one)
+        int crossDc;
 
         public Stats(Object key)
         {
@@ -158,7 +160,8 @@ public class Cluster
         }
 
         public int count() { return count; }
-        public String toString() { return key + ": " + count; }
+        public int crossDc() { return crossDc; }
+        public String toString() { return key + ": " + count + (crossDc > 0 ? " (x-DC " + crossDc + ')' : ""); }
     }
 
     public static class LinkConfig
@@ -255,7 +258,12 @@ public class Cluster
     {
         MessageType type = packet.message.type();
         if (type != null)
-            statsMap.computeIfAbsent(type, Stats::new).count++;
+        {
+            Stats stats = statsMap.computeIfAbsent(type, Stats::new);
+            stats.count++;
+            if (dcs > 1 && !sameDc(packet.src, packet.dst))
+                stats.crossDc++;
+        }
         if (trace.isTraceEnabled())
             trace.trace("{} {} {}", clock++, packet.message instanceof Reply ? "RPLY" : "SEND", packet);
         if (lookup.apply(packet.dst) == null) responseSink.accept(packet);

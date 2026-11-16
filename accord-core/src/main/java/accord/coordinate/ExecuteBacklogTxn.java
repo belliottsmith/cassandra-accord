@@ -31,6 +31,7 @@ import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Node;
 import accord.local.Node.Id;
+import accord.local.cfk.ExecuteTxnBacklog;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
@@ -315,6 +316,9 @@ public class ExecuteBacklogTxn extends ReadCoordinator<Result, ReadReply>
         Result result = txn.result(txnId, executeAt, data);
         // every replica we read from was ready to execute, so is Stable and need not be sent our deps again
         CoordinationFlags flags = CoordinationFlags.withStableSent(CoordinationFlags.none(), readFrom);
+        // if the original coordinator is responsible for durability, we need only apply the transaction in our own DC
+        if (ExecuteTxnBacklog.persistsLocally(node, txnId, ballot, allTopologies, executeAt, route))
+            flags = CoordinationFlags.withPersistNearbyOnly(flags);
         CoordinationAdapter<Result> adapter = node.coordinationAdapter(txnId, Standard);
         adapter.persist(node, executor, allTopologies, route, ballot, flags, txnId, txn, executeAt, deps, writes, result, takeCallback());
     }

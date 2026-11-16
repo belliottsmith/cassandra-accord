@@ -76,6 +76,12 @@ public interface TopologySorter
          * If unknown, return false.
          */
         default boolean isNearby(Node.Id node) { return false; }
+
+        /**
+         * @return true iff {@code a} and {@code b} are known to be near each other (e.g. in the same DC), from the
+         * perspective of this node. If unknown, return false (unless {@code a} and {@code b} are the same node).
+         */
+        default boolean areNearby(Node.Id a, Node.Id b) { return a.equals(b); }
     }
 
     interface StaticSorter extends Supplier, TopologySorter

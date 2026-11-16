@@ -105,6 +105,26 @@ public enum ExecuteFlag
         }
 
         /**
+         * @return true iff we should persist the transaction only to replicas nearby (e.g. in our DC), reporting to the
+         * original coordinator which have applied it (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()}).
+         * This is coordinator-local knowledge, and is not sent to replicas.
+         */
+        default boolean persistNearbyOnly()
+        {
+            return false;
+        }
+
+        /**
+         * @return a view of {@code flags} that additionally reports {@link #persistNearbyOnly()}
+         */
+        static CoordinationFlags withPersistNearbyOnly(CoordinationFlags flags)
+        {
+            if (flags instanceof WithStableSent)
+                return new WithStableSent(flags, ((WithStableSent) flags).stableSentTo, true);
+            return new WithStableSent(flags, new IntHashSet(), true);
+        }
+
+        /**
          * @return a view of {@code flags} that additionally reports {@code stableSentTo} via {@link #isStableSent}.
          * {@code stableSentTo} is copied, so may be safely modified afterwards.
          */
@@ -114,7 +134,7 @@ public enum ExecuteFlag
                 return flags;
             IntHashSet copy = new IntHashSet(stableSentTo.size());
             copy.addAll(stableSentTo);
-            return new WithStableSent(flags, copy);
+            return new WithStableSent(flags, copy, flags.persistNearbyOnly());
         }
 
         static CoordinationFlags none()
@@ -137,11 +157,13 @@ public enum ExecuteFlag
     {
         final CoordinationFlags wrapped;
         final IntHashSet stableSentTo;
+        final boolean persistNearbyOnly;
 
-        WithStableSent(CoordinationFlags wrapped, IntHashSet stableSentTo)
+        WithStableSent(CoordinationFlags wrapped, IntHashSet stableSentTo, boolean persistNearbyOnly)
         {
             this.wrapped = wrapped instanceof WithStableSent ? ((WithStableSent) wrapped).wrapped : wrapped;
             this.stableSentTo = stableSentTo;
+            this.persistNearbyOnly = persistNearbyOnly;
         }
 
         @Override public boolean isReadyToExecute(Node.Id node) { return wrapped.isReadyToExecute(node); }
@@ -151,11 +173,12 @@ public enum ExecuteFlag
         @Override public void add(Node.Id node, ExecuteFlags flags) { wrapped.add(node, flags); }
         @Override public ExecuteFlags get(Node.Id node) { return wrapped.get(node); }
         @Override public boolean isStableSent(Node.Id node) { return stableSentTo.contains(node.id); }
+        @Override public boolean persistNearbyOnly() { return persistNearbyOnly; }
 
         @Override
         public String toString()
         {
-            return wrapped + "{stableSentTo:" + stableSentTo + '}';
+            return wrapped + "{stableSentTo:" + stableSentTo + (persistNearbyOnly ? ", persistNearbyOnly" : "") + '}';
         }
     }
 

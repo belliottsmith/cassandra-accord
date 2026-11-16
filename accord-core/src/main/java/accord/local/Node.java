@@ -965,6 +965,17 @@ public class Node implements NodeCommandStoreService, UncaughtExceptionListener.
         return id.equals(node) || topologySorter.isNearby(node);
     }
 
+    /**
+     * @return true iff {@code a} and {@code b} are known to be near each other (e.g. in the same DC)
+     */
+    public boolean areNearby(Id a, Id b)
+    {
+        if (a.equals(b)) return true;
+        if (a.equals(id)) return isNearby(b);
+        if (b.equals(id)) return isNearby(a);
+        return topologySorter.areNearby(a, b);
+    }
+
     public boolean isCoordinatingWithBallot(TxnId txnId, Ballot ballot)
     {
         long mostRecent = coordinations.mostRecent(txnId, COORDINATES_STATE_MACHINE, ballot);

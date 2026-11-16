@@ -275,6 +275,12 @@ public class ProtocolModifiers
         private static long coordinatorBacklogExecutionLingerMicros = 0;
         public static synchronized void setCoordinatorBacklogExecutionLinger(long linger, TimeUnit units) { pre(); coordinatorBacklogExecutionLingerMicros = units.toMicros(linger); }
 
+        private static boolean coordinatorBacklogExecutionPersistLocally = false;
+        public static synchronized void setCoordinatorBacklogExecutionPersistLocally(boolean newCoordinatorBacklogExecutionPersistLocally) { pre(); coordinatorBacklogExecutionPersistLocally = newCoordinatorBacklogExecutionPersistLocally; }
+
+        private static long coordinatorBacklogExecutionRemoteApplyDelayMicros = 0;
+        public static synchronized void setCoordinatorBacklogExecutionRemoteApplyDelay(long delay, TimeUnit units) { pre(); coordinatorBacklogExecutionRemoteApplyDelayMicros = units.toMicros(delay); }
+
         private static ReplicaExecution replicaExecution = ReplicaExecution.NONE;
         public static synchronized void setReplicaExecution(ReplicaExecution newReplicaExecution) { pre(); replicaExecution = newReplicaExecution; }
 
@@ -500,6 +506,28 @@ public class ProtocolModifiers
      * we linger we will also execute transactions that their original coordinator might execute as promptly.
      */
     public static long coordinatorBacklogExecutionLinger(TimeUnit units) { return units.convert(coordinatorBacklogExecutionLingerMicros, TimeUnit.MICROSECONDS); }
+
+    private static boolean coordinatorBacklogExecutionPersistLocally = Configure.coordinatorBacklogExecutionPersistLocally;
+
+    /**
+     * With {@link CoordinatorBacklogExecution#DESIGNATED} and {@link #coordinatorBacklogExecutionPerDc()}, whether a
+     * designated replica persists a transaction it executes only to the replicas in its own DC, reporting to the
+     * original coordinator which replicas have applied it ({@link accord.messages.BacklogApplied}). The original
+     * coordinator (which also executes the transaction, in its own DC) is then responsible for the transaction's
+     * durability: it does not stop on {@link accord.messages.RemoteSuccess}, and counts reported replicas towards durability.
+     * See also {@link #coordinatorBacklogExecutionRemoteApplyDelay}.
+     * Must not be enabled until every replica understands {@link accord.messages.BacklogApplied}.
+     */
+    public static boolean coordinatorBacklogExecutionPersistLocally() { return coordinatorBacklogExecutionPersistLocally && coordinatorBacklogExecutionDesignated() && coordinatorBacklogExecutionPerDc(); }
+
+    private static long coordinatorBacklogExecutionRemoteApplyDelayMicros = Configure.coordinatorBacklogExecutionRemoteApplyDelayMicros;
+
+    /**
+     * With {@link #coordinatorBacklogExecutionPersistLocally()}, how long an original coordinator waits for designated
+     * replicas in other DCs to report they have applied a transaction before sending its own Apply to the replicas that
+     * have not. If zero, the original coordinator sends Apply to every replica immediately (as it would otherwise).
+     */
+    public static long coordinatorBacklogExecutionRemoteApplyDelay(TimeUnit units) { return coordinatorBacklogExecutionPersistLocally() ? units.convert(coordinatorBacklogExecutionRemoteApplyDelayMicros, TimeUnit.MICROSECONDS) : 0; }
 
     private static final boolean permitCoordinatorLocalExecution = Configure.permitCoordinatorLocalExecution;
     public static boolean permitCoordinatorLocalExecution() { return permitCoordinatorLocalExecution; }

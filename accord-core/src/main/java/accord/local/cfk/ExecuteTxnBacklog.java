@@ -18,7 +18,10 @@
 
 package accord.local.cfk;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
 
 import org.slf4j.Logger;
@@ -33,6 +36,7 @@ import accord.api.RoutingKey;
 import accord.api.Timeouts;
 import accord.coordinate.Coordination.CoordinationKind;
 import accord.coordinate.ExecuteBacklogTxn;
+import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.TinyEnumSet;
 import accord.coordinate.Exhausted;
 import accord.coordinate.ExecuteTxn;
@@ -47,6 +51,8 @@ import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.messages.BacklogClaim;
+import accord.messages.ReplyContext;
+import accord.messages.SimpleReply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -59,6 +65,7 @@ import accord.primitives.Timestamp;
 import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
+import accord.topology.Topologies;
 import accord.topology.Topology;
 
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
@@ -70,6 +77,7 @@ import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionWait;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionDesignated;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionGrace;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionPerDc;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionPersistLocally;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
 import static accord.coordinate.Coordination.CoordinationKind.MaybeRecover;
@@ -133,6 +141,13 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * We yield to a transaction's original coordinator if it is nearby (see {@link Node#isNearby}) and plausibly still
  * coordinating the transaction, as it will receive its replies about as promptly as we would. If it is expected to
  * continue the backlog behind the transaction itself, we also stop listening to the key.
+ * <p>
+ * With {@link ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()}, a designated replica persists the
+ * transactions it executes only to the replicas in its DC, and reports to the original coordinator which have applied
+ * them ({@link accord.messages.BacklogApplied}). The original coordinator remains responsible for durability: it
+ * executes the transaction itself, and defers its Apply to remote replicas
+ * (see {@link ProtocolModifiers#coordinatorBacklogExecutionRemoteApplyDelay}), sending it only to those not reported
+ * to have applied the transaction. The original coordinator side of this protocol is also implemented here.
  */
 public class ExecuteTxnBacklog
 {
@@ -452,7 +467,8 @@ public class ExecuteTxnBacklog
         }
 
         CommandStore commandStore = safeStore.commandStore();
-        long grace = onStable ? coordinatorBacklogExecutionGrace(MICROSECONDS) : 0;
+        // if we persist locally, we are responsible for applying the transaction in our DC, so do not wait for its coordinator
+        long grace = onStable && !coordinatorBacklogExecutionPersistLocally() ? coordinatorBacklogExecutionGrace(MICROSECONDS) : 0;
         if (logger.isTraceEnabled())
             logger.trace("{}: designated to execute on {}{}", txnId, node.id(), grace > 0 ? " after grace" : "");
         if (grace <= 0) execute(commandStore, txnId, null);
@@ -689,6 +705,221 @@ public class ExecuteTxnBacklog
         // if we wait for replicas to become ready, we may time out (e.g. if they are waiting on a slow predecessor)
         // or run out of replicas to try (e.g. if none has yet recorded the transaction as Stable)
         return (coordinatorBacklogExecutionWait() || coordinatorBacklogExecutionDesignated() || coordinatorBacklogExecutionClaims()) && (fail instanceof Timeout || fail instanceof Exhausted);
+    }
+
+    /*
+     * Persisting locally (see ProtocolModifiers#coordinatorBacklogExecutionPersistLocally)
+     */
+
+    /**
+     * @return true iff we (as a designated replica) should persist {@code txnId} only to replicas in our DC, reporting to
+     * its original coordinator which have applied it, as the original coordinator is responsible for its durability
+     * (see {@link #coordinatorOwnsDurability})
+     */
+    public static boolean persistsLocally(Node node, TxnId txnId, Ballot ballot, Topologies topologies, Timestamp executeAt, Route<?> route)
+    {
+        return coordinatorBacklogExecutionPersistLocally() && ballot.equals(Ballot.ZERO) && mayExecute(txnId) && !node.isNearby(txnId.node)
+               && nearbyReplicatesAll(node, txnId.node, executesIn(topologies, executeAt), route);
+    }
+
+    /**
+     * @return true iff we (as original coordinator of {@code txnId}) are responsible for its durability, even if a
+     * designated replica in another DC executes it first (see {@link ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()}),
+     * so must not stop executing the transaction on {@link accord.messages.RemoteSuccess}. This requires that our DC
+     * replicates every shard of the transaction, so that we may read everything we need nearby (if we read from a
+     * replica in another DC, it may already have applied the transaction, and so be unable to serve our read).
+     * Designated replicas make the same decision, so if we are not responsible for durability they persist globally.
+     */
+    public static boolean coordinatorOwnsDurability(Node node, TxnId txnId, Ballot ballot, Topologies topologies, Timestamp executeAt, Route<?> route)
+    {
+        return coordinatorBacklogExecutionPersistLocally() && ballot.equals(Ballot.ZERO) && mayExecute(txnId) && txnId.node.equals(node.id())
+               && nearbyReplicatesAll(node, node.id(), executesIn(topologies, executeAt), route);
+    }
+
+    /**
+     * @return true iff (as original coordinator) we may defer sending Apply to {@code to}, i.e. it is in another DC
+     * that replicates every shard of the transaction, so that a designated replica there will execute the transaction
+     * and persist it locally
+     */
+    public static boolean mayDeferApplyTo(Node node, Node.Id to, Topologies topologies, Timestamp executeAt, Route<?> route)
+    {
+        return !node.isNearby(to) && nearbyReplicatesAll(node, to, executesIn(topologies, executeAt), route);
+    }
+
+    private static Topology executesIn(Topologies topologies, Timestamp executeAt)
+    {
+        long epoch = executeAt.epoch();
+        return topologies.containsEpoch(epoch) ? topologies.getEpoch(epoch) : topologies.current();
+    }
+
+    /**
+     * @return true iff the nodes near {@code of} (e.g. in its DC) replicate every shard of {@code topology} that intersects {@code route}
+     */
+    public static boolean nearbyReplicatesAll(Node node, Node.Id of, Topology topology, Route<?> route)
+    {
+        for (int i = 0, size = topology.size() ; i < size ; ++i)
+        {
+            accord.topology.Shard shard = topology.get(i);
+            if (!route.intersects(shard.range))
+                continue;
+
+            boolean found = false;
+            for (int j = 0, jsize = shard.nodes.size() ; !found && j < jsize ; ++j)
+                found = node.areNearby(of, shard.nodes.get(j));
+            if (!found)
+                return false;
+        }
+        return true;
+    }
+
+    /**
+     * Notified (as original coordinator) of replicas that a designated replica reports have applied a transaction
+     */
+    public interface AppliedListener
+    {
+        void onReportedApplied(SortedArrayList<Node.Id> appliedAt);
+    }
+
+    /**
+     * Reports received before any listener registered (i.e. before we began to persist the transaction), together
+     * with the acknowledgements we owe their senders once we know we are responsible for the transaction's durability
+     */
+    private static class BufferedApplied
+    {
+        final SortedArrayList<Node.Id> appliedAt;
+        final List<PendingAck> acks;
+        final long expiresAt;
+
+        BufferedApplied(SortedArrayList<Node.Id> appliedAt, List<PendingAck> acks, long expiresAt)
+        {
+            this.appliedAt = appliedAt;
+            this.acks = acks;
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    private static class PendingAck
+    {
+        final Node.Id from;
+        final ReplyContext replyContext;
+
+        PendingAck(Node.Id from, ReplyContext replyContext)
+        {
+            this.from = from;
+            this.replyContext = replyContext;
+        }
+    }
+
+    /**
+     * We have finished deferring Apply for a transaction (so need no further reports), but should still acknowledge
+     * any reports we receive, as we remain responsible for its durability
+     */
+    private static class Resolved
+    {
+        final long expiresAt;
+
+        Resolved(long expiresAt)
+        {
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    // for each transaction we coordinate (and are responsible for the durability of), either: the AppliedListener
+    // awaiting reports that replicas have applied it; the BufferedApplied reports we have received before any listener
+    // registered; or Resolved once we no longer need reports
+    private final ConcurrentHashMap<TxnId, Object> appliedReports = new ConcurrentHashMap<>();
+
+    private static boolean isExpired(Object entry, long now)
+    {
+        if (entry instanceof BufferedApplied) return ((BufferedApplied) entry).expiresAt <= now;
+        if (entry instanceof Resolved) return ((Resolved) entry).expiresAt <= now;
+        return false;
+    }
+
+    private void ack(Node.Id to, ReplyContext replyContext)
+    {
+        node.reply(to, replyContext, SimpleReply.Ok, null, null);
+    }
+
+    /**
+     * A designated replica {@code from} reports (to us, as original coordinator) that {@code appliedAt} have applied
+     * {@code txnId}. We acknowledge the report once we know we are responsible for the transaction's durability, i.e.
+     * once we have begun to persist it; if we never do (e.g. because our own execution failed), the designated replica
+     * will persist the transaction more widely itself.
+     */
+    public void onApplied(TxnId txnId, Node.Id from, SortedArrayList<Node.Id> appliedAt, ReplyContext replyContext)
+    {
+        long now = node.elapsed(MICROSECONDS);
+        if (appliedReports.size() >= PRUNE_ACTIVE_AT_SIZE)
+            appliedReports.values().removeIf(v -> isExpired(v, now));
+
+        Object[] found = new Object[1];
+        appliedReports.compute(txnId, (id, cur) -> {
+            if (cur instanceof AppliedListener || (cur instanceof Resolved && !isExpired(cur, now)))
+            {
+                found[0] = cur;
+                return cur;
+            }
+            List<PendingAck> acks = new ArrayList<>(2);
+            SortedArrayList<Node.Id> prev = null;
+            if (cur instanceof BufferedApplied && !isExpired(cur, now))
+            {
+                prev = ((BufferedApplied) cur).appliedAt;
+                acks.addAll(((BufferedApplied) cur).acks);
+            }
+            acks.add(new PendingAck(from, replyContext));
+            return new BufferedApplied(SortedArrayList.union(prev, appliedAt), acks, claimExpiresAt(txnId));
+        });
+
+        if (logger.isTraceEnabled())
+            logger.trace("{}: {} reports applied at {}{}", txnId, from, appliedAt, found[0] == null ? " (buffered)" : found[0] instanceof Resolved ? " (resolved)" : "");
+        if (found[0] instanceof AppliedListener)
+            ((AppliedListener) found[0]).onReportedApplied(appliedAt);
+        if (found[0] != null)
+            ack(from, replyContext);
+    }
+
+    /**
+     * Register to receive reports that replicas have applied {@code txnId}, including any we have already received,
+     * as we are responsible for its durability and are deferring Apply to remote replicas
+     */
+    public void registerAppliedListener(TxnId txnId, AppliedListener listener)
+    {
+        Object prev = appliedReports.put(txnId, listener);
+        if (prev instanceof BufferedApplied && !isExpired(prev, node.elapsed(MICROSECONDS)))
+        {
+            BufferedApplied buffered = (BufferedApplied) prev;
+            listener.onReportedApplied(buffered.appliedAt);
+            for (PendingAck ack : buffered.acks)
+                ack(ack.from, ack.replyContext);
+        }
+    }
+
+    /**
+     * We are responsible for the durability of {@code txnId}, and have contacted (or will contact) every replica not
+     * reported to have applied it; acknowledge any further reports
+     * @param listener the listener we registered, if any
+     */
+    public void resolveApplied(TxnId txnId, @Nullable AppliedListener listener)
+    {
+        Resolved resolved = new Resolved(claimExpiresAt(txnId));
+        Object prev;
+        if (listener != null)
+        {
+            if (!appliedReports.replace(txnId, listener, resolved))
+                return;
+            prev = listener;
+        }
+        else
+        {
+            prev = appliedReports.put(txnId, resolved);
+        }
+
+        if (prev instanceof BufferedApplied)
+        {
+            for (PendingAck ack : ((BufferedApplied) prev).acks)
+                ack(ack.from, ack.replyContext);
+        }
     }
 
     /*

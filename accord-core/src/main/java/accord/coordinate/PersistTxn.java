@@ -40,4 +40,10 @@ public class PersistTxn extends Persist
     {
         super(node, executor, topologies, txnId, ballot, sendTo, txn, executeAt, deps, writes, result, route, flags, informDurableOnDone, factory, applyKind);
     }
+
+    @Override
+    protected boolean mayDeferRemote()
+    {
+        return true;
+    }
 }

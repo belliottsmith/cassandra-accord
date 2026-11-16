@@ -18,13 +18,20 @@
 
 package accord.coordinate;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
 import javax.annotation.Nullable;
 
+import org.agrona.collections.IntHashSet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import accord.api.Result.PersistableResult;
+import accord.api.Scheduler;
 import accord.api.TopologySorter.NodeStatus;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.coordinate.tracking.AbstractTracker;
@@ -37,7 +44,11 @@ import accord.api.ExclusiveAsyncExecutor;
 import accord.api.ProtocolModifiers.Faults;
 import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
+import accord.local.cfk.ExecuteTxnBacklog;
+import accord.messages.BacklogApplied;
+import accord.messages.Callback;
 import accord.messages.InformDurable;
+import accord.messages.SimpleReply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -49,18 +60,24 @@ import accord.primitives.Writes;
 import accord.topology.Topologies;
 import accord.topology.TopologyException;
 import accord.utils.Invariants;
+import accord.utils.SortedArrays.SortedArrayList;
 
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionRemoteApplyDelay;
 import static accord.api.ProtocolModifiers.sendMinimalNoDeps;
 import static accord.api.TopologySorter.NodeStatus.HEALTHY;
+import static accord.api.TopologySorter.NodeStatus.UNAVAILABLE;
 import static accord.coordinate.tracking.RequestStatus.Success;
 import static accord.messages.Apply.Kind.Maximal;
 import static accord.messages.Apply.Kind.Minimal;
 import static accord.messages.Apply.Kind.NoDeps;
 import static accord.primitives.Status.Durability.AllQuorums;
 import static accord.topology.SelectShards.ALL;
+import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
-public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, ApplyReply, Void>
+public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, ApplyReply, Void> implements ExecuteTxnBacklog.AppliedListener
 {
+    private static final Logger logger = LoggerFactory.getLogger(Persist.class);
+
     protected final Ballot ballot;
     protected final Route<?> sendTo;
     protected final Txn txn;
@@ -74,6 +91,26 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     protected final Apply.Factory factory;
     protected final Apply.Kind applyKind;
     protected final boolean informDurableOnDone;
+
+    /*
+     * Persisting only to nearby replicas (see CoordinationFlags#persistNearbyOnly)
+     */
+    // whether we are (still) persisting only to nearby replicas
+    private boolean nearbyOnly;
+    // the number of nearby replicas we await a reply from
+    private int awaitingNearby;
+    // whether we await the original coordinator's acknowledgement of our report (see BacklogApplied)
+    private boolean awaitingAck;
+    // the nearby replicas that have (or have not) applied the transaction
+    private @Nullable List<Id> appliedNearby, failedNearby;
+
+    /*
+     * Deferring Apply to remote replicas (see ProtocolModifiers#coordinatorBacklogExecutionRemoteApplyDelay)
+     */
+    // the remote replicas we have not sent Apply (as we expect a designated replica in their DC to apply the transaction
+    // and report it to us), and have not been reported to have applied it; only accessed by our executor
+    private @Nullable IntHashSet deferred;
+    private @Nullable Scheduler.Scheduled sendDeferred;
 
     protected Persist(Node node, ExclusiveAsyncExecutor executor, Topologies all, TxnId txnId, Ballot ballot, Route<?> sendTo, Txn txn, Timestamp executeAt, Deps stableDeps, Writes writes, PersistableResult result, FullRoute<?> route, CoordinationFlags flags, boolean informDurableOnDone, Apply.Factory factory, Apply.Kind applyKind)
     {
@@ -95,6 +132,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
         this.factory = factory;
         this.informDurableOnDone = informDurableOnDone;
         this.applyKind = applyKind;
+        this.nearbyOnly = flags.persistNearbyOnly();
         Invariants.require((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
     }
 
@@ -106,17 +144,15 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
             default: throw new IllegalStateException();
             case Redundant:
             case Applied:
-                if (tracker.recordSuccess(from) == Success)
-                {
-                    // note: we enter this branch whether or not sendTo == route,
-                    // since we should only invoke Persist with sendTo != route when the remainder of the route is already persisted and truncated
-                    // but we make this explicit for the caller with informDurableOnDone
-                    finishWithSuccess(null);
-                    if (informDurableOnDone)
-                        InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, stableDeps, AllQuorums, tracing);
-                }
+                if (nearbyOnly) onNearbyReply(from, true);
+                else recordApplied(from);
                 break;
             case RaceWithRecovery:
+                if (nearbyOnly)
+                {
+                    onNearbyReply(from, false);
+                    break;
+                }
                 // don't count this towards durability; otherwise it is possible (though very unlikely)
                 // for InformDurable to reach a replica, the CommandsForKey to prune this transaction as durably applied
                 // and some superseding transaction to be coordinated and not witness it before the in-progress recovery
@@ -143,10 +179,263 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     @Override
     public void onFailureInternal(Id from, int fromIndex, Throwable failure)
     {
+        if (nearbyOnly)
+        {
+            onNearbyReply(from, false);
+            return;
+        }
+
         // TODO (desired, consider): send knowledge of partial persistence?
         // TODO (expected): we should presumably report total request failure somewhere?
         if (tracker.recordFailure(from) == RequestStatus.Failed)
             finishOnFailure();
+    }
+
+    private void recordApplied(Id from)
+    {
+        if (tracker.recordSuccess(from) == Success)
+        {
+            // note: we enter this branch whether or not sendTo == route,
+            // since we should only invoke Persist with sendTo != route when the remainder of the route is already persisted and truncated
+            // but we make this explicit for the caller with informDurableOnDone
+            finishWithSuccess(null);
+            if (informDurableOnDone)
+                InformDurable.informDefault(node, tracker.topologies(), txnId, scope, ballot, executeAt, stableDeps, AllQuorums, tracing);
+        }
+    }
+
+    /*
+     * Persisting only to nearby replicas, on behalf of an original coordinator that is responsible for durability
+     * (see ProtocolModifiers#coordinatorBacklogExecutionPersistLocally)
+     */
+
+    private void contactNearby()
+    {
+        Topologies topologies = tracker.topologies();
+        appliedNearby = new ArrayList<>();
+        failedNearby = new ArrayList<>();
+        for (Id to : nodes())
+        {
+            if (!node.isNearby(to))
+                continue;
+            // see AbstractCoordination.contact: we do not contact UNAVAILABLE replicas (except ourselves)
+            if (topologies.status(to) != UNAVAILABLE || to.equals(node.id()))
+                ++awaitingNearby;
+        }
+
+        // note: UNAVAILABLE replicas are recorded as failures (without being contacted)
+        contact(node::isNearby);
+        if (awaitingNearby == 0)
+            finishNearby();
+    }
+
+    private void onNearbyReply(Id from, boolean applied)
+    {
+        if (applied) appliedNearby.add(from);
+        else failedNearby.add(from);
+        if (--awaitingNearby == 0)
+            finishNearby();
+    }
+
+    /**
+     * We have heard from every nearby replica; tell the original coordinator which have applied the transaction.
+     * If it does not acknowledge our report (e.g. because it has failed, or failed to execute the transaction itself),
+     * we persist the transaction to every other replica ourselves.
+     * TODO (desired): report sooner (e.g. once a quorum of nearby replicas have replied)
+     */
+    private void finishNearby()
+    {
+        if (isDone())
+            return;
+
+        if (appliedNearby.isEmpty())
+        {
+            persistGlobally("no nearby replica applied");
+            return;
+        }
+
+        SortedArrayList<Id> applied = SortedArrayList.copyUnsorted(appliedNearby, Id[]::new);
+        if (logger.isTraceEnabled())
+            logger.trace("{}: reporting applied at {} to {}", txnId, applied, txnId.node);
+        awaitingAck = true;
+        node.send(txnId.node, new BacklogApplied(txnId, applied), executor, new Callback<SimpleReply>()
+        {
+            @Override
+            public void onSuccess(Id from, SimpleReply reply)
+            {
+                awaitingAck = false;
+                if (isDone()) return;
+                if (reply == SimpleReply.Ok) finishWithSuccess(null);
+                else persistGlobally("coordinator replied " + reply);
+            }
+
+            @Override
+            public void onFailure(Id from, @Nullable Throwable failure)
+            {
+                awaitingAck = false;
+                if (!isDone())
+                    persistGlobally(failure == null ? "coordinator did not acknowledge" : "coordinator failed: " + failure);
+            }
+
+            @Override
+            public boolean onCallbackFailure(Id from, Throwable failure)
+            {
+                node.agent().onException(failure);
+                return true;
+            }
+        }, tracing);
+    }
+
+    /**
+     * The original coordinator has not taken responsibility for durability, so persist to every other replica ourselves
+     */
+    private void persistGlobally(String reason)
+    {
+        if (logger.isTraceEnabled())
+            logger.trace("{}: persisting globally as {}", txnId, reason);
+        nearbyOnly = false;
+        for (Id id : appliedNearby)
+        {
+            if (isDone()) return;
+            recordApplied(id);
+        }
+        for (Id id : failedNearby)
+        {
+            if (isDone()) return;
+            if (tracker.recordFailure(id) == RequestStatus.Failed)
+                finishOnFailure();
+        }
+        if (!isDone())
+            contact(to -> !node.isNearby(to));
+    }
+
+    /*
+     * Deferring Apply to remote replicas, as original coordinator (see ProtocolModifiers#coordinatorBacklogExecutionRemoteApplyDelay)
+     */
+
+    /**
+     * @return true iff we may defer sending Apply to remote replicas, as designated replicas in their DCs are expected
+     * to execute the transaction, persist it locally, and report to us (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()})
+     */
+    protected boolean mayDeferRemote()
+    {
+        return false;
+    }
+
+    /**
+     * @return true iff we are responsible for the transaction's durability (as original coordinator, see
+     * {@link ExecuteTxnBacklog#coordinatorOwnsDurability}), in which case we have contacted every replica we have not
+     * deferred sending Apply to
+     */
+    private boolean tryDeferRemote()
+    {
+        if (!mayDeferRemote() || !informDurableOnDone || !sendTo.equals(scope))
+            return false;
+
+        Topologies topologies = tracker.topologies();
+        if (!ExecuteTxnBacklog.coordinatorOwnsDurability(node, txnId, ballot, topologies, executeAt, scope))
+            return false;
+
+        long delay = coordinatorBacklogExecutionRemoteApplyDelay(MICROSECONDS);
+        IntHashSet deferred = new IntHashSet();
+        if (delay > 0)
+        {
+            for (Id to : nodes())
+            {
+                if (ExecuteTxnBacklog.mayDeferApplyTo(node, to, topologies, executeAt, scope))
+                    deferred.add(to.id);
+            }
+        }
+
+        if (deferred.isEmpty())
+        {
+            // we contact every replica ourselves, but acknowledge any reports, as we are responsible for durability
+            contact();
+            node.executeBacklogSink().resolveApplied(txnId, null);
+            return true;
+        }
+
+        this.deferred = deferred;
+        contact(to -> !deferred.contains(to.id));
+        if (logger.isTraceEnabled())
+            logger.trace("{}: deferring Apply to {} for {}us", txnId, deferred, delay);
+        node.executeBacklogSink().registerAppliedListener(txnId, this);
+        if (this.deferred != null)
+            sendDeferred = node.scheduler().once(() -> executor.execute(this::sendDeferred), delay, MICROSECONDS);
+        return true;
+    }
+
+    /**
+     * A designated replica has reported that {@code appliedAt} have applied the transaction (see {@link BacklogApplied})
+     */
+    @Override
+    public void onReportedApplied(SortedArrayList<Id> appliedAt)
+    {
+        executor.executeMaybeImmediately(() -> {
+            if (deferred == null)
+                return;
+
+            for (Id id : appliedAt)
+            {
+                if (deferred.remove(id.id) && !isDone())
+                    recordApplied(id);
+            }
+
+            if (deferred.isEmpty())
+            {
+                if (logger.isTraceEnabled())
+                    logger.trace("{}: every deferred Apply reported applied", txnId);
+                deferred = null;
+                if (sendDeferred != null)
+                    sendDeferred.cancel();
+                sendDeferred = null;
+                node.executeBacklogSink().resolveApplied(txnId, this);
+            }
+        });
+    }
+
+    @Override
+    protected boolean awaitsExternal()
+    {
+        return deferred != null || awaitingAck;
+    }
+
+    /**
+     * We have waited long enough for designated replicas to report they have applied the transaction; send Apply to
+     * the remote replicas that have not
+     */
+    private void sendDeferred()
+    {
+        sendDeferred = null;
+        IntHashSet send = deferred;
+        if (send == null)
+            return;
+
+        deferred = null;
+        node.executeBacklogSink().resolveApplied(txnId, this);
+        if (logger.isTraceEnabled())
+            logger.trace("{}: sending deferred Apply to {}{}", txnId, send, isDone() ? " after done" : "");
+        if (!isDone())
+        {
+            contact(to -> send.contains(to.id));
+        }
+        else
+        {
+            // we have already achieved durability, so do not await replies
+            Topologies topologies = tracker.topologies();
+            for (Id to : nodes())
+            {
+                if (!send.contains(to.id))
+                    continue;
+                NodeStatus status = topologies.status(to);
+                if (status == UNAVAILABLE)
+                    continue;
+                // we will not see an Insufficient reply, so do not assume the replica has our deps
+                Apply.Kind kind = applyKind(to, status);
+                if (kind == NoDeps) kind = Minimal;
+                node.send(to, factory.create(kind, to, topologies, txnId, ballot, sendTo, txn, executeAt, stableDeps, writes, result, scope, flags.get(to)), tracing);
+            }
+        }
     }
 
     private Apply.Kind applyKind(Node.Id to, NodeStatus nodeStatus)
@@ -163,7 +452,8 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     {
         node.agent().coordinatorEvents().onExecuted(txnId, ballot);
         super.start();
-        contact();
+        if (nearbyOnly) contactNearby();
+        else if (!tryDeferRemote()) contact();
     }
 
     void contact()

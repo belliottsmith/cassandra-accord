@@ -346,6 +346,15 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         return true;
     }
 
+    /**
+     * @return true iff we may yet make progress without any further replies to our requests, e.g. because we have
+     * deferred some requests, or await some external notification
+     */
+    protected boolean awaitsExternal()
+    {
+        return false;
+    }
+
     @Override
     public void onSuccessExclusive(Node.Id from, Reply reply)
     {
@@ -354,7 +363,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
             return;
 
         onSuccessInternal(from, fromIndex, reply);
-        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone(), "%s", this);
+        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone() || awaitsExternal(), "%s", this);
     }
 
     @Override
@@ -382,7 +391,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         }
 
         onFailureInternal(from, fromIndex, failure);
-        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone(), "%s", this);
+        Invariants.require(!expectingReply.isEmpty() || isFinishing() || isDone() || awaitsExternal(), "%s", this);
     }
 
     private int onReply(Node.Id from, Object reply, boolean isFinal)

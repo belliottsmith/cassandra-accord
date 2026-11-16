@@ -19,7 +19,10 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped
 | `b0381f8d` | `eb2ee1f006e` | Phase 1b: `ReadTxnDataIfReady` + `ExecuteBacklogTxn` (definition collected from replicas) |
 | `af8c309a` | `b8cdf65ce86` | Phase 2a: `BacklogClaim`, pause/resume at the original coordinator |
 | `e464ddbf` | `1e1166b2ca9` | Phase 2b: locality hook, yield to nearby coordinators, burn DCs, burn latency stats |
-| branch HEAD | branch HEAD | burn `isSlowCoordinator`, `HappyBurnTest` (happy, 3 DCs, 80 seeds: 0 lost, p50 ≈ 0.5s, p99 ≈ 60s) |
+| `afb04977`…`cca93ffc` | `c2c7d517261`…`2215b5aeab3` | burn `isSlowCoordinator`, `HappyBurnTest`, contended workloads, chain measurement, timelines |
+| `f0820a0f` | `0be15692c71` | Phase 2c: follow the chain onto every key; wait; linger |
+| `8bdd38f6`…`8caddd67` | `95300afea03`…`ec4e79d5957` | Phase 2d: `DESIGNATED` (single / per DC), grace, retries; DC-coherent happy latencies; per-DC analysis |
+| branch HEAD | branch HEAD | Phase 2e: per-DC executors persist locally; the original coordinator owns durability (`BacklogApplied`) |
 
 A standalone patch for the `ReadData` sliced-definition bug is in the Cassandra root
 (`accord-readdata-sliced-definition.patch`), applicable to unmodified `fc4a7698`.
@@ -31,7 +34,11 @@ A standalone patch for the `ReadData` sliced-definition bug is in the Cassandra 
 - `accord.messages.ReadTxnDataIfReady`, `ReadData.ReadyWithDefinition`, `CommitOrReadNack.NotReady`.
 - `accord.messages.BacklogClaim`; `ExecuteTxn.onClaimed`/`Paused`.
 - `Apply.Kind.NoDeps`; `CoordinationFlags.withStableSent`.
-- `TopologySorter.Supplier.isNearby`.
+- `TopologySorter.Supplier.isNearby`, `areNearby`.
+- Phase 2e: `accord.messages.BacklogApplied`; `Persist` (`contactNearby`/`finishNearby`/`persistGlobally`
+  on the executor, `tryDeferRemote`/`sendDeferred` on the coordinator); `CoordinationFlags.persistNearbyOnly`;
+  `ExecuteTxn.EarlyResult`; `ExecuteTxnBacklog.coordinatorOwnsDurability`/`persistsLocally` and the
+  `appliedReports` bookkeeping.
 
 Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnTest`.
 
@@ -44,20 +51,29 @@ Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnT
 - `coordinator_backlog_execution_linger` (Phase 2c; keep listening on a key after catching up)
 - `coordinator_backlog_execution: DESIGNATED`, `coordinator_backlog_execution_per_dc`,
   `coordinator_backlog_execution_grace` (Phase 2d)
+- `coordinator_backlog_execution_persist_locally` (new message), `coordinator_backlog_execution_remote_apply_delay`
+  (Phase 2e; with `DESIGNATED` and `per_dc`)
 - `send_minimal: MINIMAL_NO_DEPS` (new encoding)
 
 The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `BacklogClaim`,
-`Apply.Kind.NoDeps`) are only sent when the corresponding option is enabled; no serialization
-version bump.
+`BacklogApplied`, `Apply.Kind.NoDeps`) are only sent when the corresponding option is enabled; no
+serialization version bump.
 
-**Next steps, in priority order (updated after Phase 2c):**
-0. Per-DC designated execution is at the execution lower bound (Phase 2d, "Per-DC analysis").
-   **Make single-DC designated execution competitive** (Phase 2d). It is correct and nearly
+**Next steps, in priority order (updated after Phase 2e):**
+0. [x] **Make per-DC execution cheap** (Phase 2e). Per-DC executors now apply only within their own DC
+   and report to the original coordinator, which owns durability. Latency stays at the per-DC level
+   (within ~1%), while cross-DC messages fall ~40% below per-DC and 10–20% *below* `DISABLED`, and
+   cross-DC Applies fall ~97%. The extra cost is local: every DC executes every eligible txn
+   (~1.45 extra executions per txn, with local reads and local Applies).
+   Phase 2e follow-ups: one Apply per remote DC (relayed within the DC) for the coordinator's
+   fallback; earlier reports; a `BacklogApplied` metric; a cheaper rule for DCs that don't replicate
+   everything (see Phase 2e).
+1. **Make single-DC designated execution competitive** (Phase 2d). It is correct and nearly
    duplicate-free, but with a static per-key DC it gains only 2–20%, whereas per-DC execution gains
-   24–45% at ~0.8 extra executions per txn. Next: "follow the predecessor" (see the options in
-   Phase 2d). Keep per-DC as the opt-in for latency-first deployments (e.g. benchmarks); it does more
-   total work, so it shouldn't be the default.
-1. **Evaluate in a real multi-DC environment.** Burn can't establish efficacy: it has high fault and
+   24–45%. Next: "follow the predecessor" (see the options in Phase 2d), with claim-ahead to trigger
+   deferral (see "How this fits single-DC execution" in Phase 2e). Single-DC execution is now
+   mostly attractive if local reads/execution are the scarce resource rather than WAN bandwidth.
+1b. **Evaluate in a real multi-DC environment.** Burn can't establish efficacy: it has high fault and
    recovery rates and synthetic latencies. Measure client latency, duplicate executions (coordinator
    vs backlog executor vs recovery), `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, and claim
    outcomes (paused / completed / resumed). Add metrics for these first (§6, Phase 2b follow-ups).
@@ -833,6 +849,131 @@ and `ON_RECOVERY` keep the sink-based behaviour, for comparison).
 - **Retire sinks** (`ALWAYS`, `ON_RECOVERY`) once designated execution subsumes them, including
   recovery: e.g. take over txns whose coordinator looks slow.
 
+### Phase 2e: Per-DC execution with coordinator-owned durability (done; prototype)
+Goal: keep per-DC latency, but stop paying for it in WAN traffic. In Phase 2d per-DC mode every DC's
+executor, and the original coordinator, each send `Apply` (with writes) to every replica in every DC:
+cross-DC messages were ~1.4× `DISABLED`, and cross-DC Applies ~2.4×.
+
+Behind `ProtocolModifiers.coordinatorBacklogExecutionPersistLocally()` (only with `DESIGNATED` and
+`per_dc`; Cassandra `accord.coordinator_backlog_execution_persist_locally`, default off), plus
+`coordinatorBacklogExecutionRemoteApplyDelay` (Cassandra
+`accord.coordinator_backlog_execution_remote_apply_delay`, default 0):
+- [x] **Designated replica (remote DC):** persists only to replicas in its own DC
+  (`CoordinationFlags.persistNearbyOnly`, `Persist.contactNearby`). Once every nearby replica has
+  replied, it sends the original coordinator `BacklogApplied(txnId, appliedAt)`. It doesn't
+  `InformDurable`. It still sends `RemoteSuccess`, so the client may be answered early.
+  - If the coordinator doesn't acknowledge (`SimpleReply.Ok`) before the request times out, or no
+    nearby replica applied, it persists to every other replica itself (`Persist.persistGlobally`,
+    which then completes as a normal `Persist` and informs durability). This covers a failed
+    coordinator, and a coordinator whose own execution failed.
+  - Designated replicas no longer wait for the grace period: each DC is now responsible for itself.
+- [x] **Original coordinator:** owns durability (`ExecuteTxnBacklog.coordinatorOwnsDurability`).
+  - It doesn't stop on `RemoteSuccess`. It replies to the client (`ExecuteTxn.EarlyResult`, which
+    invokes the client callback at most once) and carries on executing, since nobody else will
+    apply the txn in its DC. It never pauses for claims.
+  - `Persist.tryDeferRemote`: sends `Apply` immediately to its own DC (and to DCs that can't execute
+    for themselves, see below), and defers the rest for `remote_apply_delay`. Reported replicas
+    count towards the durability tracker, so `InformDurable` happens as usual. When the delay expires
+    it sends `Apply` to the replicas not reported (`sendDeferred`; fire-and-forget if the `Persist`
+    has already reached quorum).
+  - It acknowledges reports once it has begun to persist (`ExecuteTxnBacklog.appliedReports`:
+    reports that arrive earlier are buffered with their reply contexts; after the deferral is
+    resolved they're still acknowledged, until expiry). If it never persists, the executors
+    persist globally.
+  - `AbstractCoordination.awaitsExternal` lets a `Persist` wait for reports, or for the ack, with
+    nothing in flight.
+- [x] **DCs that don't replicate every shard of the txn.** If the coordinator reads from a remote
+  replica, that replica may already have been applied by its DC's executor, so it replies
+  `Redundant` and the coordinator's execution fails. Burn found this (5 nodes, rf 4, 3 DCs: one DC
+  has a single node). Nobody then applied the txn in the coordinator's DC until the progress log
+  fetched it ~5s later (ephemeral reads waited on it). Rule now, using a new pairwise
+  `TopologySorter.Supplier.areNearby(a, b)` / `Node.areNearby` (burn: same simulated DC; Cassandra:
+  same snitch DC):
+  - the coordinator owns durability only if its DC replicates every shard of the txn at `executeAt`;
+    otherwise everybody behaves as in Phase 2d (executors persist globally, the coordinator stops on
+    `RemoteSuccess`);
+  - the coordinator defers `Apply` only to DCs that replicate every shard (`mayDeferApplyTo`), since
+    only they can be relied on to execute for themselves.
+- [x] Cassandra: `Verb.ACCORD_BACKLOG_APPLIED_REQ` (176, replies `ACCORD_SIMPLE_RSP`),
+  `BacklogClaimSerializers.applied`, the two config options, `AccordTopologySorter`/
+  `CompositeTopologySorter.areNearby`. `BacklogMessageSerializersTest.backlogApplied`.
+- [x] Burn randomises both (overrides `accord.burn.coordinator_backlog_execution_persist_locally`,
+  `accord.burn.coordinator_backlog_execution_remote_apply_delay_millis` ∈ {0, 200, 500, 1000}). They
+  are drawn from a separate random source, so as not to perturb the stream: Phase 2d's per-DC
+  numbers reproduce exactly. `Message counts` now also report cross-DC counts per type
+  (`(x-DC n)`), and `-Daccord.burn.log_slow_millis=<n>` logs client replies slower than `n`.
+
+**Happy burn** (3 DCs, 40 seeds, grace 2ms for `dp`; mean / p99 ms; messages summed over 40 seeds;
+"dup" counts executions beyond the first, now mostly cheap local ones; `dpl<N>` = persist locally
+with a remote apply delay of N ms):
+
+| workload | variant  | mean / p99    | all msgs | x-DC msgs | x-DC Apply | dup.   |
+|----------|----------|---------------|----------|-----------|------------|--------|
+| h4 r0.8 c40 | `DISABLED` | 1,204 / 1,929 | 2.57M | 1.86M | 160k | 1      |
+|          | `dp` (2d) | 577 / 779     | 3.51M    | 2.56M     | 380k       | 45.8k  |
+|          | `dpl0`   | 579 / 787     | 2.62M    | 1.77M     | 154k       | 52.7k  |
+|          | `dpl200` | 582 / 796     | 2.41M    | 1.54M     | 29k        | 58.3k  |
+|          | `dpl500` | 580 / 793     | 2.37M    | **1.50M** | **10k**    | 58.4k  |
+| h2 r0.8  | `DISABLED` | 949 / 1,669 | 2.46M    | 1.77M     | 159k       | 0      |
+|          | `dp`     | 524 / 744     | 3.26M    | 2.39M     | 347k       | 40.9k  |
+|          | `dpl0`   | 527 / 772     | 2.51M    | 1.71M     | 151k       | 50.0k  |
+|          | `dpl200` | 525 / 745     | 2.33M    | 1.50M     | 32k        | 57.8k  |
+|          | `dpl500` | 528 / 756     | 2.30M    | **1.47M** | **11k**    | 57.8k  |
+| no hot keys | `DISABLED` | 622 / 1,330 | 2.12M | 1.53M  | 157k       | 7      |
+|          | `dp`     | 445 / 686     | 3.21M    | 2.33M     | 362k       | 42.1k  |
+|          | `dpl0`   | 450 / 817     | 2.43M    | 1.64M     | 153k       | 48.3k  |
+|          | `dpl500` | 446 / 712     | 2.19M    | **1.37M** | **11k**    | 57.5k  |
+
+- Latency is within ~1% of Phase 2d's per-DC numbers, and cross-DC traffic falls below `DISABLED`:
+  the coordinator no longer sends writes over the WAN, only Stable (which `DESIGNATED` already
+  sends everywhere) plus one small report and ack per remote DC.
+- With a long delay, a slower DC no longer benefits from a faster one's Apply. In `dp`, an early
+  Apply from another DC "pre-loads" a replica, which then applies as soon as its predecessors
+  have, with no read. This costs ~0–3ms mean. `dpl0` costs nothing in latency, but saves little.
+- Duplicates rise from ~1.1 to ~1.45 per txn, since every DC now always executes (in `dp` an earlier
+  remote Apply sometimes made the local executor redundant). These are local reads and local
+  Applies.
+- 200ms already removes ~80% of cross-DC Applies. The remainder at 500ms are presumably mostly
+  txns that are ineligible, or whose DC can't execute for itself (not yet broken down).
+
+**Non-happy burn** (forced `DESIGNATED` per DC, seeds 1–80): before acknowledgements, persisting
+locally lost 4,414 txns vs 3,914 (Phase 2d), with mean latency up to 25% higher. Coordinators that
+failed left their txns applied only in the executors' DCs, with nobody informing durability. With
+acknowledgements: lost 3,678 vs 3,914, mean 3,719 / 3,320ms vs 3,941 / 3,108ms (seeds 1–40 / 41–80),
+i.e. within noise. 200 forced (seeds 1–200) and 200 random non-happy seeds pass; accord unit tests match baseline.
+
+**How this fits single-DC execution (A).** The common principle is that *each DC applies from one
+WAN message, and exactly one node owns durability, collecting per-DC reports and falling back to
+direct Applies on timeout*. They differ in what that per-DC message is:
+- Per DC (this phase): the Stable, which each DC re-executes with local reads. The coordinator owns
+  durability, since it executes in its own DC anyway and needs no writes from elsewhere.
+- Single DC: only the executor's DC has the writes, so the other DCs need an Apply carrying them.
+  The executor should own durability (the coordinator is paused and has no writes; shipping writes
+  to it would add a WAN hop). The analogue of this phase is to **relay**: the executor sends one
+  `Apply` per remote DC to a replica there, which applies it, fans it out locally and reports what
+  was applied. On timeout, the executor sends directly. This cuts WAN Apply copies from RF per DC to
+  1 per DC.
+  The same relay would also cheapen this phase's fallback, and `DISABLED`'s ordinary persist.
+- The ack pattern carries over unchanged: whichever node doesn't own durability must hear that the
+  owner has taken responsibility, or else persist more widely itself.
+- Deferral in single-DC mode should likewise be triggered by something the executor sends
+  (claim-ahead), not computed independently by the coordinator. Otherwise disagreement causes a
+  stall (no executor) rather than a duplicate.
+
+Follow-ups:
+- [ ] Relay Apply within remote DCs (above). This would make the coordinator's fallback (and
+  `DISABLED`'s persist) cheaper.
+- [ ] Report sooner, e.g. once a quorum of the DC has replied, rather than every nearby replica. A
+  dead local replica currently delays the report until its timeout.
+- [ ] A DC that doesn't replicate every shard could still execute for itself if it reads the
+  missing shards remotely before the remote DCs apply them, which isn't guaranteed. For now such
+  DCs always get the coordinator's Apply immediately.
+- [ ] Metrics: reports received, acks, fallbacks (`persistGlobally`), deferred Applies sent.
+- [ ] If the coordinator's own execution fails (e.g. `Redundant` because of a recovery), it has
+  already replied to the client from `RemoteSuccess`. Executors then persist globally after their
+  ack times out, which costs a request timeout of latency for successors in the coordinator's DC.
+  An explicit `Nack` on failure would make this prompt.
+
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
       `StableThenRead` / `ReadTxnData` / `Commit` / `Apply` and on `BacklogClaim` via optional
@@ -965,6 +1106,10 @@ and `ON_RECOVERY` keep the sink-based behaviour, for comparison).
   - `accord.burn.coordinator_backlog_execution_claims`
   - `accord.burn.coordinator_backlog_execution_yield`
   - `accord.burn.send_minimal_no_deps`
+  - `accord.burn.coordinator_backlog_execution_per_dc`, `accord.burn.coordinator_backlog_execution_grace_micros`
+  - `accord.burn.coordinator_backlog_execution_persist_locally`,
+    `accord.burn.coordinator_backlog_execution_remote_apply_delay_millis`
+  - `accord.burn.log_slow_millis` (log client replies slower than this)
 - Each run logs `Executions:` (attempts by path, duplicate executions), `Chains:` (wait depth,
   cross-DC wait depth, execution latency) and `Applied latency (ms)`.
 - Workload overrides (`BurnWorkload`; `HappyBurnTest` defaults in brackets): `accord.burn.keys`,
