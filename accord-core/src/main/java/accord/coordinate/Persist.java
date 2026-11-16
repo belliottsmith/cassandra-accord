@@ -45,9 +45,12 @@ import accord.api.ProtocolModifiers.Faults;
 import accord.messages.Apply;
 import accord.messages.Apply.ApplyReply;
 import accord.local.cfk.ExecuteTxnBacklog;
+import accord.messages.ApplyRelay;
+import accord.messages.ApplyRelay.ApplyRelayReply;
 import accord.messages.BacklogApplied;
 import accord.messages.Callback;
 import accord.messages.InformDurable;
+import accord.messages.ParticipantsRequest;
 import accord.messages.SimpleReply;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
@@ -62,6 +65,7 @@ import accord.topology.TopologyException;
 import accord.utils.Invariants;
 import accord.utils.SortedArrays.SortedArrayList;
 
+import static accord.api.ProtocolModifiers.relayRemoteApply;
 import static accord.api.ProtocolModifiers.sendMinimalNoDeps;
 import static accord.api.TopologySorter.NodeStatus.HEALTHY;
 import static accord.api.TopologySorter.NodeStatus.UNAVAILABLE;
@@ -92,18 +96,29 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     protected final boolean informDurableOnDone;
 
     /*
-     * Persisting only to nearby replicas (see CoordinationFlags#persistNearbyOnly)
+     * Persisting only to some replicas, and reporting which have applied the transaction: either nearby replicas, as a
+     * designated replica (see CoordinationFlags#persistNearbyOnly); or those we relay to (see ApplyRelay)
      */
-    // whether we are (still) persisting only to nearby replicas
-    private boolean nearbyOnly;
-    // the number of nearby replicas we await a reply from
-    private int awaitingNearby;
+    // whether we are (still) persisting only to some replicas
+    private boolean partial;
+    // the replicas we persist to, if partial
+    private @Nullable Predicate<Id> partialTo;
+    // if relaying, to whom we report which replicas have applied the transaction (otherwise, we are a designated replica)
+    private @Nullable BiConsumer<SortedArrayList<Id>, SortedArrayList<Id>> relayedTo;
+    // the number of replicas we await a reply from, if partial
+    private int awaitingPartial;
     // whether we await the original coordinator's acknowledgement of our report (see BacklogApplied)
     private boolean awaitingAck;
-    // the nearby replicas that have (or have not) applied the transaction
-    private @Nullable List<Id> appliedNearby, failedNearby;
-    // the nearby replicas we did not contact as they are UNAVAILABLE (recorded as failures when contacting)
-    private @Nullable List<Id> unavailableNearby;
+    // the replicas that have (or have not) applied the transaction, if partial
+    private @Nullable List<Id> appliedPartial, failedPartial;
+    // the replicas we did not contact as they are UNAVAILABLE (recorded as failures when contacting), if partial
+    private @Nullable List<Id> unavailablePartial;
+
+    /*
+     * Relaying Apply to remote DCs (see ProtocolModifiers#relayRemoteApply)
+     */
+    // the number of relays we await a reply from
+    private int relaysInFlight;
 
     /*
      * Deferring Apply to remote replicas (see Agent#backlogRemoteApplyDelay)
@@ -135,7 +150,11 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
         this.factory = factory;
         this.informDurableOnDone = informDurableOnDone;
         this.applyKind = applyKind;
-        this.nearbyOnly = flags.persistNearbyOnly();
+        if (flags.persistNearbyOnly())
+        {
+            this.partial = true;
+            this.partialTo = node::isNearby;
+        }
         Invariants.require((writes != null) == txnId.is(Txn.Kind.Write), "%s: writes %s", txnId, writes);
     }
 
@@ -147,13 +166,13 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
             default: throw new IllegalStateException();
             case Redundant:
             case Applied:
-                if (nearbyOnly) onNearbyReply(from, true);
+                if (partial) onPartialReply(from, true);
                 else recordApplied(from);
                 break;
             case RaceWithRecovery:
-                if (nearbyOnly)
+                if (partial)
                 {
-                    onNearbyReply(from, false);
+                    onPartialReply(from, false);
                     break;
                 }
                 // don't count this towards durability; otherwise it is possible (though very unlikely)
@@ -182,9 +201,9 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     @Override
     public void onFailureInternal(Id from, int fromIndex, Throwable failure)
     {
-        if (nearbyOnly)
+        if (partial)
         {
-            onNearbyReply(from, false);
+            onPartialReply(from, false);
             return;
         }
 
@@ -208,55 +227,83 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     }
 
     /*
-     * Persisting only to nearby replicas, on behalf of an original coordinator that is responsible for durability
-     * (see ProtocolModifiers#coordinatorBacklogExecutionPersistLocally)
+     * Persisting only to some replicas: nearby replicas, on behalf of an original coordinator that is responsible for
+     * durability (see ProtocolModifiers#coordinatorBacklogExecutionPersistLocally); or those we relay to (see ApplyRelay)
      */
 
-    private void contactNearby()
+    /**
+     * Relay the transaction to {@code forwardTo}, reporting to {@code onDone} which have applied it, on behalf of the
+     * coordinator that sent us {@link accord.messages.ApplyRelay}
+     */
+    void relayTo(SortedArrayList<Id> forwardTo, BiConsumer<SortedArrayList<Id>, SortedArrayList<Id>> onDone)
+    {
+        this.partial = true;
+        this.partialTo = forwardTo::contains;
+        this.relayedTo = onDone;
+    }
+
+    private void contactPartial()
     {
         Topologies topologies = tracker.topologies();
-        appliedNearby = new ArrayList<>();
-        failedNearby = new ArrayList<>();
-        unavailableNearby = new ArrayList<>();
+        appliedPartial = new ArrayList<>();
+        failedPartial = new ArrayList<>();
+        unavailablePartial = new ArrayList<>();
         for (Id to : nodes())
         {
-            if (!node.isNearby(to))
+            if (!partialTo.test(to))
                 continue;
             // see AbstractCoordination.contact: we do not contact UNAVAILABLE replicas (except ourselves)
-            if (topologies.status(to) != UNAVAILABLE || to.equals(node.id())) ++awaitingNearby;
-            else unavailableNearby.add(to);
+            if (topologies.status(to) != UNAVAILABLE || to.equals(node.id())) ++awaitingPartial;
+            else unavailablePartial.add(to);
         }
 
         // note: UNAVAILABLE replicas are recorded as failures (without being contacted)
-        contact(node::isNearby);
-        if (awaitingNearby == 0)
-            finishNearby();
+        contact(partialTo);
+        if (awaitingPartial == 0)
+            finishPartial();
     }
 
-    private void onNearbyReply(Id from, boolean applied)
+    private void onPartialReply(Id from, boolean applied)
     {
-        if (applied) appliedNearby.add(from);
-        else failedNearby.add(from);
-        if (--awaitingNearby == 0)
-            finishNearby();
+        if (applied) appliedPartial.add(from);
+        else failedPartial.add(from);
+        if (--awaitingPartial == 0)
+            finishPartial();
     }
 
     /**
-     * We have heard from every nearby replica; tell the original coordinator which have applied the transaction, and
-     * which we failed to apply it to, so that it may update its durability tracker. If it does not acknowledge our report
-     * (e.g. because it has failed, or failed to execute the transaction itself), we persist the transaction to every
-     * other replica ourselves.
-     * TODO (desired): report sooner (e.g. once a quorum of nearby replicas have replied)
+     * We have heard from every replica we persist to; report which have applied the transaction
      */
-    private void finishNearby()
+    private void finishPartial()
     {
         if (isDone())
             return;
 
-        SortedArrayList<Id> applied = SortedArrayList.copyUnsorted(appliedNearby, Id[]::new);
-        List<Id> failed = new ArrayList<>(failedNearby);
-        failed.addAll(unavailableNearby);
+        SortedArrayList<Id> applied = SortedArrayList.copyUnsorted(appliedPartial, Id[]::new);
+        List<Id> failed = new ArrayList<>(failedPartial);
+        failed.addAll(unavailablePartial);
         SortedArrayList<Id> failedAt = SortedArrayList.copyUnsorted(failed, Id[]::new);
+        if (relayedTo != null)
+        {
+            // the coordinator that asked us to relay remains responsible for durability
+            if (logger.isTraceEnabled())
+                logger.trace("{}: relayed Apply; applied at {}, failed at {}", txnId, applied, failedAt);
+            finishWithSuccess(null);
+            relayedTo.accept(applied, failedAt);
+            return;
+        }
+        reportToCoordinator(applied, failedAt);
+    }
+
+    /**
+     * As designated replica, we have heard from every nearby replica; tell the original coordinator which have applied
+     * the transaction, and which we failed to apply it to, so that it may update its durability tracker. If it does not
+     * acknowledge our report (e.g. because it has failed, or failed to execute the transaction itself), we persist the
+     * transaction to every other replica ourselves.
+     * TODO (desired): report sooner (e.g. once a quorum of nearby replicas have replied)
+     */
+    private void reportToCoordinator(SortedArrayList<Id> applied, SortedArrayList<Id> failedAt)
+    {
         if (logger.isTraceEnabled())
             logger.trace("{}: reporting applied at {}, failed at {} to {}", txnId, applied, failedAt, txnId.node);
         awaitingAck = true;
@@ -295,20 +342,20 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     {
         if (logger.isTraceEnabled())
             logger.trace("{}: persisting globally as {}", txnId, reason);
-        nearbyOnly = false;
-        for (Id id : appliedNearby)
+        partial = false;
+        for (Id id : appliedPartial)
         {
             if (isDone()) return;
             recordApplied(id);
         }
-        for (Id id : failedNearby)
+        for (Id id : failedPartial)
         {
             if (isDone()) return;
             if (tracker.recordFailure(id) == RequestStatus.Failed)
                 finishOnFailure();
         }
         if (!isDone())
-            contact(to -> !node.isNearby(to));
+            contactRemote(to -> !node.isNearby(to));
     }
 
     /*
@@ -317,11 +364,143 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
 
     /**
      * @return true iff we may defer sending Apply to remote replicas, as designated replicas in their DCs are expected
-     * to execute the transaction, persist it locally, and report to us (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()})
+     * to execute the transaction, persist it locally, and report to us (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionPersistLocally()}),
+     * or relay our Apply to them (see {@link accord.api.ProtocolModifiers#relayRemoteApply()}); i.e. we use the standard
+     * Apply factory, so that a relay may construct the same messages
      */
     protected boolean mayDeferRemote()
     {
         return false;
+    }
+
+    /*
+     * Relaying Apply to remote DCs (see ProtocolModifiers#relayRemoteApply)
+     */
+
+    /**
+     * Contact the replicas {@code include} admits (or every replica, if null) as {@link #contact(Predicate)} does, except
+     * that (if enabled) for each other DC we send a single {@link ApplyRelay} to the DC's designated replica, asking it to
+     * apply the transaction to the replicas in its DC
+     */
+    void contactRemote(@Nullable Predicate<Id> include)
+    {
+        IntHashSet relayed = relay(include, true);
+        if (relayed == null) contact(include);
+        else contact(to -> (include == null || include.test(to)) && !relayed.contains(to.id));
+    }
+
+    /**
+     * Send ApplyRelay to the replicas {@code include} admits, grouped by DC, where we can
+     * @param awaitReply whether to await the relay's reply (and record it in our tracker), and contact the replicas
+     *                   ourselves if it does not reply; otherwise we do not track the outcome
+     * @return the replicas we have relayed to, or null if none
+     */
+    private @Nullable IntHashSet relay(@Nullable Predicate<Id> include, boolean awaitReply)
+    {
+        if (!relayRemoteApply() || !mayDeferRemote() || partial)
+            return null;
+
+        List<List<Id>> groups = null;
+        for (Id to : nodes())
+        {
+            if ((include != null && !include.test(to)) || node.isNearby(to))
+                continue;
+
+            if (groups == null) groups = new ArrayList<>();
+            List<Id> group = null;
+            for (List<Id> g : groups)
+            {
+                if (node.areNearby(g.get(0), to))
+                {
+                    group = g;
+                    break;
+                }
+            }
+            if (group == null) groups.add(group = new ArrayList<>());
+            group.add(to);
+        }
+        if (groups == null)
+            return null;
+
+        Topologies topologies = tracker.topologies();
+        IntHashSet relayed = null;
+        for (List<Id> group : groups)
+        {
+            if (group.size() < 2)
+                continue;
+
+            Id first = group.get(0);
+            Id relay = ExecuteTxnBacklog.designatedExecutorIn(node, scope.homeKey(), id -> node.areNearby(first, id));
+            if (relay == null || !group.contains(relay) || topologies.status(relay) != HEALTHY)
+                continue;
+
+            sendRelay(relay, group, awaitReply);
+            if (relayed == null) relayed = new IntHashSet();
+            for (Id id : group)
+                relayed.add(id.id);
+        }
+        return relayed;
+    }
+
+    private void sendRelay(Id relay, List<Id> group, boolean awaitReply)
+    {
+        Topologies topologies = tracker.topologies();
+        // the union of the scopes of the Apply messages we would send (the relay uses the same epochs, so constructs the
+        // same messages, each of which is a slice of the definition and deps we send it)
+        Route<?> participants = null;
+        List<Id> noDeps = new ArrayList<>();
+        for (Id id : group)
+        {
+            Route<?> add = ParticipantsRequest.computeScope(id, topologies, scope);
+            participants = participants == null ? add : participants.with((Route) add);
+            if (applyKind(id, topologies.status(id)) == NoDeps)
+                noDeps.add(id);
+        }
+        SortedArrayList<Id> forwardTo = SortedArrayList.copyUnsorted(group, Id[]::new);
+        ApplyRelay send = new ApplyRelay(txnId, scope, ballot, applyKind, executeAt, txn == null ? null : txn.intersecting(participants, true),
+                                         stableDeps.intersecting(participants), writes, result, forwardTo, SortedArrayList.copyUnsorted(noDeps, Id[]::new),
+                                         topologies.oldestEpoch(), topologies.currentEpoch());
+        if (logger.isTraceEnabled())
+            logger.trace("{}: relaying Apply via {} to {}", txnId, relay, forwardTo);
+
+        if (!awaitReply)
+        {
+            node.send(relay, send, tracing);
+            return;
+        }
+
+        ++relaysInFlight;
+        node.send(relay, send, executor, new Callback<ApplyRelayReply>()
+        {
+            @Override
+            public void onSuccess(Id from, ApplyRelayReply reply)
+            {
+                --relaysInFlight;
+                for (Id id : forwardTo)
+                {
+                    if (isDone()) return;
+                    if (reply.appliedAt.contains(id)) recordApplied(id);
+                    else if (tracker.recordFailure(id) == RequestStatus.Failed) finishOnFailure();
+                }
+            }
+
+            @Override
+            public void onFailure(Id from, @Nullable Throwable failure)
+            {
+                --relaysInFlight;
+                if (logger.isTraceEnabled())
+                    logger.trace("{}: relay {} failed ({}); contacting {} directly", txnId, relay, failure, forwardTo);
+                if (!isDone()) contact(forwardTo::contains);
+                else sendDirect(forwardTo::contains);
+            }
+
+            @Override
+            public boolean onCallbackFailure(Id from, Throwable failure)
+            {
+                node.agent().onException(failure);
+                return true;
+            }
+        }, tracing);
     }
 
     /**
@@ -352,7 +531,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
         if (deferred.isEmpty())
         {
             // we contact every replica ourselves, but acknowledge any reports, as we are responsible for durability
-            contact();
+            contactRemote(null);
             node.executeBacklogSink().resolveApplied(txnId, null);
             return true;
         }
@@ -410,7 +589,7 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     @Override
     protected boolean awaitsExternal()
     {
-        return deferred != null || awaitingAck;
+        return deferred != null || awaitingAck || relaysInFlight > 0;
     }
 
     /**
@@ -438,15 +617,24 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     {
         if (!isDone())
         {
-            contact(to -> send.contains(to.id));
+            contactRemote(to -> send.contains(to.id));
             return;
         }
 
         // we have already achieved durability, so do not await replies
+        IntHashSet relayed = relay(to -> send.contains(to.id), false);
+        sendDirect(to -> send.contains(to.id) && (relayed == null || !relayed.contains(to.id)));
+    }
+
+    /**
+     * Send Apply to {@code include} without awaiting replies (as we have already achieved durability)
+     */
+    private void sendDirect(Predicate<Id> include)
+    {
         Topologies topologies = tracker.topologies();
         for (Id to : nodes())
         {
-            if (!send.contains(to.id))
+            if (!include.test(to))
                 continue;
             NodeStatus status = topologies.status(to);
             if (status == UNAVAILABLE)
@@ -470,10 +658,12 @@ public abstract class Persist extends AbstractCoordination<FullRoute<?>, Void, A
     @Override
     protected void start()
     {
-        node.agent().coordinatorEvents().onExecuted(txnId, ballot);
+        // a relay has not executed the transaction
+        if (relayedTo == null)
+            node.agent().coordinatorEvents().onExecuted(txnId, ballot);
         super.start();
-        if (nearbyOnly) contactNearby();
-        else if (!tryDeferRemote()) contact();
+        if (partial) contactPartial();
+        else if (!tryDeferRemote()) contactRemote(null);
     }
 
     void contact()

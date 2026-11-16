@@ -18,11 +18,16 @@
 
 package accord.coordinate;
 
+import java.util.function.BiConsumer;
+
+import org.agrona.collections.IntHashSet;
+
 import accord.api.Result.PersistableResult;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
 import accord.local.Node;
 import accord.api.ExclusiveAsyncExecutor;
 import accord.messages.Apply;
+import accord.messages.ApplyRelay;
 import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.FullRoute;
@@ -32,6 +37,7 @@ import accord.primitives.Txn;
 import accord.primitives.TxnId;
 import accord.primitives.Writes;
 import accord.topology.Topologies;
+import accord.utils.SortedArrays.SortedArrayList;
 
 public class PersistTxn extends Persist
 {
@@ -45,5 +51,21 @@ public class PersistTxn extends Persist
     protected boolean mayDeferRemote()
     {
         return true;
+    }
+
+    /**
+     * Apply the transaction to the replicas {@code relay} asks us to (see {@link ApplyRelay}), and report to {@code onDone}
+     * which have applied it
+     */
+    public static void relay(Node node, Topologies topologies, ApplyRelay relay, BiConsumer<SortedArrayList<Node.Id>, SortedArrayList<Node.Id>> onDone)
+    {
+        IntHashSet noDeps = new IntHashSet();
+        for (Node.Id id : relay.noDepsAt)
+            noDeps.add(id.id);
+        CoordinationFlags flags = CoordinationFlags.withStableSent(CoordinationFlags.none(), noDeps);
+        PersistTxn persist = new PersistTxn(node, node.someExclusiveExecutor(), topologies, relay.txnId, relay.ballot, relay.route, relay.txn,
+                                            relay.executeAt, relay.deps, relay.writes, relay.result, relay.route, flags, false, Apply.FACTORY, relay.kind);
+        persist.relayTo(relay.forwardTo, onDone);
+        persist.start();
     }
 }

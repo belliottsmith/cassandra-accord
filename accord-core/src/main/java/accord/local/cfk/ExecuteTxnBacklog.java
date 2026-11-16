@@ -385,34 +385,50 @@ public class ExecuteTxnBacklog
      */
     public static @Nullable Node.Id designatedExecutor(Node node, RoutingKey homeKey)
     {
+        if (!coordinatorBacklogExecutionPerDc())
+        {
+            Topology topology = node.topology().current();
+            int shardIndex = topology.indexForKey(homeKey);
+            if (shardIndex < 0)
+                return null;
+            accord.topology.Shard shard = topology.get(shardIndex);
+            return shard.nodes.get(Math.floorMod(mix(homeKey.hashCode()), shard.nodes.size()));
+        }
+
+        Node.Id designated = designatedExecutorIn(node, homeKey, node::isNearby);
+        if (designated == null && logger.isTraceEnabled())
+            logger.trace("no replica of {} near {}", homeKey, node.id());
+        return designated;
+    }
+
+    /**
+     * @return the replica designated (per DC) to execute transactions with home key {@code homeKey} amongst those replicas
+     * of the home key's shard that satisfy {@code inDc} (typically those in some DC), or null if there are none. Every node
+     * computes the same choice for a given DC (given the same topology), whichever DC it is in; so this also serves to
+     * pick a consistent relay for a remote DC (see {@link accord.messages.ApplyRelay}).
+     */
+    public static @Nullable Node.Id designatedExecutorIn(Node node, RoutingKey homeKey, java.util.function.Predicate<Node.Id> inDc)
+    {
         Topology topology = node.topology().current();
         int shardIndex = topology.indexForKey(homeKey);
         if (shardIndex < 0)
             return null;
 
         accord.topology.Shard shard = topology.get(shardIndex);
-        int hash = mix(homeKey.hashCode());
-        if (!coordinatorBacklogExecutionPerDc())
-            return shard.nodes.get(Math.floorMod(hash, shard.nodes.size()));
-
-        int nearby = 0;
+        int count = 0;
         for (int i = 0, size = shard.nodes.size() ; i < size ; ++i)
         {
-            if (node.isNearby(shard.nodes.get(i)))
-                ++nearby;
+            if (inDc.test(shard.nodes.get(i)))
+                ++count;
         }
-        if (nearby == 0)
-        {
-            if (logger.isTraceEnabled())
-                logger.trace("no replica of {} near {}", homeKey, node.id());
+        if (count == 0)
             return null;
-        }
 
-        int pick = Math.floorMod(hash, nearby);
+        int pick = Math.floorMod(mix(homeKey.hashCode()), count);
         for (int i = 0, size = shard.nodes.size() ; i < size ; ++i)
         {
             Node.Id id = shard.nodes.get(i);
-            if (node.isNearby(id) && pick-- == 0)
+            if (inDc.test(id) && pick-- == 0)
                 return id;
         }
         throw new IllegalStateException();

@@ -275,6 +275,9 @@ public class ProtocolModifiers
         private static long coordinatorBacklogExecutionLingerMicros = 0;
         public static synchronized void setCoordinatorBacklogExecutionLinger(long linger, TimeUnit units) { pre(); coordinatorBacklogExecutionLingerMicros = units.toMicros(linger); }
 
+        private static boolean relayRemoteApply = false;
+        public static synchronized void setRelayRemoteApply(boolean newRelayRemoteApply) { pre(); relayRemoteApply = newRelayRemoteApply; }
+
         private static boolean coordinatorBacklogExecutionPersistLocally = false;
         public static synchronized void setCoordinatorBacklogExecutionPersistLocally(boolean newCoordinatorBacklogExecutionPersistLocally) { pre(); coordinatorBacklogExecutionPersistLocally = newCoordinatorBacklogExecutionPersistLocally; }
 
@@ -504,6 +507,18 @@ public class ProtocolModifiers
      * we linger we will also execute transactions that their original coordinator might execute as promptly.
      */
     public static long coordinatorBacklogExecutionLinger(TimeUnit units) { return units.convert(coordinatorBacklogExecutionLingerMicros, TimeUnit.MICROSECONDS); }
+
+    private static boolean relayRemoteApply = Configure.relayRemoteApply;
+
+    /**
+     * Whether a coordinator persisting a transaction sends a single {@link accord.messages.ApplyRelay} to one replica in
+     * each other DC (picked as {@link accord.local.cfk.ExecuteTxnBacklog#designatedExecutorIn}), which applies the transaction
+     * and forwards it to the other replicas in its DC, and reports which have applied it; rather than sending Apply to every
+     * remote replica itself. This sends the transaction's writes over the WAN once per DC rather than once per replica,
+     * at the cost of a local hop in each remote DC. If the relay does not reply, the coordinator contacts the replicas itself.
+     * Must not be enabled until every replica understands {@link accord.messages.ApplyRelay}.
+     */
+    public static boolean relayRemoteApply() { return relayRemoteApply; }
 
     private static boolean coordinatorBacklogExecutionPersistLocally = Configure.coordinatorBacklogExecutionPersistLocally;
 

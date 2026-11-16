@@ -22,7 +22,8 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped
 | `afb04977`…`cca93ffc` | `c2c7d517261`…`2215b5aeab3` | burn `isSlowCoordinator`, `HappyBurnTest`, contended workloads, chain measurement, timelines |
 | `f0820a0f` | `0be15692c71` | Phase 2c: follow the chain onto every key; wait; linger |
 | `8bdd38f6`…`8caddd67` | `95300afea03`…`ec4e79d5957` | Phase 2d: `DESIGNATED` (single / per DC), grace, retries; DC-coherent happy latencies; per-DC analysis |
-| branch HEAD | branch HEAD | Phase 2e: per-DC executors persist locally; the original coordinator owns durability (`BacklogApplied`) |
+| `7666518d`…`4c31d66e` | `94916a4a6cc`…`08c5a5b0de2` | Phase 2e: per-DC executors persist locally; the original coordinator owns durability (`BacklogApplied`) |
+| branch HEAD | branch HEAD | `ApplyRelay`: one Apply per remote DC, relayed by that DC's designated replica (`relay_remote_apply`) |
 
 A standalone patch for the `ReadData` sliced-definition bug is in the Cassandra root
 (`accord-readdata-sliced-definition.patch`), applicable to unmodified `fc4a7698`.
@@ -54,10 +55,11 @@ Burn: `Cluster` (`dcs`, `happy`), `DcAwareSorter`, `ExecutionStats`, `HappyBurnT
 - `coordinator_backlog_execution_persist_locally` (new message; Phase 2e; with `DESIGNATED` and `per_dc`), and
   `coordinator_backlog_execution_remote_apply_delay` (a wait-strategy spec over PreAccept latency, as a proxy,
   default `50ms <= p99(rw) <= 1000ms`, via `Agent.backlogRemoteApplyDelay`)
+- `relay_remote_apply` (new message `ApplyRelay`; independent of backlog execution)
 - `send_minimal: MINIMAL_NO_DEPS` (new encoding)
 
 The new wire formats (`ReadTxnDataIfReady`, `ReadyWithDefinition`, `NotReady`, `BacklogClaim`,
-`BacklogApplied`, `Apply.Kind.NoDeps`) are only sent when the corresponding option is enabled; no
+`BacklogApplied`, `ApplyRelay`, `Apply.Kind.NoDeps`) are only sent when the corresponding option is enabled; no
 serialization version bump.
 
 **Next steps, in priority order (updated after Phase 2e):**
@@ -1031,9 +1033,7 @@ direct Applies on timeout*. They differ in what that per-DC message is:
   stall (no executor) rather than a duplicate.
 
 Follow-ups:
-- [ ] Relay Apply within remote DCs (above). This would make the coordinator's fallback (and
-  `DISABLED`'s persist) cheaper. Pick the relay by the same mechanism as the DC's designated replica
-  (hash of the home key among that DC's replicas of the home shard), for consistency.
+- [x] Relay Apply within remote DCs: see "Relaying Apply" below.
 - [ ] Report sooner, e.g. once a quorum of the DC has replied, rather than every nearby replica. A
   dead local replica currently delays the report until its timeout.
 - [ ] Don't defer `Apply` to DCs without a replica of the home shard (they have no designated replica).
@@ -1043,6 +1043,65 @@ Follow-ups:
   separately.
 - [ ] When collecting the definition, fetch only the missing definition (or ask the original
   coordinator for it) rather than re-reading.
+
+### Relaying Apply (`ApplyRelay`; done, prototype)
+Behind `ProtocolModifiers.relayRemoteApply()` (Cassandra `accord.relay_remote_apply`, default off),
+for any `PersistTxn` (not sync points or interop, which use other factories). This is independent of
+backlog execution: it also applies to `DISABLED`, and in Phase 2e to the coordinator's fallback and to
+a designated replica's `persistGlobally`.
+- **Sender** (`Persist.contactRemote`/`relay`): groups the remote replicas it would contact by DC
+  (`Node.areNearby`). For each group of at least two, it picks the relay as the DC's designated replica,
+  by the same mechanism (`ExecuteTxnBacklog.designatedExecutorIn`: a hash of the home key among that
+  DC's replicas of the home shard), for consistency. If the relay is healthy and in the group, the
+  sender sends it one `ApplyRelay` instead of an `Apply` per replica. Nearby replicas, singleton
+  groups and DCs without a suitable relay are contacted directly.
+- **`ApplyRelay`** carries the definition and deps sliced to the union of the scopes of the Applies
+  the sender would have sent (`ParticipantsRequest.computeScope` per replica). It also carries the
+  writes and the sender's epochs, the forward-to list, and the replicas the sender expects to have
+  recorded Stable (they get `NoDeps`).
+- **Relay** (`PersistTxn.relay`): runs a partial `Persist` over exactly the sender's epochs
+  (`preciseEpochs`), so it builds the same messages the sender would have (and resends `Maximal` on
+  `Insufficient`). It replies `ApplyRelayReply(appliedAt, failedAt)`. It takes no responsibility for
+  durability and isn't counted as an execution.
+- **Sender, on reply:** records the reported replicas in its tracker (unreported ones as failures).
+  If the relay fails or times out, it contacts the group directly (fire-and-forget once it already
+  has a quorum).
+- A first version sliced by `computeRangesForNode` and the relay's own `reselect`d epochs. The relay
+  then lacked deps for some recipients after topology changes (non-happy burn).
+- Cassandra: `Verb.ACCORD_APPLY_RELAY_REQ`/`RSP` (178/177), `ApplyRelaySerializers`,
+  `BacklogMessageSerializersTest.applyRelay`. Burn randomises it (separate random source; override
+  `accord.burn.relay_remote_apply`).
+
+**Happy burn**, 3 DCs, the 32 symmetric seeds of 40, mean / p99 ms; cross-DC messages summed:
+
+| workload    | variant              | mean / p99    | x-DC msgs | x-DC `APPLY_REQ` | x-DC `APPLY_RELAY_REQ` |
+|-------------|----------------------|---------------|-----------|------------------|------------------------|
+| h4 r0.8 c40 | `DISABLED`           | 1,234 / 1,968 | 1.63M     | 141k             | –                      |
+|             | `DISABLED` + relay   | 1,226 / 1,989 | 1.52M     | 20.5k            | 41.5k                  |
+|             | `dpl500`             | 597 / 863     | 1.31M     | 6.2k             | –                      |
+|             | `dpl500` + relay     | 595 / 828     | 1.31M     | 5.6k             | 0.4k                   |
+| h2 r0.8     | `DISABLED` → + relay | 954 / 1,704 → 943 / 1,678 | 1.55M → 1.35M | 141k → 18.7k | 41.1k |
+| no hot keys | `DISABLED` → + relay | 620 / 1,334 → 593 / 1,116 | 1.35M → 1.12M | 139k → 12.7k | 41.5k |
+
+- For `DISABLED`, cross-DC messages carrying writes fall by ~55–60% (141k → ~62k). Latency is
+  unchanged or slightly better, even though remote replicas now get Apply one local hop later.
+- The `x-DC msgs` totals fall less, as replies cross the DC boundary too.
+- With Phase 2e, the coordinator rarely sends Apply to remote DCs anyway, so relaying makes little
+  difference there.
+- `InformDurable` is now the largest cross-DC message type for `DISABLED` (~200k per 32 seeds); it
+  could be relayed (or piggybacked) the same way.
+- Non-happy burn passes 50 forced-relay seeds with `DESIGNATED` per DC and persisting locally, 100
+  forced-relay seeds with otherwise random configuration, and 50 random seeds. Forced relay vs no
+  relay on seeds 1–50 / 51–100: lost 2,008 vs 2,533 and 3,538 vs 3,052, i.e. within noise.
+- Bytes aren't measured in burn. An `ApplyRelay` carries deps (for the relay to send to any replica
+  not expected to be Stable, and for `Maximal` resends) and the definition, once per DC; a direct
+  `NoDeps` Apply carries only the writes, once per replica.
+
+Follow-ups:
+- [ ] Relay `InformDurable` (and perhaps Stable/Commit) the same way.
+- [ ] Omit deps from `ApplyRelay` when every recipient is expected to be Stable (then fetch them if
+  one replies `Insufficient`).
+- [ ] Treat a slow relay (not only a failed one) as a reason to contact the replicas directly.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
@@ -1180,6 +1239,7 @@ Follow-ups:
   - `accord.burn.coordinator_backlog_execution_persist_locally`,
     `accord.burn.coordinator_backlog_execution_remote_apply_delay_millis`
   - `accord.burn.log_slow_millis` (log client replies slower than this)
+  - `accord.burn.relay_remote_apply`
   - `accord.burn.asymmetric_dcs` (permit DC assignments where some DC lacks a replica of some shard;
     by default only 10% of seeds may)
 - Each run logs `Executions:` (attempts by path, duplicate executions), `Chains:` (wait depth,

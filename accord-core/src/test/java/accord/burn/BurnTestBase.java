@@ -515,6 +515,11 @@ public class BurnTestBase
         if (System.getProperty("accord.burn.coordinator_backlog_execution_remote_apply_delay_millis") != null)
             coordinatorBacklogExecutionRemoteApplyDelayMillis = Long.getLong("accord.burn.coordinator_backlog_execution_remote_apply_delay_millis");
         ListAgent.backlogRemoteApplyDelayMillis = coordinatorBacklogExecutionRemoteApplyDelayMillis;
+        boolean relayRemoteApply = persistLocallyRandom.nextBoolean();
+        if (System.getProperty("accord.burn.relay_remote_apply") != null)
+            relayRemoteApply = Boolean.getBoolean("accord.burn.relay_remote_apply");
+        setUnsafe(ProtocolModifiers.class, "relayRemoteApply", relayRemoteApply);
+        logger.info("Relay remote apply: {}", relayRemoteApply);
         if (coordinatorBacklogExecution == CoordinatorBacklogExecution.DESIGNATED)
             logger.info("Designated backlog execution: {}, grace {}us{}", coordinatorBacklogExecutionPerDc ? "per DC" : "single", coordinatorBacklogExecutionGraceMicros,
                         ProtocolModifiers.coordinatorBacklogExecutionPersistLocally() ? ", persist locally (remote apply delay " + coordinatorBacklogExecutionRemoteApplyDelayMillis + "ms)" : "");
