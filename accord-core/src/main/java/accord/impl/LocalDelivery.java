@@ -36,6 +36,7 @@ import accord.utils.Invariants;
 import accord.utils.async.Cancellable;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public class LocalDelivery<R extends Reply> implements ReplyContext
 {
@@ -43,6 +44,10 @@ public class LocalDelivery<R extends Reply> implements ReplyContext
     final Node node;
     final Callback<R> callback;
     private long expiresAtMicros;
+    // for reporting the latency of local delivery to the MessageSink
+    private MessageType requestType;
+    private TxnId txnId;
+    private long deliveredAtNanos;
     private volatile RegisteredTimeout timeout;
 
     private static final SentinelRegisteredTimeout CLEARED_TIMEOUT = new SentinelRegisteredTimeout();
@@ -58,6 +63,9 @@ public class LocalDelivery<R extends Reply> implements ReplyContext
     {
         TxnId txnId = request.primaryTxnId();
         MessageType messageType = request.type();
+        this.requestType = messageType;
+        this.txnId = txnId;
+        this.deliveredAtNanos = node.elapsed(NANOSECONDS);
         this.expiresAtMicros = node.agent().selfExpiresAt(txnId, messageType, MICROSECONDS);
         long slowAtMicros = node.agent().selfSlowAt(txnId, messageType, MICROSECONDS);
 
@@ -109,7 +117,11 @@ public class LocalDelivery<R extends Reply> implements ReplyContext
     {
         // TODO (desired): we can in theory race with a slow or expiry timeout here
         if (reply.isFinal() ? cancelTimeout() : timeout != CLEARED_TIMEOUT)
+        {
+            if (reply.isFinal())
+                node.messageSink().onLocalReply(requestType, txnId, node.elapsed(NANOSECONDS) - deliveredAtNanos, NANOSECONDS);
             callback.onSuccess(node.id(), reply);
+        }
     }
 
     private void onFailure(Throwable t)

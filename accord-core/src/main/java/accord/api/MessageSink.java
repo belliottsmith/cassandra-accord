@@ -18,12 +18,18 @@
 
 package accord.api;
 
+import java.util.concurrent.TimeUnit;
+
+import javax.annotation.Nullable;
+
 import accord.local.Node;
 import accord.local.Node.Id;
 import accord.messages.Callback;
+import accord.messages.MessageType;
 import accord.messages.Reply;
 import accord.messages.ReplyContext;
 import accord.messages.Request;
+import accord.primitives.TxnId;
 import accord.utils.async.Cancellable;
 
 public interface MessageSink
@@ -34,6 +40,14 @@ public interface MessageSink
         return send(to, request, 1, executor, callback);
     }
     Cancellable send(Id to, Request request, int attempt, AsyncExecutor executor, Callback<?> callback);
+
+    /**
+     * Invoked when a request delivered locally (i.e. bypassing this sink; see {@link accord.impl.LocalDelivery})
+     * replies with a final reply, so that implementations may measure local delivery as they would a remote round-trip.
+     *
+     * @param elapsed the time between delivery and reply, as measured by {@link Node#elapsed}
+     */
+    default void onLocalReply(MessageType requestType, @Nullable TxnId txnId, long elapsed, TimeUnit units) {}
 
     interface ReplySink extends MessageSink
     {

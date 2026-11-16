@@ -43,6 +43,12 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
     {
         @VisibleForImplementation
         long registeredAt(TimeUnit units);
+
+        /**
+         * @return the context supplied by the implementation on registration, if any (e.g. to attribute reply latencies)
+         */
+        @VisibleForImplementation
+        default Object context() { return null; }
     }
 
     static class CallbackStripe extends Stripe
@@ -56,10 +62,12 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             final long registeredAt;
             final long reportSlowAt;
             final long reportFailAt;
+            final Object context;
             boolean cancelInFlight;
 
-            public RegisteredCallback(Executor executor, long callbackId, Callback<T> callback, Node.Id to, long registeredAt, long reportSlowAt, long reportFailAt)
+            public RegisteredCallback(Executor executor, long callbackId, Callback<T> callback, Node.Id to, long registeredAt, long reportSlowAt, long reportFailAt, Object context)
             {
+                this.context = context;
                 this.callbackId = callbackId;
                 this.executor = executor;
                 this.callback = callback;
@@ -72,6 +80,12 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
             public long registeredAt(TimeUnit units)
             {
                 return units.convert(registeredAt, MICROSECONDS);
+            }
+
+            @Override
+            public Object context()
+            {
+                return context;
             }
 
             void cancelAlreadyRemovedWithLock()
@@ -177,15 +191,15 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
 
         <T> RegisteredCallback<T> register(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long failDeadline)
         {
-            return register(callbackId, executor, callback, to, now, Long.MAX_VALUE, failDeadline);
+            return register(callbackId, executor, callback, to, now, Long.MAX_VALUE, failDeadline, null);
         }
 
-        <T> RegisteredCallback<T> register(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt)
+        <T> RegisteredCallback<T> register(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt, Object context)
         {
             lock();
             try
             {
-                RegisteredCallback<T> registered = new RegisteredCallback<>(executor, callbackId, callback, to, now, reportSlowAt, reportFailAt);
+                RegisteredCallback<T> registered = new RegisteredCallback<>(executor, callbackId, callback, to, now, reportSlowAt, reportFailAt, context);
                 Object existing = callbacks.putIfAbsent(callbackId, registered);
                 Invariants.require(existing == null);
                 timeouts.add(Math.min(reportSlowAt, reportFailAt), registered);
@@ -261,13 +275,21 @@ public class RequestCallbacks extends AbstractTimeouts<RequestCallbacks.Callback
 
     public <T> Cancellable registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt, TimeUnit units)
     {
+        return registerAt(callbackId, executor, callback, to, now, reportSlowAt, reportFailAt, units, null);
+    }
+
+    /**
+     * @param context an arbitrary object made available to the implementation on reply via {@link CallbackEntry#context()}
+     */
+    public <T> Cancellable registerAt(long callbackId, Executor executor, Callback<T> callback, Node.Id to, long now, long reportSlowAt, long reportFailAt, TimeUnit units, Object context)
+    {
         if (units != MICROSECONDS)
         {
             now = units.toMicros(now);
             reportSlowAt = reportSlowAt >= reportFailAt ? Long.MAX_VALUE : units.toMicros(reportSlowAt);
             reportFailAt = units.toMicros(reportFailAt);
         }
-        return stripes[(int)callbackId & (stripes.length - 1)].register(callbackId, executor, callback, to, now, reportSlowAt, reportFailAt);
+        return stripes[(int)callbackId & (stripes.length - 1)].register(callbackId, executor, callback, to, now, reportSlowAt, reportFailAt, context);
     }
 
     public <T> CallbackEntry onSuccess(long callbackId, Node.Id from, T reply, boolean remove)
