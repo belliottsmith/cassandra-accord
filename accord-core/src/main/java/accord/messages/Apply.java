@@ -38,6 +38,7 @@ import accord.primitives.Deps;
 import accord.primitives.FullRoute;
 import accord.primitives.PartialDeps;
 import accord.primitives.PartialTxn;
+import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
@@ -180,13 +181,6 @@ public class Apply extends RouteRequest<ApplyReply>
         deps = null;
         writes = null;
         result = null;
-        if (reply != null && reply.kind == ApplyReply.Kind.Applied && ProtocolModifiers.coordinatorBacklogExecutionFollow() && node.executeBacklogSink() != null)
-        {
-            // record where the transaction executed (see ExecuteTxnBacklog#onApplyReceived), to decide where its successors execute
-            Id executor = flags.contains(RELAYED) ? executedBy : replyTo;
-            if (executor != null)
-                node.executeBacklogSink().onApplyReceived(txnId, ballot, scope, executeAt, executor);
-        }
         if (reply != null || failure != null) acceptReply(reply, failure);
         else Invariants.require(isCancelled());
     }
@@ -207,7 +201,7 @@ public class Apply extends RouteRequest<ApplyReply>
         public AsyncChain<ApplyReply> apply(Void o)
         {
             return commandStore.continuationChain(Apply.this, safeStore -> {
-                return Apply.apply(Applied, safeStore, participants, ballot, txn, txnId, executeAt, deps, participants.route(), writes, result);
+                return onApplied(safeStore, participants, Apply.apply(Applied, safeStore, participants, ballot, txn, txnId, executeAt, deps, participants.route(), writes, result));
             });
         }
     }
@@ -247,7 +241,23 @@ public class Apply extends RouteRequest<ApplyReply>
         if (ifDoneExpectCancelled()) // check cancellation after reading nullable fields
             return null;
 
-        return apply(newSaveStatus, safeStore, participants, ballot, txn, txnId, executeAt, deps, bestRoute(), writes, result);
+        return onApplied(safeStore, participants, apply(newSaveStatus, safeStore, participants, ballot, txn, txnId, executeAt, deps, bestRoute(), writes, result));
+    }
+
+    /**
+     * If we have applied the transaction, record on its keys where it executed (see
+     * {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionFollow()}), to decide where its successors execute
+     */
+    private ApplyReply onApplied(SafeCommandStore safeStore, StoreParticipants participants, ApplyReply reply)
+    {
+        if (reply == ApplyReply.Applied && ProtocolModifiers.coordinatorBacklogExecutionFollow() && node.executeBacklogSink() != null)
+        {
+            Id executor = flags.contains(RELAYED) ? executedBy : replyTo;
+            Participants<?> executes = participants.executes();
+            if (executor != null && executes != null)
+                node.executeBacklogSink().onApplied(safeStore, executes, txnId, ballot, executeAt, executor);
+        }
+        return reply;
     }
 
     public static ApplyReply apply(SafeCommandStore safeStore, StoreParticipants participants, Ballot ballot, PartialTxn txn, TxnId txnId, Timestamp executeAt, PartialDeps deps, Route<?> route, Writes writes, PersistableResult result)

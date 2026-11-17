@@ -81,8 +81,30 @@ public abstract class SafeCommandsForKey extends SafeState<CommandsForKey>
         return key;
     }
 
-    public abstract void overrideSink(NotifySink overrideSink);
-    public abstract NotifySink overrideSink();
+    /**
+     * Transient state for backlog execution (see {@link ExecuteTxnBacklog}), held on the global (cache) entry for the
+     * key: a {@link NotifySink} that overrides the default (for the sink-based modes, see
+     * {@link accord.api.ProtocolModifiers.CoordinatorBacklogExecution}), or a record of the latest transaction applied
+     * on the key and where it executed (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionFollow()}).
+     * These are never needed together. The state is never persisted, and may be lost (e.g. on eviction).
+     */
+    public abstract void backlogState(@Nullable Object state);
+    public abstract @Nullable Object backlogState();
+
+    /**
+     * Override the default sink (or, if null, stop overriding it; we do not then clear any other backlog state)
+     */
+    public final void overrideSink(@Nullable NotifySink overrideSink)
+    {
+        if (overrideSink != null || backlogState() instanceof NotifySink)
+            backlogState(overrideSink);
+    }
+
+    public final @Nullable NotifySink overrideSink()
+    {
+        Object state = backlogState();
+        return state instanceof NotifySink ? (NotifySink) state : null;
+    }
 
     private NotifySink defaultSink()
     {

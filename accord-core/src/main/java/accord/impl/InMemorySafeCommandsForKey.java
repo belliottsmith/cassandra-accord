@@ -35,15 +35,15 @@ public class InMemorySafeCommandsForKey extends SafeCommandsForKey
     }
 
     @Override
-    public void overrideSink(NotifySink overrideSink)
+    public void backlogState(Object state)
     {
-        global.overrideSink = overrideSink;
+        global.backlogState = state;
     }
 
     @Override
-    public NotifySink overrideSink()
+    public Object backlogState()
     {
-        return global.overrideSink;
+        return global.backlogState;
     }
 
     public final void preExecute()

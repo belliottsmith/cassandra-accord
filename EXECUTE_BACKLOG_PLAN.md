@@ -50,8 +50,9 @@ A standalone patch for the `ReadData` sliced-definition bug is in the Cassandra 
   `ExecuteBacklogTxn.trySendMaximal`/`onReconstituted`/`fetchDefinition`; `ReadData.onWaitingForStable`/`onWaitingUpdate`.
 - Relay: `accord.messages.ApplyRelay` (+ `ApplyRelayReply`), `PersistTxn.relay`, `Persist.contactRemote`/`relay`/
   `sendRelay`, `ExecuteTxnBacklog.designatedExecutorIn`.
-- Phase 2f (following predecessors): `ExecuteTxnBacklog` `Chain`/`onApplyReceived` (per-key record of the latest executor),
-  `waitingWithOwners`, `chooseDelegate`, `delegate`/`onDelegated`/`startDelegated`; `ReadData.WaitingWithOwners`;
+- Phase 2f (following predecessors): `ExecuteTxnBacklog` `Chain` (the latest executor of each key, held as the key's
+  transient `SafeCommandsForKey.backlogState`), `onApplied` (from `Apply`), `collectOwners` (from `ReadData`),
+  `chooseDelegate`, `delegate`/`onDelegated`/`startDelegated`; `ReadData.WaitingWithOwners`;
   `accord.messages.BacklogDelegate`; `ExecuteTxn.tryDelegate`; `ExecuteFlag.RELAYED` + `Apply.executedBy`;
   `TopologySorter.Supplier.executionPreference` / `Node.executionPreference`.
 
@@ -109,11 +110,9 @@ single-DC execution as the eventual default once enabled.
    rates and synthetic latencies. Measure: client latency, duplicate executions, delegations (accepted / declined /
    resumed), chain flips between DCs, `Insufficient` Apply replies under `MINIMAL_NO_DEPS`, relay outcomes; and for
    per-DC, `BacklogApplied` reports and acks / `Nack`s and fallbacks. Metrics for these are still to be added.
-2. Phase 2f follow-ups (see that section): the chain record on the CFK cache entry; only send `WaitingWithOwners` in
-   reply to requests that ask for it; a Cassandra source for `executionPreference` (e.g. a configured DC order);
+2. A Cassandra source for `executionPreference` (e.g. a configured DC order), and metrics (see item 1).
+3. Phase 2f follow-ups (see that section): only send `WaitingWithOwners` in reply to requests that ask for it;
    precedence by chain age; delegating when every owner lacks some shard.
-3. The pre-existing relay fallback bug (Phase 2f, "Bugs found"): a relay that times out can leave a `Persist` with
-   nothing in flight and an incomplete tracker.
 4. Phase 2e follow-ups: report sooner (once a quorum of the DC has replied); don't defer to DCs without
    a replica of the home shard. Relay follow-ups: omit deps when every recipient is Stable; treat a
    slow relay as failed. Relaying `InformDurable` was considered and isn't worthwhile: it is a very
@@ -122,12 +121,15 @@ single-DC execution as the eventual default once enabled.
    predecessors already avoids duplicates, and its stickiness is a weak form of the chain token.
 6. **Phase 2b leftovers:** coordinator liveness in `shouldYieldTo`; defer to live local recovery
    coordinators.
-7. **Side-quest follow-ups:** an `Insufficient` metric and deferral window; investigate the high
+7. **Retire the sink-based modes** (`ALWAYS`, `ON_RECOVERY`, the default) once designated execution subsumes them,
+   including continuing a backlog behind a recovered txn; this would free `SafeCommandsForKey.backlogState` of sinks.
+8. **Side-quest follow-ups:** an `Insufficient` metric and deferral window; investigate the high
    volume of `Maximal` Applies in burn; `TinyEnumSet.equals` is broken for subclasses (e.g.
    `ExecuteFlags`); `designatedExecutor` uses `topology().current()` rather than the txn's epoch.
 
 Earlier items, now done: the `HappyBurnTest` modelling gaps and the backlog A/B (Phase 2b), per-DC
-execution made cheap (Phase 2e), the relay, and competitive single-DC execution (Phase 2f).
+execution made cheap (Phase 2e), the relay, competitive single-DC execution (Phase 2f), the relay fallback bug
+(`Persist` awaits its `Maximal` resends), and the chain record on the CFK cache entry.
 
 **Known limitations, by design for now:**
 - A coordinator paused by a claim resumes only after `selfExpiresAt(READ_REQ)`. If the claimant
@@ -143,8 +145,8 @@ execution made cheap (Phase 2e), the relay, and competitive single-DC execution 
 - `Persist.relay`/`tryDeferRemote` only apply to `PersistTxn` (not sync points or interop).
 - Following predecessors: a delegate that fails after accepting leaves its coordinator paused until
   `selfExpiresAt(READ_REQ)`. Coordinators only delegate once all their initial reads have replied, and only if one
-  replied `Waiting`. The chain record is per node (a map pruned by age), and is lost on restart, which only makes
-  chains start afresh. In asymmetric topologies latency is notably worse than per-DC (h4 787 vs 533ms on 8 seeds),
+  replied `Waiting`. The chain record is transient state on the key's CFK cache entry, lost on eviction or restart
+  (chains then start afresh); a replica only reports owners for keys whose CFK is in memory when it replies `Waiting`. In asymmetric topologies latency is notably worse than per-DC (h4 787 vs 533ms on 8 seeds),
   as we never delegate to a DC lacking a shard of the txn.
 
 ---
@@ -1222,12 +1224,24 @@ difference in burn (its DCs are similar in size and clients are uniform).
 asymmetric latency regimes; if pursued, use a fixed DC proximity relationship (e.g. a properties file) rather than
 an estimate (`TODO (desired)` in `chooseDelegate`).
 
-**Bugs found:** pre-existing, single-DC designated + relay: a relay that times out can leave a `Persist` with nothing
-in flight and an incomplete tracker (`AbstractCoordination.onFailureExclusive` invariant; h2 seed 38). The relay's
-own Persist waited on one recipient; the direct fallback Applies seem to fail at once (expired). Not yet fixed.
+**Bug found and fixed** (pre-existing, made likely by `MINIMAL_NO_DEPS` and relaying): on an `Insufficient` reply,
+`Persist` resent `Maximal` without a callback. `Insufficient` is not a final reply, so the original request remained
+registered until it timed out, and was then recorded as a failure, while the reply to the `Maximal` went nowhere. So
+a replica that applied the txn counted as failed after a timeout; a partial `Persist` (a relay, or a designated
+replica persisting locally) waited for that timeout before reporting, so its sender timed out on the relay too; and a
+coordinator could be left with nothing in flight and neither quorum nor failure (`AbstractCoordination` invariant,
+h2 seed 38 with single-DC designated execution and relaying). Fix: `AbstractCoordination.resend` sends the `Maximal`
+in place of the original request and awaits its reply (also for `InsufficientEpochs`), cancelling the original's
+registration; replies to (and failures and timeouts of) superseded requests are ignored by generation, since a local
+delivery reports its own expiry and cannot be cancelled. 100 non-happy seeds with relaying and `MINIMAL_NO_DEPS`
+forced pass.
 
 Follow-ups:
-- [ ] Record chains on the CFK cache entry (with the transient `overrideSink`) rather than a per-node map.
+- [x] Record chains on the CFK cache entry rather than a per-node map: the cache entry's transient sink slot is now
+  `SafeCommandsForKey.backlogState`, holding either a `NotifySink` (sink-based modes) or a `Chain` (follow, which
+  requires `DESIGNATED`, which installs no sinks). Applies record it in each store as they apply; `ReadData` collects
+  owners from the stores that reply `Waiting` (only from CFKs in memory). Happy-burn latency is unchanged
+  (h4 / h2 / w0 665 / 585 / 477ms).
 - [ ] Only send `WaitingWithOwners` in reply to requests that ask for it (today: whenever `follow` is enabled).
 - [ ] A Cassandra source for `executionPreference` (e.g. a configured DC preference order).
 - [ ] Precedence by chain age (adaptive), rather than a fixed preference.

@@ -720,12 +720,12 @@ public class CommandsForKeyTest
         }
 
         @Override
-        public void overrideSink(NotifySink overrideSink)
+        public void backlogState(Object state)
         {
         }
 
         @Override
-        public NotifySink overrideSink()
+        public Object backlogState()
         {
             return null;
         }

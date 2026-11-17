@@ -18,6 +18,8 @@
 
 package accord.messages;
 
+import java.util.List;
+import java.util.ArrayList;
 import java.util.NavigableMap;
 import java.util.function.BiConsumer;
 import javax.annotation.Nullable;
@@ -310,6 +312,24 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
         return null;
     }
 
+    // for a Waiting reply, the keys whose chains we know, and the replica that executed each's latest transaction
+    // (see ProtocolModifiers#coordinatorBacklogExecutionFollow); guarded by this
+    private @Nullable List<RoutingKey> ownerKeys;
+    private @Nullable List<Node.Id> ownerExecutors;
+
+    private void collectOwners(SafeCommandStore safeStore)
+    {
+        if (!ProtocolModifiers.coordinatorBacklogExecutionFollow() || txnId.is(EphemeralRead) || node.executeBacklogSink() == null)
+            return;
+
+        Participants<?> keys = scope.slice(safeStore.ranges().allAt(executeAtEpoch), Minimal);
+        node.executeBacklogSink().collectOwners(safeStore, txnId, keys, (key, executor) -> {
+            if (ownerKeys == null) { ownerKeys = new ArrayList<>(); ownerExecutors = new ArrayList<>(); }
+            ownerKeys.add(key);
+            ownerExecutors.add(executor);
+        });
+    }
+
     protected CommitOrReadNack applyInternal(SafeCommandStore safeStore, SafeCommand safeCommand, StoreParticipants participants)
     {
         boolean abandonNotReady = false;
@@ -351,6 +371,7 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                     else if (c > 0 && status.compareTo(executeOn().min) >= 0 && status.compareTo(SaveStatus.PreApplied) < 0) safeStore.progressLog().waiting(CanApply, safeStore, safeCommand, null, scope, null);
 
                     node.agent().replicaEvents().onReadWaiting(safeStore, command);
+                    if (c >= 0) collectOwners(safeStore);
                     return c >= 0 ? CommitOrReadNack.Waiting : CommitOrReadNack.InsufficientAndWaiting;
 
                 case OBSOLETE:
@@ -568,11 +589,13 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
             {
                 // tell the coordinator where the transaction's predecessors executed, so that it may delegate to that DC
                 // (see ProtocolModifiers#coordinatorBacklogExecutionFollow)
-                if (reply.kind == CommitOrReadNack.Kind.Waiting && ProtocolModifiers.coordinatorBacklogExecutionFollow() && !txnId.is(EphemeralRead) && node.executeBacklogSink() != null)
+                if (reply.kind == CommitOrReadNack.Kind.Waiting)
                 {
-                    CommitOrReadNack withOwners = node.executeBacklogSink().waitingWithOwners(txnId, scope);
-                    if (withOwners != null)
-                        reply = withOwners;
+                    synchronized (this)
+                    {
+                        if (ownerKeys != null)
+                            reply = new WaitingWithOwners(ownerKeys.toArray(new RoutingKey[0]), ownerExecutors.toArray(new Node.Id[0]));
+                    }
                 }
                 reply(reply, null);
             }

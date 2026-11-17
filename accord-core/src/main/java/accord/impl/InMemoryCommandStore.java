@@ -627,7 +627,7 @@ public abstract class InMemoryCommandStore extends CommandStore
     {
         private final RoutingKey key;
         private final List<Snapshot> pendingSnapshots = new ArrayList<>();
-        NotifySink overrideSink;
+        Object backlogState;
 
         public GlobalCommandsForKey(RoutableKey key)
         {

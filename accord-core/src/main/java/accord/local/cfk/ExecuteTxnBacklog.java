@@ -191,13 +191,11 @@ public class ExecuteTxnBacklog
      * (RemoteSuccess), or declines or fails to reply (in which case it resumes).
      */
 
-    // TODO (desired): record on the CFK cache entry rather than per node
-    private static final int PRUNE_CHAINS_AT_SIZE = 1 << 12;
-
     /**
-     * The latest transaction we have applied on some key, and the replica that executed it
+     * The latest transaction applied on some key, and the replica that executed it; held as the key's transient backlog
+     * state (see {@link SafeCommandsForKey#backlogState()})
      */
-    private static final class Chain
+    static final class Chain
     {
         final Timestamp executeAt;
         final Node.Id executor;
@@ -209,12 +207,16 @@ public class ExecuteTxnBacklog
             this.executor = executor;
             this.appliedAt = appliedAt;
         }
+
+        @Override
+        public String toString()
+        {
+            return "Chain{" + executeAt + " by " + executor + '}';
+        }
     }
 
-    private final ConcurrentHashMap<RoutingKey, Chain> chains = new ConcurrentHashMap<>();
-
     /**
-     * We have applied {@code txnId} on (some of) {@code scope}, which {@code executor} executed.
+     * We have applied {@code txnId} on {@code keys} in {@code safeStore}, which {@code executor} executed.
      * <p>
      * If the transaction's own (or recovery) coordinator executed it, it may have done so only because it was not
      * contended (so did not consider delegating it), or because its DC's chain won (by precedence) where chains met;
@@ -223,27 +225,36 @@ public class ExecuteTxnBacklog
      * (or backlog) executor executed the transaction. If precedence chose the coordinator's own DC, the chain moves when
      * the next transaction to join it is delegated there.
      */
-    public void onApplyReceived(TxnId txnId, Ballot ballot, Route<?> scope, Timestamp executeAt, Node.Id executor)
+    public void onApplied(SafeCommandStore safeStore, Participants<?> keys, TxnId txnId, Ballot ballot, Timestamp executeAt, Node.Id executor)
     {
-        if (!mayExecute(txnId) || scope.domain() != Key)
+        if (!mayExecute(txnId) || keys.domain() != Key)
             return;
 
         long now = node.elapsed(MICROSECONDS);
         long window = coordinatorBacklogExecutionFollowWindow(MICROSECONDS);
-        if (chains.size() >= PRUNE_CHAINS_AT_SIZE)
-            chains.values().removeIf(c -> now - c.appliedAt > window);
-
         Node.Id coordinator = ballot.equals(Ballot.ZERO) ? txnId.node : ballot.node;
         boolean executedByCoordinator = executor.equals(coordinator);
-        Chain chain = new Chain(executeAt, executor, now);
-        for (int i = 0, size = scope.size() ; i < size ; ++i)
+        Chain chain = null;
+        for (int i = 0, size = keys.size() ; i < size ; ++i)
         {
-            chains.compute(scope.get(i).asRoutingKey(), (key, prev) -> {
-                if (prev == null) return chain;
-                if (prev.executeAt.compareTo(executeAt) >= 0) return prev;
-                if (!executedByCoordinator || !isRecent(prev, now, window) || node.areNearby(prev.executor, executor)) return chain;
-                return prev;
-            });
+            SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(keys.get(i).asRoutingKey());
+            if (safeCfk == null)
+                continue;
+
+            Object state = safeCfk.backlogState();
+            if (state != null && !(state instanceof Chain))
+                continue; // not ours (e.g. a backlog sink, if the mode has changed)
+
+            Chain prev = (Chain) state;
+            if (prev != null)
+            {
+                if (prev.executeAt.compareTo(executeAt) >= 0)
+                    continue;
+                if (executedByCoordinator && isRecent(prev, now, window) && !node.areNearby(prev.executor, executor))
+                    continue;
+            }
+            if (chain == null) chain = new Chain(executeAt, executor, now);
+            safeCfk.backlogState(chain);
         }
     }
 
@@ -253,31 +264,26 @@ public class ExecuteTxnBacklog
     }
 
     /**
-     * @return a Waiting reply reporting, for each key of {@code scope} with a recent chain, the replica that executed
-     * its latest transaction; or null if there are none
+     * For each of {@code keys} with a recent chain in {@code safeStore}, report the replica that executed its latest
+     * transaction to {@code into} (for a {@link ReadData.WaitingWithOwners} reply)
      */
-    public @Nullable ReadData.CommitOrReadNack waitingWithOwners(TxnId txnId, Participants<?> scope)
+    public void collectOwners(SafeCommandStore safeStore, TxnId txnId, Participants<?> keys, java.util.function.BiConsumer<RoutingKey, Node.Id> into)
     {
-        if (!mayExecute(txnId) || scope.domain() != Key || chains.isEmpty())
-            return null;
+        if (!mayExecute(txnId) || keys.domain() != Key)
+            return;
 
         long now = node.elapsed(MICROSECONDS);
         long window = coordinatorBacklogExecutionFollowWindow(MICROSECONDS);
-        List<RoutingKey> keys = null;
-        List<Node.Id> executors = null;
-        for (int i = 0, size = scope.size() ; i < size ; ++i)
+        for (int i = 0, size = keys.size() ; i < size ; ++i)
         {
-            RoutingKey key = scope.get(i).asRoutingKey();
-            Chain chain = chains.get(key);
-            if (!isRecent(chain, now, window))
+            RoutingKey key = keys.get(i).asRoutingKey();
+            SafeCommandsForKey safeCfk = safeStore.ifLoadedAndInitialised(key);
+            if (safeCfk == null)
                 continue;
-            if (keys == null) { keys = new ArrayList<>(); executors = new ArrayList<>(); }
-            keys.add(key);
-            executors.add(chain.executor);
+            Object state = safeCfk.backlogState();
+            if (state instanceof Chain && isRecent((Chain) state, now, window))
+                into.accept(key, ((Chain) state).executor);
         }
-        if (keys == null)
-            return null;
-        return new ReadData.WaitingWithOwners(keys.toArray(new RoutingKey[0]), executors.toArray(new Node.Id[0]));
     }
 
     /**
