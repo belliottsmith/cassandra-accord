@@ -312,10 +312,16 @@ public interface CommandSummaries
             if (cfk == null || cfk.size() == 0)
                 return false;
 
-            return isRelevant(cfk.key(), cfk.get(cfk.size() - 1), cfk.minUndecidedManaged());
+            return isRelevant(cfk.key(), cfk.get(cfk.size() - 1));
         }
 
-        public boolean isRelevant(RoutingKey key, TxnId last, TxnId minUndecided)
+        /**
+         * Whether we must load a key whose latest transaction is {@code last}.
+         * <p>
+         * Note that we do not need to consider any undecided transaction: we skip a key only if a quorum has applied
+         * {@code last}, and so every transaction of the key, which must then be decided at a quorum.
+         */
+        public boolean isRelevant(RoutingKey key, TxnId last)
         {
             // NOTE: we CANNOT safely filter on first element, as we may have pruned dependencies we need to witness
             //  and that will be populated on the receiving replicas as necessary - that is,
@@ -324,9 +330,6 @@ public interface CommandSummaries
                 return false;
 
             if (maxDecidedRX == null)
-                return true;
-
-            if (minUndecided != null)
                 return true;
 
             // TODO (expected): can we improve our inferences to avoid looping?
