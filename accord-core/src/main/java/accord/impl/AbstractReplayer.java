@@ -82,7 +82,16 @@ public abstract class AbstractReplayer implements Journal.Replayer
 
     protected AbstractReplayer(CommandStore commandStore, Mode mode, @Nullable TxnId minReplay)
     {
-        this.redundantBefore = commandStore.unsafeGetRedundantBefore();
+        this(commandStore, commandStore.unsafeGetRedundantBefore(), mode, minReplay);
+    }
+
+    /**
+     * @param redundantBefore decides what we replay; if we restored state as of some earlier point, it should be the
+     *                        {@code RedundantBefore} as of that point, so that we replay everything not durable then
+     */
+    protected AbstractReplayer(CommandStore commandStore, RedundantBefore redundantBefore, Mode mode, @Nullable TxnId minReplay)
+    {
+        this.redundantBefore = redundantBefore;
         this.mode = mode;
         Invariants.require(redundantBefore.ranges(Objects::nonNull).containsAll(commandStore.unsafeGetRangesForEpoch().all()));
         if (mode != Mode.ALL)

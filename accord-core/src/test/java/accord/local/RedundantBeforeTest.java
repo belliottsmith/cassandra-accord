@@ -23,6 +23,7 @@ import java.util.BitSet;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.TreeMap;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
@@ -30,6 +31,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 import accord.api.RoutingKey;
+import accord.impl.IntKey;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.local.RedundantStatus.Property;
 import accord.primitives.Ranges;
@@ -60,6 +62,22 @@ public class RedundantBeforeTest
                 test(rs, 1000, 10, rs.nextInt(2, 10), 1024, rs.nextInt(2, 4), 128 * rs.nextInt(1, 16));
             });
         }
+    }
+
+    @Test
+    public void testPreferring()
+    {
+        TxnId earlier = new TxnId(1, 10, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, Node.Id.NONE);
+        TxnId later = new TxnId(1, 20, Txn.Kind.ExclusiveSyncPoint, Routable.Domain.Range, Node.Id.NONE);
+        RedundantBefore prefer = RedundantBefore.create(Ranges.of(IntKey.range(0, 10), IntKey.range(20, 30)), earlier, SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY);
+        RedundantBefore otherwise = RedundantBefore.create(Ranges.of(IntKey.range(5, 40)), later, SomeStatus.LOCALLY_DURABLE_TO_COMMAND_STORE_ONLY);
+        RedundantBefore preferring = RedundantBefore.preferring(prefer, otherwise);
+
+        Assertions.assertThat(preferring.ranges(Objects::nonNull).mergeTouching()).isEqualTo(Ranges.of(IntKey.range(0, 40)));
+        for (int key : new int[] { 1, 5, 6, 9, 21, 29 })
+            Assertions.assertThat(preferring.get(routing(key)).maxBound(Property.LOCALLY_DURABLE_TO_COMMAND_STORE)).describedAs("%d", key).isEqualTo(earlier);
+        for (int key : new int[] { 11, 19, 31, 39 })
+            Assertions.assertThat(preferring.get(routing(key)).maxBound(Property.LOCALLY_DURABLE_TO_COMMAND_STORE)).describedAs("%d", key).isEqualTo(later);
     }
 
     static class Unmerged extends RedundantStatus

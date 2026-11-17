@@ -1034,6 +1034,14 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         return ReducingIntervalMap.mergeIntervals(a, b, Builder::new);
     }
 
+    /**
+     * {@code prefer} wherever it has bounds, and {@code otherwise} elsewhere
+     */
+    public static RedundantBefore preferring(RedundantBefore prefer, RedundantBefore otherwise)
+    {
+        return ReducingIntervalMap.mergeIntervals(prefer, otherwise, PreferringBuilder::new);
+    }
+
     public RedundantStatus status(TxnId txnId, @Nullable Timestamp applyAtIfKnown, Participants<?> participants)
     {
         RedundantStatus result = foldl(participants, Bounds::getAndMerge, null, txnId, applyAtIfKnown);
@@ -1273,6 +1281,20 @@ public class RedundantBefore extends ReducingRangeMap<RedundantBefore.Bounds>
         if (participants.isEmpty() || maxShardAppliedBefore.compareTo(txnId) < 0)
             return participants;
         return foldl(participants, Bounds::withoutShardAppliedLocallySynced, participants, txnId);
+    }
+
+    private static class PreferringBuilder extends Builder
+    {
+        PreferringBuilder(int capacity)
+        {
+            super(capacity);
+        }
+
+        @Override
+        protected Bounds reduce(Bounds a, Bounds b)
+        {
+            return a;
+        }
     }
 
     public static class Builder extends AbstractIntervalBuilder<RoutingKey, Bounds, RedundantBefore>
