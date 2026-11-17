@@ -106,6 +106,10 @@ Everything is off by default. The user expects the feature to stay off at first,
 single-DC execution as the eventual default once enabled.
 
 **Next steps, in priority order (updated after Phase 2f):**
+0. **Phase 2g: unify the backlog execution modes** (agreed design, not started; see that section). Do this first:
+   metrics and `executionPreference` then attach to one code path. `executionPreference` is deferred: precedence only
+   decides at joins between DCs (~2% of hot-key links once converged), and which DC wins barely matters in burn, so
+   the lowest node id (or lexicographic DC order) is fine for now.
 1. **Evaluate in a real multi-DC environment** (the user's team is working on cluster simulations and
    on latency metrics in parallel). Burn can't establish efficacy: it has high fault and recovery
    rates and synthetic latencies. Measure: client latency, duplicate executions, delegations (accepted / declined /
@@ -1248,6 +1252,73 @@ Follow-ups:
 - [ ] Precedence by chain age (adaptive), rather than a fixed preference.
 - [ ] Delegate to a DC lacking some shard if every owner is such a DC.
 - [ ] Metrics: delegations sent / accepted / declined / resumed; chain DC changes.
+
+### Phase 2g: Unify the backlog execution modes (agreed design; not started)
+Today `ALWAYS`/`ON_RECOVERY` use per-node sinks (`KeySink` on the CFK, triggered by per-key `notWaiting`), while
+`DESIGNATED` (and follow) trigger on `onReadyToExecute`. These are historical: the sink predates this work, and the
+sink modes were kept for comparison. Agreed with the user: treat all modes as variations of one feature.
+
+**Model.**
+- **The claim:** for each key, the chain belongs to the DC that executed its latest link: the existing per-key `Chain`
+  record (`SafeCommandsForKey.backlogState`), sticky as in Phase 2f (a coordinator executing its own txn outside the
+  owning DC does not move it). Within the owning DC, the candidate executor is the designated replica
+  (`designatedExecutorIn(dc, homeKey)`). Start and stop are one event: the claim moves when a link executes in another
+  DC. Not every replica is a candidate; only the claim holder.
+- **The trigger is a threshold on taking over from a txn's own coordinator, and it decides who acts:**
+
+  | trigger | live, contended coordinator | slow or stuck coordinator |
+  |---|---|---|
+  | `DISABLED` | executes itself | progress log / recovery only |
+  | `ON_RECOVERY` (default) | executes itself | the claim holder continues ("yield unless slow") |
+  | `ALWAYS` | delegates to the claim holder (follow, `BacklogDelegate`) | the claim holder continues |
+
+  - "Yield unless slow": the claim holder continues S, once S is ready, iff S's coordinator looks slow
+    (`Agent.isSlowCoordinator` on S's age, attempt 1). This is `ON_RECOVERY`'s purpose (the user: faster processing of
+    backlogs that accumulated behind a stuck recovery): it drains old txns behind the recovered one, and stops by
+    itself once the remaining txns are young enough for their own coordinators. Agreed as `ON_RECOVERY`'s behaviour
+    (replacing today's yield-to-nearby default). Claims become internal to this (tell a slow but live coordinator to
+    stand down), rather than an option.
+  - `ALWAYS` = `ON_RECOVERY` + coordinator delegation. Today's sink-based `ALWAYS` (a coordinator continues behind its
+    own txn) is subsumed: that coordinator's DC holds the claim, and its designated replica continues.
+  - The recovering node itself no longer continues (unless designated); the designated replica of its DC does, so it
+    need not replicate the whole txn.
+- **"Placement"** (working name; alternatives: "spread"), only with `ALWAYS`: how many DCs hold a chain.
+  `PRECEDENCE` (default; one DC, fixed precedence at joins), `UNLESS_HOME_KEY_LOCAL`, `UNLESS_ANY_KEY_LOCAL`, `PER_DC`
+  (every DC holds its own chain and executes every contended txn; the coordinator owns durability: today's `per_dc` +
+  `persist_locally`). The latency-threshold idea stays shelved (`TODO (desired)` in `chooseDelegate`).
+
+**Config after the refactor:** `coordinator_backlog_execution` = `DISABLED` / `ON_RECOVERY` (default) / `ALWAYS`;
+`coordinator_backlog_execution_placement` as above; `coordinator_backlog_execution_window` (claim validity; replaces
+linger and the follow window); unchanged: `relay_remote_apply`, `send_minimal`, `..._remote_apply_delay` (for `PER_DC`).
+Removed: `DESIGNATED` (with `per_dc` maps to `ALWAYS` + `PER_DC`; with follow to `ALWAYS` + the matching placement;
+single-DC by home key is retired, superseded by follow), and the separate follow, `per_dc`, linger, wait,
+`yield_to_nearby` and claims options (`persist_locally` becomes part of `PER_DC`). Map old Cassandra config values to
+the new pair for compatibility.
+
+**Mechanics.**
+- One trigger path: `onReadyToExecute`, Stable-but-waiting (delegations that arrive before Stable) and `onDelegated`,
+  feeding the existing `execute`/`tryExecute`/`start` (obligations, retries, definition collection, persist).
+- Delete `KeySink`, `notWaiting`, `maybeInstall` (and its call in `ExecuteTxn.LocalExecute`), the release/caught-up
+  logic and `installOnEveryKey`. Keep the generic CFK sink override (`SafeCommandsForKey.overrideSink`) as a hook:
+  `AccordCommandFailureTestBase` injects faults through it. `backlogState` then only holds the `Chain`.
+- The record must name the executor before successors can become ready: write it when an Apply arrives (before
+  `Commands.apply`), and at the executor before persisting; Applies keep it current elsewhere.
+- Replica-side continuation (slow coordinators) decides which chain a multi-key txn belongs to from its own view; two
+  DCs may then both continue a txn (a duplicate, not a stall); acceptable for the rare stuck case.
+
+**Validation.**
+- Burn: randomise trigger x placement; non-happy burn with each combination forced.
+- Happy-burn A/B of the remapped `ON_RECOVERY` and `ALWAYS` (with `PRECEDENCE`, and `PER_DC`) against the Phase 2b/2f
+  numbers; expect `ALWAYS` + `PRECEDENCE` to match follow (h4 / h2 / w0 665 / 585 / 477ms).
+- New burn scenario: a stalled coordinator/recovery with a backlog behind it, to exercise `ON_RECOVERY` (happy burn
+  has essentially no recovery).
+- Cassandra: config mapping, `BacklogMessageSerializersTest`, `AccordApplyFailureTest`, `AccordCommandStageFailureTest`,
+  `AccordProgressLogTest`. Note the prebuilt jar does not match the source tree (e.g. `TxnWrite`), so overlays must
+  contain only changed classes (`overlay.sh` compiles implicit sources; prune them), and `AccordReplicaExecutionTest`
+  fails on the untouched artifacts.
+
+**Afterwards:** metrics (delegations sent / accepted / declined / resumed; continuations of slow coordinators; claim
+moves between DCs; `Maximal` resends; relay outcomes), then real multi-DC evaluation.
 
 ### Phase 3: Claims and abandonment
 - [ ] `BacklogToken` type and precedence (§4.1: oldest chain origin wins); carry it on BACKLOG
