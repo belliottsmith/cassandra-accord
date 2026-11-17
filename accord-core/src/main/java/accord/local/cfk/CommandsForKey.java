@@ -41,7 +41,7 @@ import accord.local.CommandSummaries.ActiveCommandVisitor;
 import accord.local.CommandSummaries.SupersedingCommandVisitor;
 import accord.local.CommandSummaries.IsDep;
 import accord.local.CommandSummaries.SummaryStatus;
-import accord.primitives.Deps;
+import accord.primitives.KeyDeps;
 import accord.primitives.Deps.DepRelationList;
 import accord.primitives.RoutingKeys;
 import accord.primitives.SaveStatus;
@@ -1660,7 +1660,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         return next;
     }
 
-    public boolean hasUniqueHlcAndIsReadyToExecute(TxnId txnId, Timestamp executeAt, Deps deps)
+    public boolean hasUniqueHlcAndIsReadyToExecute(TxnId txnId, Timestamp executeAt, KeyDeps keyDeps)
     {
         if (txnId.isWrite() && executeAt.hlc() <= maxUniqueHlc)
             return false;
@@ -1668,7 +1668,7 @@ public class CommandsForKey extends CommandsForKeyUpdate
         if (txnId.awaitsOnlyDeps())
             executeAt = Timestamp.MAX;
 
-        DepRelationList list = deps.keyDeps.txnIdsWithFlags(key);
+        DepRelationList list = keyDeps.txnIdsWithFlags(key);
         int i = list.size() - 1, j = Faults.readyToExecuteSkipsNewest ? byId.length - 1 : byId.length;
         i: while (i >= 0)
         {

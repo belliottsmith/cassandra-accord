@@ -28,7 +28,7 @@ import accord.api.RoutingKey;
 import accord.local.MaxDecidedRX.DecidedRX;
 import accord.local.RedundantBefore.Bounds;
 import accord.local.cfk.CommandsForKey;
-import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.Participants;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
@@ -382,7 +382,7 @@ public interface CommandSummaries
 
         public final Summary ifRelevant(Command cmd)
         {
-            return ifRelevant(cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants(), cmd.partialDeps());
+            return ifRelevant(cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants(), cmd.depsView());
         }
 
         public final Summary ifRelevant(MinimalCommand cmd)
@@ -395,7 +395,7 @@ public interface CommandSummaries
             if (cmd.participants == null)
                 return null;
 
-            return ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants.touches(), cmd, (c, find, intersecting) -> c.partialDeps().isStableDep(find, intersecting));
+            return ifRelevant(cmd.txnId, cmd.executeAt == null ? cmd.txnId : cmd.executeAt, cmd.saveStatus, cmd.durability, cmd.participants.touches(), cmd, (c, find, intersecting) -> c.depsView().isStableDep(find, intersecting));
         }
 
         public final boolean isMaybeRelevant(TxnId txnId)
@@ -528,7 +528,7 @@ public interface CommandSummaries
                      && txnId.compareTo(minVisitedFutureRX.foldlWithDefault(participants, TxnId::max, TxnId.MAX, TxnId.NONE)) > 0));
         }
 
-        public final Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable PartialDeps partialDeps)
+        public final Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable PartialDepsView partialDeps)
         {
             if (participants == null)
                 return null;
@@ -536,9 +536,9 @@ public interface CommandSummaries
             return ifRelevant(txnId, executeAt, saveStatus, durability, participants.touches(), partialDeps);
         }
 
-        public final Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable PartialDeps partialDeps)
+        public final Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable PartialDepsView partialDeps)
         {
-            return ifRelevant(txnId, executeAt, saveStatus, durability, touches, partialDeps, PartialDeps::isStableDep);
+            return ifRelevant(txnId, executeAt, saveStatus, durability, touches, partialDeps, PartialDepsView::isStableDep);
         }
 
         public final <P> Summary ifRelevant(TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable P deps, TriPredicate<P, TxnId, Unseekables<?>> depTester)
@@ -557,12 +557,12 @@ public interface CommandSummaries
 
         public final <P> Summary get(Relevance relevance, Command cmd)
         {
-            return get(relevance, cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants().stillTouches(), cmd.partialDeps(), PartialDeps::isStableDep);
+            return get(relevance, cmd.txnId(), cmd.executeAtOrTxnId(), cmd.saveStatus(), cmd.durability(), cmd.participants().stillTouches(), cmd.depsView(), PartialDepsView::isStableDep);
         }
 
-        public final <P> Summary get(Relevance relevance, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable PartialDeps partialDeps)
+        public final <P> Summary get(Relevance relevance, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable PartialDepsView partialDeps)
         {
-            return get(relevance, txnId, executeAt, saveStatus, durability, touches, partialDeps, PartialDeps::isStableDep);
+            return get(relevance, txnId, executeAt, saveStatus, durability, touches, partialDeps, PartialDepsView::isStableDep);
         }
 
         public final <P> Summary get(Relevance relevance, TxnId txnId, Timestamp executeAt, SaveStatus saveStatus, Durability durability, Participants<?> touches, @Nullable P deps, TriPredicate<P, TxnId, Unseekables<?>> depTester)

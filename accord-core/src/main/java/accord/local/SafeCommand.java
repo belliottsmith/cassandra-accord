@@ -24,7 +24,7 @@ import javax.annotation.Nullable;
 import accord.api.Result.PersistableResult;
 import accord.local.Command.Truncated;
 import accord.primitives.Ballot;
-import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
 import accord.primitives.SaveStatus;
@@ -93,7 +93,7 @@ public abstract class SafeCommand extends SafeState<Command>
         return update(safeStore, prev.updateParticipants(participants));
     }
 
-    public Command.PreAccepted preaccept(SafeCommandStore safeStore, SaveStatus saveStatus, StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
+    public Command.PreAccepted preaccept(SafeCommandStore safeStore, SaveStatus saveStatus, StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps)
     {
         return update(safeStore, Command.preaccept(current(), saveStatus, participants, promised, executeAt, partialTxn, partialDeps));
     }
@@ -114,7 +114,7 @@ public abstract class SafeCommand extends SafeState<Command>
         return incidentalUpdate(next);
     }
 
-    public Command.Accepted accept(SafeCommandStore safeStore, TxnId txnId, SaveStatus status, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+    public Command.Accepted accept(SafeCommandStore safeStore, TxnId txnId, SaveStatus status, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted)
     {
         return update(safeStore, Command.accept(current(), txnId, status, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted));
     }
@@ -124,12 +124,12 @@ public abstract class SafeCommand extends SafeState<Command>
         return update(safeStore, Command.notAccept(status, current(), ballot));
     }
 
-    public Command.Committed commit(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
+    public Command.Committed commit(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps)
     {
         return update(safeStore, Command.commit(current(), participants, ballot, executeAt, partialTxn, partialDeps));
     }
 
-    public Command.Committed stable(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn)
+    public Command.Committed stable(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Command.WaitingOn waitingOn)
     {
         return update(safeStore, Command.stable(current(), participants, ballot, executeAt, partialTxn, partialDeps, waitingOn));
     }
@@ -158,7 +158,7 @@ public abstract class SafeCommand extends SafeState<Command>
         return update(safeStore, Command.preapplied(current(), applyAt, writes, result));
     }
 
-    public Command.Executed preapplied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
+    public Command.Executed preapplied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return update(safeStore, Command.preapplied(current(), participants, promised, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }
@@ -168,7 +168,7 @@ public abstract class SafeCommand extends SafeState<Command>
         return update(safeStore, Command.applying(current().asExecuted()));
     }
 
-    public Command.Executed applying(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
+    public Command.Executed applying(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return update(safeStore, Command.applying(current(), participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }
@@ -183,7 +183,7 @@ public abstract class SafeCommand extends SafeState<Command>
         return update(safeStore, Command.applied(current().asExecuted()), forceUpdate);
     }
 
-    public Command.Executed applied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
+    public Command.Executed applied(SafeCommandStore safeStore, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return update(safeStore, Command.applied(current(), participants, executeAt, partialTxn, partialDeps, waitingOn, writes, result));
     }

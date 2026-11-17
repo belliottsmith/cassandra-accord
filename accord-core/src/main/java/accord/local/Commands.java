@@ -51,6 +51,7 @@ import accord.primitives.Known;
 import accord.primitives.Known.KnownExecuteAt;
 import accord.primitives.Known.KnownRoute;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
 import accord.primitives.Range;
@@ -240,7 +241,7 @@ public class Commands
             }
 
             PartialTxn partialTxn = prepareTxn(newSaveStatus, participants, command, txn);
-            PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
+            PartialDepsView partialDeps = prepareDeps(validated, participants, command, deps);
             participants = prepareParticipants(validated, participants, command);
             safeCommand.preaccept(safeStore, newSaveStatus, participants, ballot, executeAt, partialTxn, partialDeps);
         }
@@ -321,7 +322,7 @@ public class Commands
         Invariants.require(validated.compareTo(INSUFFICIENT) > 0);
 
         PartialTxn partialTxn = prepareTxn(newSaveStatus, participants, command, null);
-        PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
+        PartialDepsView partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
         Command accepted = safeCommand.accept(safeStore, txnId, newSaveStatus, participants, ballot, executeAt, partialTxn, partialDeps, ballot);
@@ -410,7 +411,7 @@ public class Commands
         }
 
         PartialTxn partialTxn = prepareTxn(newSaveStatus, participants, command, txn);
-        PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
+        PartialDepsView partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
         if (logger.isTraceEnabled())
@@ -479,7 +480,7 @@ public class Commands
         Invariants.require(validated.compareTo(INSUFFICIENT) > 0);
 
         PartialTxn partialTxn = prepareTxn(SaveStatus.Stable, participants, command, txn);
-        PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
+        PartialDepsView partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
         safeCommand.stable(safeStore, participants, Ballot.ZERO, txnId, partialTxn, partialDeps, initialiseWaitingOn(safeStore, txnId, txnId, participants, partialDeps));
@@ -589,13 +590,13 @@ public class Commands
             return validated == INSUFFICIENT ? ApplyOutcome.Insufficient : ApplyOutcome.InsufficientEpochs;
 
         PartialTxn partialTxn = prepareTxn(SaveStatus.PreApplied, participants, command, txn);
-        PartialDeps partialDeps = prepareDeps(validated, participants, command, deps);
+        PartialDepsView partialDeps = prepareDeps(validated, participants, command, deps);
         participants = prepareParticipants(validated, participants, command);
 
         // TODO (required): validate safe to fast apply against local state if running burn test
         // note: we may overwrite minUniqueHlc here
         WaitingOn waitingOn = newSaveStatus != SaveStatus.PreApplied
-                              ? WaitingOn.none(txnId.domain(), partialDeps)
+                              ? WaitingOn.none(txnId.domain(), partialDeps.keys(), partialDeps.rangeDeps())
                               : command.hasBeen(Stable)
                                 ? nonNull(command.asCommitted().waitingOn())
                                 : initialiseWaitingOn(safeStore, txnId,  executeAt, participants, partialDeps);
@@ -1026,7 +1027,7 @@ public class Commands
             safeStore.notifyListeners(safeCommand, null);
     }
 
-    protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp waitingExecuteAt, StoreParticipants participants, PartialDeps deps)
+    protected static WaitingOn initialiseWaitingOn(SafeCommandStore safeStore, TxnId waitingId, Timestamp waitingExecuteAt, StoreParticipants participants, PartialDepsView deps)
     {
         if (waitingId.awaitsOnlyDeps())
             waitingExecuteAt = Timestamp.maxForEpoch(waitingId.epoch());
@@ -1057,7 +1058,7 @@ public class Commands
             if (safeCfk == null)
                 return;
 
-            if (safeCfk.current().hasUniqueHlcAndIsReadyToExecute(cmd.txnId(), cmd.executeAt(), cmd.partialDeps()))
+            if (safeCfk.current().hasUniqueHlcAndIsReadyToExecute(cmd.txnId(), cmd.executeAt(), cmd.depsView().keyDeps()))
                 upd.removeWaitingOnKey(i);
         });
 
@@ -1091,7 +1092,7 @@ public class Commands
                                        || waiting.participants.stillWaitsOn().isEmpty()
                                        || !markStaleIfCannotExecute(dependencyId)
                                        || safeStore.redundantBefore().status(dependencyId, null,
-                                                 waiting.partialDeps.participants(dependencyId)).all(LOCALLY_DEFUNCT)
+                                                 waiting.depsView().participants(dependencyId)).all(LOCALLY_DEFUNCT)
                     );
                 case Vestigial:
                 case Erased:
@@ -1120,7 +1121,7 @@ public class Commands
         }
         else
         {
-            Participants<?> participants = waiting.partialDeps().participants(dependency.txnId());
+            Participants<?> participants = waiting.depsView().participants(dependency.txnId());
             Participants<?> waitsOn = participants.intersecting(waiting.participants.stillWaitsOn(), Minimal);
             RedundantStatus status = safeStore.redundantBefore().status(dependencyId, waitingExecuteAt, waitsOn);
 
@@ -1443,13 +1444,13 @@ public class Commands
         boolean acceptInternal(SafeCommandStore safeStore)
         {
             SafeCommand waitingSafe = safeStore.unsafeGetNoLogFault(waitingId);
-            PartialDeps partialDeps;
+            PartialDepsView partialDeps;
             {
                 Command waiting = waitingSafe.current();
                 if (waiting.saveStatus().compareTo(Applying) >= 0)
                     return false;
 
-                partialDeps = waiting.partialDeps();
+                partialDeps = waiting.depsView();
                 Invariants.require(partialDeps != null, "Trying to execute command without partialDeps: %s", waiting);
             }
 
@@ -1874,16 +1875,18 @@ public class Commands
         return cur.supplement(newParticipants);
     }
 
-    private static PartialDeps prepareDeps(Validated validated, StoreParticipants participants, Command upd, Deps newDeps)
+    // NOTE: where the existing deps are retained unmodified we return the existing view (rather than its materialised form)
+    //       to avoid unnecessarily materialising it, and to ensure we can identify that the deps have not changed
+    private static PartialDepsView prepareDeps(Validated validated, StoreParticipants participants, Command upd, Deps newDeps)
     {
         switch (validated)
         {
             default: throw new UnhandledEnum(validated);
             case UPDATE_TXN_KEEP_DEPS:
-                return upd.partialDeps();
+                return upd.depsView();
             case UPDATE_TXN_MERGE_DEPS:
                 if (newDeps == null)
-                    return upd.partialDeps();
+                    return upd.depsView();
                 return upd.partialDeps().with(newDeps.intersecting(participants.stillTouches()));
             case UPDATE_TXN_AND_DEPS:
                 return prepareNewDeps(participants, newDeps);

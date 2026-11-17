@@ -31,7 +31,6 @@ import accord.local.RedundantBefore;
 import accord.local.RedundantStatus.SomeStatus;
 import accord.local.StoreParticipants;
 import accord.primitives.FullKeyRoute;
-import accord.primitives.PartialDeps;
 import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.Routable;
@@ -82,12 +81,6 @@ public class CommandChangePartialCleanupTest
         Record()
         {
             super(TXN_ID, ALL);
-        }
-
-        @Override
-        public PartialDeps partialDeps()
-        {
-            return (PartialDeps) partialDeps;
         }
 
         Record participants(StoreParticipants participants)

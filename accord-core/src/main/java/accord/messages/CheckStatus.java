@@ -194,8 +194,8 @@ public class CheckStatus extends ParticipantsRequest<Participants<?>, CheckStatu
         KnownMap result = KnownMap.EMPTY;
         if (known.deps().hasProposedOrDecidedDeps())
         {
-            Invariants.require(command.participants().touches().containsAll(command.partialDeps().covering));
-            result = KnownMap.create(command.partialDeps().covering, new MinAndMaxKnown(null, Nothing.with(saveStatus.known.deps())));
+            Invariants.require(command.participants().touches().containsAll(command.depsView().covering()));
+            result = KnownMap.create(command.depsView().covering(), new MinAndMaxKnown(null, Nothing.with(saveStatus.known.deps())));
             known = known.with(DepsUnknown);
         }
         if (known.definition() == DefinitionKnown && !txnId.isSystemTxn())

@@ -924,7 +924,7 @@ class Updating
         Timestamp compareExecuteAt = waitingTxnId.awaitsOnlyDeps() ? Timestamp.MAX : command.executeAt();
 
         TxnInfo[] byId = cfk.byId, newById = null;
-        RelationMultiMap.SortedRelationList<TxnId> txnIds = command.partialDeps().keyDeps.txnIdsWithFlags(cfk.key());
+        RelationMultiMap.SortedRelationList<TxnId> txnIds = command.depsView().keyDeps().txnIdsWithFlags(cfk.key());
         TxnId[] missing = NO_TXNIDS;
         int missingCount = 0;
         // we only populate dependencies to facilitate execution, not for any distributed decision,

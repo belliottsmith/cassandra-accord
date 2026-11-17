@@ -38,6 +38,7 @@ import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.PartialTxn;
 import accord.primitives.SaveStatus;
 import accord.primitives.Timestamp;
@@ -169,9 +170,9 @@ public class CommandChange
             this.appliedOrInvalidated = appliedOrInvalidated;
         }
 
-        public WaitingOn construct(PartialDeps partialDeps, Timestamp executesAtLeast, long uniqueHlc)
+        public WaitingOn construct(PartialDepsView partialDeps, Timestamp executesAtLeast, long uniqueHlc)
         {
-            WaitingOn result = new WaitingOn(partialDeps.keyDeps.keys(), partialDeps.rangeDeps, waitingOn, appliedOrInvalidated);
+            WaitingOn result = new WaitingOn(partialDeps.keys(), partialDeps.rangeDeps(), waitingOn, appliedOrInvalidated);
             if (executesAtLeast != null) result = new Command.WaitingOnWithExecuteAt(result, executesAtLeast);
             if (uniqueHlc != 0) result = new Command.WaitingOnWithMinUniqueHlc(result, uniqueHlc);
             return result;
@@ -191,7 +192,7 @@ public class CommandChange
         protected Timestamp executeAt;
 
         protected PartialTxn partialTxn;
-        protected Object partialDeps;
+        protected PartialDepsView partialDeps;
 
         protected Ballot promised;
         protected Ballot acceptedOrCommitted;
@@ -262,7 +263,21 @@ public class CommandChange
 
         public final PartialTxn partialTxn() { return partialTxn; }
 
-        public abstract PartialDeps partialDeps();
+        /**
+         * @return the deps, which may be partially or wholly unmaterialised
+         */
+        public final PartialDepsView depsView()
+        {
+            return partialDeps;
+        }
+
+        /**
+         * @return the deps, materialising them if necessary
+         */
+        public final PartialDeps partialDeps()
+        {
+            return partialDeps == null ? null : partialDeps.materialize();
+        }
 
         public final Writes writes()
         {
@@ -592,7 +607,7 @@ public class CommandChange
 
         public MinimalCommand.MinimalWithDeps asMinimalWithDeps()
         {
-            return new MinimalCommand.MinimalWithConcreteDeps(txnId, saveStatus, durability, participants, executeAt, partialDeps());
+            return new MinimalCommand.MinimalWithConcreteDeps(txnId, saveStatus, durability, participants, executeAt, partialDeps);
         }
 
         public void forceResult(PersistableResult newValue)
@@ -644,7 +659,7 @@ public class CommandChange
 
             WaitingOn waitingOn = null;
             if (this.waitingOn != null)
-                waitingOn = this.waitingOn.construct(partialDeps(), executesAtLeast, minUniqueHlc);
+                waitingOn = this.waitingOn.construct(partialDeps, executesAtLeast, minUniqueHlc);
 
             Invariants.require(saveStatus != null);
             switch (saveStatus.status)
@@ -653,29 +668,29 @@ public class CommandChange
                     return saveStatus == SaveStatus.Uninitialised ? uninitialised(txnId)
                                                                   : notDefined(txnId, saveStatus, durability, participants, promised);
                 case PreAccepted:
-                    return preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps());
+                    return preaccepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps);
                 case AcceptedInvalidate:
                     if (!saveStatus.known.isDefinitionKnown())
-                        return notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps());
+                        return notAccepted(txnId, saveStatus, durability, participants, promised, acceptedOrCommitted, partialDeps);
                 case AcceptedMedium:
                 case AcceptedSlow:
                 case PreCommitted:
-                    return accepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps(), acceptedOrCommitted);
+                    return accepted(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps, acceptedOrCommitted);
                 case Committed:
                 case Stable:
-                    return committed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps(), acceptedOrCommitted, waitingOn);
+                    return committed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps, acceptedOrCommitted, waitingOn);
                 case PreApplied:
                 case Applied:
-                    return executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps(), acceptedOrCommitted, waitingOn, writes, result);
+                    return executed(txnId, saveStatus, durability, participants, promised, executeAt, partialTxn(), partialDeps, acceptedOrCommitted, waitingOn, writes, result);
                 case Truncated:
                 case Invalidated:
-                    return truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps(), executesAtLeast, writes, result);
+                    return truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, executesAtLeast, writes, result);
                 default:
                     throw new UnhandledEnum(saveStatus.status);
             }
         }
 
-        private static Command.Truncated truncated(TxnId txnId, SaveStatus status, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Timestamp executesAtLeast, Writes writes, PersistableResult result)
+        private static Command.Truncated truncated(TxnId txnId, SaveStatus status, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDepsView partialDeps, Timestamp executesAtLeast, Writes writes, PersistableResult result)
         {
             switch (status)
             {
@@ -812,7 +827,7 @@ public class CommandChange
             flags |= addIdentityFlags(null, after.promised(), PROMISED);
             flags |= addIdentityFlags(null, after.acceptedOrCommitted(), ACCEPTED);
             flags |= addIdentityFlags(null, after.partialTxn(), PARTIAL_TXN);
-            flags |= addIdentityFlags(null, after.partialDeps(), PARTIAL_DEPS);
+            flags |= addIdentityFlags(null, after.depsView(), PARTIAL_DEPS);
             if (after.waitingOn() != null)
             {
                 flags |= setChanged(WAITING_ON, 0);
@@ -831,7 +846,7 @@ public class CommandChange
             flags |= addEqualityFlags(before.promised(), after.promised(), PROMISED);
             flags |= addEqualityFlags(before.acceptedOrCommitted(), after.acceptedOrCommitted(), ACCEPTED);
             flags |= addIdentityFlags(before.partialTxn(), after.partialTxn(), PARTIAL_TXN);
-            flags |= addIdentityFlags(before.partialDeps(), after.partialDeps(), PARTIAL_DEPS);
+            flags |= addDepsIdentityFlags(before.depsView(), after.depsView());
             if (before.waitingOn() != after.waitingOn())
             {
                 flags |= setChanged(WAITING_ON);
@@ -864,6 +879,13 @@ public class CommandChange
             flags |= setChanged(CLEANUP, flags);
 
         return flags;
+    }
+
+    private static int addDepsIdentityFlags(PartialDepsView l, PartialDepsView r)
+    {
+        if (PartialDepsView.isSameAs(l, r)) return 0;
+        if (r == null) return setIsNullAndChanged(PARTIAL_DEPS);
+        return setChanged(PARTIAL_DEPS);
     }
 
     private static int addIdentityFlags(Object l, Object r, Field field)

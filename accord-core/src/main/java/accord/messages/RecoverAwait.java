@@ -89,7 +89,7 @@ public class RecoverAwait extends Await
 
         // as BeginRecovery, an UNSTABLE dependency (first found by the Accept round) does not witness recoverId
         Participants<?> participants = scope.intersecting(command.participants().owns(), Minimal);
-        if (!command.partialDeps().isStableDep(recoverId, participants))
+        if (!command.depsView().isStableDep(recoverId, participants))
         {
             rejects = true;
             node.reply(replyTo, replyContext, RecoverAwaitOk.Reject, null, tracing());

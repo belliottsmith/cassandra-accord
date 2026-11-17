@@ -27,7 +27,7 @@ import accord.utils.SortedList.MergeCursor;
 import static accord.primitives.Routables.Slice.Minimal;
 import static accord.utils.Invariants.illegalArgument;
 
-public class PartialDeps extends Deps
+public class PartialDeps extends Deps implements PartialDepsView
 {
     public static final PartialDeps NONE = new PartialDeps(Ranges.EMPTY, KeyDeps.NONE, RangeDeps.NONE);
 
@@ -66,6 +66,48 @@ public class PartialDeps extends Deps
     public boolean covers(RoutingKey key)
     {
         return covering.contains(key);
+    }
+
+    @Override
+    public PartialDeps materialize()
+    {
+        return this;
+    }
+
+    @Override
+    public KeyDeps keyDeps()
+    {
+        return keyDeps;
+    }
+
+    @Override
+    public RangeDeps rangeDeps()
+    {
+        return rangeDeps;
+    }
+
+    @Override
+    public Participants<?> covering()
+    {
+        return covering;
+    }
+
+    @Override
+    public RoutingKeys keys()
+    {
+        return keyDeps.keys();
+    }
+
+    @Override
+    public boolean isStableDepCovering(TxnId txnId, Unseekables<?> intersecting)
+    {
+        int index = indexOf(txnId);
+        return index >= 0 && isStable(index) && participants(index).containsAll(intersecting);
+    }
+
+    @Override
+    public void unmemoize()
+    {
     }
 
     @Override

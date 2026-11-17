@@ -46,6 +46,7 @@ import accord.local.cfk.SafeCommandsForKey;
 import accord.local.cfk.UpdateUnmanagedMode;
 import accord.primitives.AbstractUnseekableKeys;
 import accord.primitives.KeyDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
 import accord.primitives.RangeRoute;
@@ -399,10 +400,10 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
             commandStore().markExclusiveSyncPointLocallyApplied(this, updated.txnId, txnIdWithFlags, (RangeRoute) updated.route(), ranges, prevSaveStatus);
         }
 
-        if (updated.partialDeps() != null && (prev == null || updated.partialDeps() != prev.partialDeps()))
+        if (updated.depsView() != null && (prev == null || !PartialDepsView.isSameAs(updated.depsView(), prev.depsView())))
         {
             RedundantBefore addRedundantBefore = RedundantBefore.EMPTY;
-            RangeDeps deps = updated.partialDeps().rangeDeps;
+            RangeDeps deps = updated.depsView().rangeDeps();
             for (int i = 0 ; i < deps.txnIdCount() ; ++i)
             {
                 TxnId txnId = deps.txnIdWithFlags(i);
@@ -538,7 +539,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         {
             Command.WaitingOn waitingOn = next.asCommitted().waitingOn;
             RedundantBefore redundantBefore = safeStore.redundantBefore();
-            KeyDeps deps = next.partialDeps().keyDeps;
+            KeyDeps deps = next.depsView().keyDeps();
             keys = deps.keys();
             LargeBitSet select = new LargeBitSet(keys.size());
             for (int i = 0 ; i < keys.size() ; ++i)
@@ -664,7 +665,7 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
         return safeStore -> {
             logger.debug("{}: registering dependencies of {} to mark visible {}", commandStore, waitingOn, syncId);
             List<AsyncChain<Void>> async = new ArrayList<>();
-            RangeDeps rangeDeps = syncCommand.partialDeps().rangeDeps;
+            RangeDeps rangeDeps = syncCommand.depsView().rangeDeps();
             RedundantBefore redundantBefore = safeStore.redundantBefore();
             TxnId checkLog = redundantBefore.foldl(waitingOn, (b, id) -> TxnId.max(TxnId.max(id, b.maxBound(LOG_UNAVAILABLE)), b.maxBound(LOG_INCOMPLETE)), TxnId.NONE);
             rangeDeps.forEachUniqueTxnId(waitingOn, null, (ignore, txnIdWithFlags) -> {

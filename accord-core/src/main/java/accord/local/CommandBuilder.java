@@ -21,6 +21,7 @@ package accord.local;
 import accord.api.Result.PersistableResult;
 import accord.primitives.Ballot;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.PartialTxn;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -39,7 +40,7 @@ public class CommandBuilder
     private StoreParticipants participants;
     private Ballot promised = Ballot.ZERO;
     private PartialTxn partialTxn;
-    private PartialDeps partialDeps;
+    private PartialDepsView partialDeps;
     private Timestamp executeAt;
     private Ballot acceptedOrCommitted = Ballot.ZERO;
     private Command.WaitingOn waitingOn;
@@ -60,7 +61,7 @@ public class CommandBuilder
         this.participants = Invariants.nonNull(copy.participants());
         this.promised = copy.promised();
         this.partialTxn = copy.partialTxn();
-        this.partialDeps = copy.partialDeps();
+        this.partialDeps = copy.depsView();
         this.executeAt = copy.executeAt();
         this.acceptedOrCommitted = copy.acceptedOrCommitted();
         this.waitingOn = copy.waitingOn();
@@ -125,7 +126,7 @@ public class CommandBuilder
 
     public PartialDeps partialDeps()
     {
-        return partialDeps;
+        return partialDeps == null ? null : partialDeps.materialize();
     }
 
     public Timestamp executeAt()
@@ -183,7 +184,7 @@ public class CommandBuilder
         return this;
     }
 
-    public CommandBuilder partialDeps(PartialDeps partialDeps)
+    public CommandBuilder partialDeps(PartialDepsView partialDeps)
     {
         this.partialDeps = partialDeps;
         return this;

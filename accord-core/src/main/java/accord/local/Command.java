@@ -37,7 +37,7 @@ import accord.primitives.Ballot;
 import accord.primitives.Deps;
 import accord.primitives.Known;
 import accord.primitives.Known.Outcome;
-import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.PartialTxn;
 import accord.primitives.Participants;
 import accord.primitives.RangeDeps;
@@ -95,7 +95,7 @@ public abstract class Command extends MinimalWithConcreteDeps
     private final @Nullable PartialTxn partialTxn;
     private final @Nonnull Ballot acceptedOrCommitted;
 
-    protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDeps partialDeps, Ballot acceptedOrCommitted)
+    protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDepsView partialDeps, Ballot acceptedOrCommitted)
     {
         super(txnId, saveStatus, durability, participants, executeAt, partialDeps);
         validateCommandClass(txnId, saveStatus, getClass());
@@ -107,7 +107,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         Invariants.paranoid(partialTxn == null || txnId.isSystemTxn() || participants.owns().containsAll(partialTxn.read().keys()));
     }
 
-    protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDeps partialDeps, Ballot acceptedOrCommitted, boolean unsafeInitialisation)
+    protected Command(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, @Nullable PartialTxn partialTxn, @Nullable PartialDepsView partialDeps, Ballot acceptedOrCommitted, boolean unsafeInitialisation)
     {
         super(txnId, saveStatus, durability, participants, executeAt, partialDeps);
         Invariants.require(unsafeInitialisation);
@@ -118,7 +118,7 @@ public abstract class Command extends MinimalWithConcreteDeps
 
     protected Command(Command copy, SaveStatus saveStatus)
     {
-        super(copy.txnId, saveStatus, copy.durability, copy.participants, copy.executeAt, copy.partialDeps);
+        super(copy.txnId, saveStatus, copy.durability, copy.participants, copy.executeAt, copy.depsView());
         validateCommandClass(txnId, saveStatus, getClass());
         this.promised = copy.promised();
         this.partialTxn = copy.partialTxn();
@@ -330,7 +330,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             return truncated(command, participants, newSaveStatus);
         }
 
-        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, PersistableResult result)
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDepsView partialDeps, @Nullable Writes writes, PersistableResult result)
         {
             Invariants.requireArgument(!txnId.awaitsOnlyDeps());
             return validate(new Truncated(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result));
@@ -339,7 +339,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         public static Truncated truncated(Command command, StoreParticipants participants, SaveStatus newSaveStatus)
         {
             Timestamp executesAtLeast = command.executesAtLeast();
-            PartialDeps partialDeps = newSaveStatus.known.is(DepsKnown) ? command.partialDeps : null;
+            PartialDepsView partialDeps = newSaveStatus.known.is(DepsKnown) ? command.depsView() : null;
             Writes writes = null;
             PersistableResult result = null;
             if (newSaveStatus.known.is(Outcome.Apply))
@@ -350,12 +350,12 @@ public abstract class Command extends MinimalWithConcreteDeps
             return truncated(command.txnId(), newSaveStatus, command.durability(), participants, command.executeAt, partialDeps, writes, result, executesAtLeast);
         }
 
-        public static Truncated truncated(Command common, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable PersistableResult result, @Nullable Timestamp executesAtLeast)
+        public static Truncated truncated(Command common, SaveStatus saveStatus, @Nullable Timestamp executeAt, @Nullable PartialDepsView partialDeps, @Nullable Writes writes, @Nullable PersistableResult result, @Nullable Timestamp executesAtLeast)
         {
             return truncated(common.txnId(), saveStatus, common.durability(), common.participants(), executeAt, partialDeps, writes, result, executesAtLeast);
         }
 
-        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps, Writes writes, PersistableResult result, @Nullable Timestamp executesAtLeast)
+        public static Truncated truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDepsView partialDeps, Writes writes, PersistableResult result, @Nullable Timestamp executesAtLeast)
         {
             if (!txnId.awaitsOnlyDeps())
             {
@@ -393,7 +393,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             this.result = copy.result();
         }
 
-        public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable PersistableResult result)
+        public Truncated(TxnId txnId, SaveStatus saveStatus, Durability durability, @Nonnull StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDepsView partialDeps, @Nullable Writes writes, @Nullable PersistableResult result)
         {
             super(txnId, saveStatus, durability, participants, Ballot.MAX, executeAt, null, partialDeps, Ballot.MAX);
             this.writes = writes;
@@ -423,7 +423,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            return validate(new Truncated(txnId(), saveStatus(), durability, participants, executeAt(), partialDeps(), writes, result));
+            return validate(new Truncated(txnId(), saveStatus(), durability, participants, executeAt(), depsView(), writes, result));
         }
     }
 
@@ -441,7 +441,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             this.executesAtLeast = executesAtLeast;
         }
 
-        public TruncatedAwaitsOnlyDeps(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDeps partialDeps, @Nullable Writes writes, @Nullable PersistableResult result, @Nullable Timestamp executesAtLeast)
+        public TruncatedAwaitsOnlyDeps(TxnId txnId, SaveStatus saveStatus, Durability durability, StoreParticipants participants, @Nullable Timestamp executeAt, @Nullable PartialDepsView partialDeps, @Nullable Writes writes, @Nullable PersistableResult result, @Nullable Timestamp executesAtLeast)
         {
             super(txnId, saveStatus, durability, participants, executeAt, partialDeps, writes, result);
             this.executesAtLeast = executesAtLeast;
@@ -462,13 +462,13 @@ public abstract class Command extends MinimalWithConcreteDeps
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            return validate(new TruncatedAwaitsOnlyDeps(txnId(), saveStatus(), durability, participants, executeAt(), partialDeps(), writes, result, executesAtLeast));
+            return validate(new TruncatedAwaitsOnlyDeps(txnId(), saveStatus(), durability, participants, executeAt(), depsView(), writes, result, executesAtLeast));
         }
     }
 
     public static class PreAccepted extends Command
     {
-        public static PreAccepted preaccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
+        public static PreAccepted preaccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps)
         {
             return validate(new PreAccepted(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps));
         }
@@ -483,12 +483,12 @@ public abstract class Command extends MinimalWithConcreteDeps
             super(copy, status);
         }
 
-        private PreAccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
+        private PreAccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, Ballot.ZERO);
         }
 
-        private PreAccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+        private PreAccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
         }
@@ -499,7 +499,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             SaveStatus saveStatus = this.saveStatus;
             if (saveStatus == PreAcceptedPrivCoord && !Ballot.ZERO.equals(promised))
                 saveStatus = PreAcceptedPrivCoordRecovery;
-            return new PreAccepted(txnId(), saveStatus, durability, participants, promised, executeAt(), partialTxn(), partialDeps());
+            return new PreAccepted(txnId(), saveStatus, durability, participants, promised, executeAt(), partialTxn(), depsView());
         }
     }
 
@@ -510,7 +510,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             return new NotAcceptedWithoutDefinition(copy, saveStatus);
         }
 
-        public static NotAcceptedWithoutDefinition notAccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Ballot accepted, PartialDeps partialDeps)
+        public static NotAcceptedWithoutDefinition notAccepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Ballot accepted, PartialDepsView partialDeps)
         {
             return new NotAcceptedWithoutDefinition(txnId, status, durability, participants, promised, accepted, partialDeps);
         }
@@ -525,7 +525,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             super(copy, saveStatus);
         }
 
-        private NotAcceptedWithoutDefinition(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Ballot accepted, @Nullable PartialDeps partialDeps)
+        private NotAcceptedWithoutDefinition(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Ballot accepted, @Nullable PartialDepsView partialDeps)
         {
             super(txnId, status, durability, participants, promised, null, null, partialDeps, accepted);
         }
@@ -533,13 +533,13 @@ public abstract class Command extends MinimalWithConcreteDeps
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            return new NotAcceptedWithoutDefinition(txnId(), saveStatus(), durability, participants, promised, acceptedOrCommitted(), partialDeps());
+            return new NotAcceptedWithoutDefinition(txnId(), saveStatus(), durability, participants, promised, acceptedOrCommitted(), depsView());
         }
     }
 
     public static class Accepted extends PreAccepted
     {
-        public static Accepted accepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+        public static Accepted accepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted)
         {
             return validate(new Accepted(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted));
         }
@@ -552,22 +552,22 @@ public abstract class Command extends MinimalWithConcreteDeps
         Accepted(Command copy, SaveStatus status)
         {
             super(copy, status);
-            validateDeps(participants(), partialDeps());
+            validateDeps(participants(), depsView());
         }
 
-        Accepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+        Accepted(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
             validateDeps(participants(), partialDeps);
         }
 
-        static void validateDeps(StoreParticipants participants, PartialDeps partialDeps)
+        static void validateDeps(StoreParticipants participants, PartialDepsView partialDeps)
         {
             if (Invariants.isParanoid() && Invariants.testParanoia(LINEAR, NONE, LOW))
             {
                 Invariants.require(partialDeps == null
-                                   || (participants.touches() == participants.stillTouches() && participants.touches().equals(partialDeps.covering))
-                                   || (partialDeps.covers(participants.stillTouches()) && participants.touches().containsAll(partialDeps.covering))
+                                   || (participants.touches() == participants.stillTouches() && participants.touches().equals(partialDeps.covering()))
+                                   || (partialDeps.covers(participants.stillTouches()) && participants.touches().containsAll(partialDeps.covering()))
                 );
             }
         }
@@ -578,13 +578,13 @@ public abstract class Command extends MinimalWithConcreteDeps
             SaveStatus saveStatus = this.saveStatus;
             if (saveStatus == AcceptedPrivCoord && !Ballot.ZERO.equals(promised))
                 saveStatus = AcceptedPrivCoordRecovery;
-            return validate(new Accepted(txnId(), saveStatus, durability, participants, promised, executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted()));
+            return validate(new Accepted(txnId(), saveStatus, durability, participants, promised, executeAt(), partialTxn(), depsView(), acceptedOrCommitted()));
         }
     }
 
     public static class Committed extends Accepted
     {
-        public static Committed committed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn)
+        public static Committed committed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn)
         {
             return validate(new Committed(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn));
         }
@@ -614,7 +614,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             Invariants.require(Route.isFullRoute(copy.participants().route()), "Expected a full route but given %s", copy.participants().route());
         }
 
-        Committed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn)
+        Committed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted);
             this.waitingOn = waitingOn;
@@ -623,8 +623,8 @@ public abstract class Command extends MinimalWithConcreteDeps
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            Invariants.require(partialDeps().covers(participants.stillTouches()));
-            return validate(new Committed(txnId(), saveStatus(), durability, participants, promised, executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted(), waitingOn));
+            Invariants.require(depsView().covers(participants.stillTouches()));
+            return validate(new Committed(txnId(), saveStatus(), durability, participants, promised, executeAt(), partialTxn(), depsView(), acceptedOrCommitted(), waitingOn));
         }
 
         @Override
@@ -647,7 +647,7 @@ public abstract class Command extends MinimalWithConcreteDeps
 
     public static class Executed extends Committed
     {
-        public static Executed executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, PersistableResult result)
+        public static Executed executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, PersistableResult result)
         {
             return validate(new Executed(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn, writes, result));
         }
@@ -678,7 +678,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             validateWrites(txnId(), writes);
         }
 
-        private Executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, PersistableResult result)
+        private Executed(TxnId txnId, SaveStatus status, Durability durability, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted, WaitingOn waitingOn, Writes writes, PersistableResult result)
         {
             super(txnId, status, durability, participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted, waitingOn);
             validateWrites(txnId, writes);
@@ -694,8 +694,8 @@ public abstract class Command extends MinimalWithConcreteDeps
         @Override
         public Command updateAttributes(StoreParticipants participants, Ballot promised, Durability durability)
         {
-            Invariants.require(partialDeps().covers(participants.stillTouches()));
-            return validate(new Executed(txnId(), saveStatus(), durability, participants, promised, executeAt(), partialTxn(), partialDeps(), acceptedOrCommitted(), waitingOn, writes, result));
+            Invariants.require(depsView().covers(participants.stillTouches()));
+            return validate(new Executed(txnId(), saveStatus(), durability, participants, promised, executeAt(), partialTxn(), depsView(), acceptedOrCommitted(), waitingOn, writes, result));
         }
 
         @Override
@@ -783,9 +783,14 @@ public abstract class Command extends MinimalWithConcreteDeps
 
         public static WaitingOn none(Routable.Domain domain, Deps deps)
         {
-            return new WaitingOn(deps.keyDeps.keys(), deps.rangeDeps,
-                                 new ImmutableBitSet(deps.keyDeps.keys().size() + deps.rangeDeps.txnIdCount()),
-                                 domain == Range ? new ImmutableBitSet(deps.rangeDeps.txnIdCount()) : null);
+            return none(domain, deps.keyDeps.keys(), deps.rangeDeps);
+        }
+
+        public static WaitingOn none(Routable.Domain domain, RoutingKeys keys, RangeDeps rangeDeps)
+        {
+            return new WaitingOn(keys, rangeDeps,
+                                 new ImmutableBitSet(keys.size() + rangeDeps.txnIdCount()),
+                                 domain == Range ? new ImmutableBitSet(rangeDeps.txnIdCount()) : null);
         }
 
         public boolean isWaiting()
@@ -934,20 +939,21 @@ public abstract class Command extends MinimalWithConcreteDeps
                 this.appliedOrInvalidated = txnId.is(Key) ? null : new LargeBitSet(txnIdCount(), false);
             }
 
-            public static Update initialise(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, StoreParticipants participants, PartialDeps deps)
+            public static Update initialise(SafeCommandStore safeStore, TxnId txnId, Timestamp executeAt, StoreParticipants participants, PartialDepsView deps)
             {
-                Update initialise = new Update(txnId, deps.keyDeps.keys(), deps.rangeDeps);
+                RoutingKeys keys = deps.keys();
+                RangeDeps rDeps = deps.rangeDeps();
+                Update initialise = new Update(txnId, keys, rDeps);
                 Participants<?> stillWaitsOn = participants.stillWaitsOn();
                 // TODO (expected): refactor this to operate only on participants, not ranges
-                if (stillWaitsOn.domain() == Range) deps.keyDeps.keys().forEach((AbstractRanges)stillWaitsOn, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
-                else deps.keyDeps.keys().forEach((AbstractUnseekableKeys)stillWaitsOn, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
-                deps.rangeDeps.forEach(stillWaitsOn, initialise, Update::initialise);
+                if (stillWaitsOn.domain() == Range) keys.forEach((AbstractRanges)stillWaitsOn, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
+                else keys.forEach((AbstractUnseekableKeys)stillWaitsOn, (upd, key, index) -> upd.initialise(index + upd.txnIdCount()), initialise);
+                rDeps.forEach(stillWaitsOn, initialise, Update::initialise);
                 if (txnId.isSyncPoint())
                 {
                     // sync points wait on ranges we have lost but not closed, but the sync point may have dependencies
                     // that were started after we lost the ranges; we do not need to wait for these, so remove them
                     CommandStores.RangesForEpoch ranges = safeStore.ranges();
-                    RangeDeps rDeps = deps.rangeDeps;
                     int txnIdx = rDeps.txnIdCount() - 1;
                     int latest = ranges.floorIndex(txnId.epoch());
                     Ranges all = ranges.all();
@@ -1307,7 +1313,7 @@ public abstract class Command extends MinimalWithConcreteDeps
                committed(command, command.saveStatus(), waitingOn.build());
     }
 
-    static Command.PreAccepted preaccept(Command command, SaveStatus saveStatus, StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
+    static Command.PreAccepted preaccept(Command command, SaveStatus saveStatus, StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps)
     {
         if (command.status() == Status.NotDefined)
         {
@@ -1331,12 +1337,12 @@ public abstract class Command extends MinimalWithConcreteDeps
     {
         Invariants.require(!(command instanceof Committed));
         return Command.Accepted.accepted(command.txnId(), SaveStatus.withDefinition(command.saveStatus()), command.durability(),
-                                         newParticipants, promised, command.executeAt(), partialTxn, command.partialDeps(),
+                                         newParticipants, promised, command.executeAt(), partialTxn, command.depsView(),
                                          command.acceptedOrCommitted());
     }
 
     // we accept txnId as a parameter to ensure we maintain the expectation that executeAt == txnId
-    static Command.Accepted accept(Command current, TxnId txnId, SaveStatus saveStatus, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Ballot acceptedOrCommitted)
+    static Command.Accepted accept(Command current, TxnId txnId, SaveStatus saveStatus, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Ballot acceptedOrCommitted)
     {
         Invariants.require(saveStatus.status == Status.AcceptedSlow || saveStatus.status == Status.AcceptedMedium || saveStatus.status == Status.PreCommitted);
         return validate(new Command.Accepted(txnId, saveStatus, current.durability(), participants, promised, executeAt, partialTxn, partialDeps, acceptedOrCommitted));
@@ -1348,7 +1354,7 @@ public abstract class Command extends MinimalWithConcreteDeps
 
         SaveStatus saveStatus = SaveStatus.get(newStatus, copy.known());
 
-        PartialDeps partialDeps = copy.partialDeps();
+        PartialDepsView partialDeps = copy.depsView();
         if (saveStatus.known.is(DepsUnknown))
             partialDeps = null;
 
@@ -1358,12 +1364,12 @@ public abstract class Command extends MinimalWithConcreteDeps
         return validate(new Command.Accepted(copy.txnId, saveStatus, copy.durability, copy.participants, ballot, copy.executeAt(), copy.partialTxn(), partialDeps, ballot));
     }
 
-    static Command.Committed commit(Command command, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps)
+    static Command.Committed commit(Command command, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps)
     {
         return validate(committed(command.txnId(), SaveStatus.get(Status.Committed, command.known()), command.durability(), participants, ballot, executeAt, partialTxn, partialDeps, ballot, null));
     }
 
-    static Command.Committed stable(Command command, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, WaitingOn waitingOn)
+    static Command.Committed stable(Command command, @Nonnull StoreParticipants participants, Ballot ballot, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, WaitingOn waitingOn)
     {
         return validate(committed(command.txnId(), SaveStatus.Stable, command.durability(), participants,
                                   Ballot.max(ballot, command.promised()), executeAt, partialTxn, partialDeps,
@@ -1373,8 +1379,8 @@ public abstract class Command extends MinimalWithConcreteDeps
     static Command precommit(Command command, Timestamp executeAt, Ballot promisedAtLeast)
     {
         SaveStatus saveStatus = SaveStatus.get(Status.PreCommitted, command.known());
-        PartialDeps partialDeps = command.partialDeps();
-        if (!saveStatus.known.deps().hasProposedOrDecidedDeps() && command.partialDeps() != null)
+        PartialDepsView partialDeps = command.depsView();
+        if (!saveStatus.known.deps().hasProposedOrDecidedDeps() && command.depsView() != null)
             partialDeps = null;
         return validate(new Command.Accepted(command.txnId, saveStatus, command.durability, command.participants, Ballot.max(command.promised, promisedAtLeast), executeAt, command.partialTxn, partialDeps, command.acceptedOrCommitted));
     }
@@ -1386,15 +1392,15 @@ public abstract class Command extends MinimalWithConcreteDeps
 
     static Command.Executed preapplied(Command command, Timestamp applyAt, Writes writes, PersistableResult result)
     {
-        return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), command.participants(), command.promised(), applyAt, command.partialTxn(), command.partialDeps(), command.acceptedOrCommitted(), command.waitingOn(), writes, result);
+        return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), command.participants(), command.promised(), applyAt, command.partialTxn(), command.depsView(), command.acceptedOrCommitted(), command.waitingOn(), writes, result);
     }
 
-    static Command.Executed preapplied(Command command, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
+    static Command.Executed preapplied(Command command, @Nonnull StoreParticipants participants, Ballot promised, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return executed(command.txnId(), SaveStatus.get(Status.PreApplied, command.known()), command.durability(), participants, promised, executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }
 
-    static Command.Executed applying(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
+    static Command.Executed applying(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return executed(command.txnId(), SaveStatus.Applying, command.durability(), participants, command.promised(), executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }
@@ -1404,7 +1410,7 @@ public abstract class Command extends MinimalWithConcreteDeps
         return executed(command, SaveStatus.Applying);
     }
 
-    static Command.Executed applied(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDeps partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
+    static Command.Executed applied(Command command, @Nonnull StoreParticipants participants, Timestamp executeAt, PartialTxn partialTxn, PartialDepsView partialDeps, Command.WaitingOn waitingOn, Writes writes, PersistableResult result)
     {
         return executed(command.txnId(), SaveStatus.Applied, command.durability(), participants, command.promised(), executeAt, partialTxn, partialDeps, command.acceptedOrCommitted(), waitingOn, writes, result);
     }
@@ -1543,7 +1549,7 @@ public abstract class Command extends MinimalWithConcreteDeps
             }
         }
         {
-            PartialDeps deps = validate.partialDeps();
+            PartialDepsView deps = validate.depsView();
             switch (known.deps())
             {
                 default: throw new UnhandledEnum(known.deps());

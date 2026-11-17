@@ -96,12 +96,12 @@ public class CommandsForKeyReadyNewestEntryTest
         // Control: the same undecided e, but not in the last byId slot (an applied f follows it).
         TxnId f = write(50);
         CommandsForKey control = cfk(applied(d), stable(t, tExecuteAt), preaccepted(e), applied(f));
-        Assertions.assertFalse(control.hasUniqueHlcAndIsReadyToExecute(t, tExecuteAt, deps),
+        Assertions.assertFalse(control.hasUniqueHlcAndIsReadyToExecute(t, tExecuteAt, deps.keyDeps),
                                "control: undecided managed e (not last in byId) blocks T, per the c > 0 rule");
 
         // Bug: e is the newest entry in byId.
         CommandsForKey bug = cfk(applied(d), stable(t, tExecuteAt), preaccepted(e));
-        Assertions.assertFalse(bug.hasUniqueHlcAndIsReadyToExecute(t, tExecuteAt, deps),
+        Assertions.assertFalse(bug.hasUniqueHlcAndIsReadyToExecute(t, tExecuteAt, deps.keyDeps),
                                "hasUniqueHlcAndIsReadyToExecute returned true although the newest byId entry " + e
                                + " is undecided, managed and witnessed by " + t + ": byId[byId.length-1] was never examined");
     }
@@ -119,7 +119,7 @@ public class CommandsForKeyReadyNewestEntryTest
         Timestamp tExecuteAt = Timestamp.fromValues(1, 40, NODE);
 
         CommandsForKey cfk = cfk(stable(t, tExecuteAt), applied(d));
-        Assertions.assertTrue(cfk.hasUniqueHlcAndIsReadyToExecute(t, tExecuteAt, depsOn(d)),
+        Assertions.assertTrue(cfk.hasUniqueHlcAndIsReadyToExecute(t, tExecuteAt, depsOn(d).keyDeps),
                               "T's only dep " + d + " on the key is APPLIED but the method returned false: it never reached byId[byId.length-1]");
     }
 }

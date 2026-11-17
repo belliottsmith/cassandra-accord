@@ -24,6 +24,7 @@ import javax.annotation.Nullable;
 
 import accord.api.RoutingKey;
 import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.Participants;
 import accord.primitives.Route;
 import accord.primitives.SaveStatus;
@@ -126,22 +127,45 @@ public class MinimalCommand
             super(txnId, saveStatus, durability, participants, executeAt);
         }
 
-        abstract public PartialDeps partialDeps();
+        /**
+         * The deps of this command, which may be partially or wholly unmaterialised.
+         * Prefer this to {@link #partialDeps()} where the view's narrower accessors are sufficient.
+         */
+        abstract public @Nullable PartialDepsView depsView();
+
+        /**
+         * The deps of this command, materialising them if necessary.
+         */
+        public final @Nullable PartialDeps partialDeps()
+        {
+            PartialDepsView view = depsView();
+            return view == null ? null : view.materialize();
+        }
+
+        /**
+         * Discard any memoised deserialized dependency state
+         */
+        public final void unmemoizeDeps()
+        {
+            PartialDepsView view = depsView();
+            if (view != null)
+                view.unmemoize();
+        }
     }
 
     public static class MinimalWithConcreteDeps extends MinimalWithDeps
     {
-        final PartialDeps partialDeps;
-        public MinimalWithConcreteDeps(TxnId txnId, SaveStatus saveStatus, Status.Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDeps partialDeps)
+        final PartialDepsView depsView;
+        public MinimalWithConcreteDeps(TxnId txnId, SaveStatus saveStatus, Status.Durability durability, StoreParticipants participants, Timestamp executeAt, PartialDepsView depsView)
         {
             super(txnId, saveStatus, durability, participants, executeAt);
-            this.partialDeps = partialDeps;
+            this.depsView = depsView;
         }
 
         @Override
-        public final PartialDeps partialDeps()
+        public final PartialDepsView depsView()
         {
-            return partialDeps;
+            return depsView;
         }
     }
 }

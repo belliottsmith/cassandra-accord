@@ -52,7 +52,7 @@ import accord.local.RedundantBefore;
 import accord.local.StoreParticipants;
 import accord.primitives.Ballot;
 import accord.primitives.EpochSupplier;
-import accord.primitives.PartialDeps;
+import accord.primitives.PartialDepsView;
 import accord.primitives.PartialTxn;
 import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
@@ -895,7 +895,7 @@ public class InMemoryJournal implements Journal
                         changes.put(PARTIAL_TXN, after.partialTxn());
                         break;
                     case PARTIAL_DEPS:
-                        changes.put(PARTIAL_DEPS, after.partialDeps());
+                        changes.put(PARTIAL_DEPS, after.depsView());
                         break;
                     case WAITING_ON:
                         Command.WaitingOn waitingOn = after.waitingOn();
@@ -940,12 +940,6 @@ public class InMemoryJournal implements Journal
         private Builder(TxnId txnId, Load load)
         {
             super(txnId, load);
-        }
-
-        @Override
-        public PartialDeps partialDeps()
-        {
-            return (PartialDeps) partialDeps;
         }
 
         Diff toDiff()
@@ -1040,7 +1034,7 @@ public class InMemoryJournal implements Journal
                     partialTxn = Invariants.nonNull((PartialTxn) diff.changes.get(PARTIAL_TXN));
                     break;
                 case PARTIAL_DEPS:
-                    partialDeps = Invariants.nonNull((PartialDeps) diff.changes.get(PARTIAL_DEPS));
+                    partialDeps = Invariants.nonNull((PartialDepsView) diff.changes.get(PARTIAL_DEPS));
                     break;
                 case WAITING_ON:
                     waitingOn = Invariants.nonNull((CommandChange.WaitingOnBitSets) diff.changes.get(WAITING_ON));
