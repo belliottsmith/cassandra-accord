@@ -2758,7 +2758,10 @@ public class BTree
             // the number of children here may be smaller than MIN_KEYS if this is the root node
             assert !hasOverflow();
             if (count == 0)
+            {
+                clearSourceNode();
                 return empty();
+            }
 
             Object[] newLeaf;
             if (sourceNode != null
@@ -3333,7 +3336,7 @@ public class BTree
         }
 
         /**
-         * Clear the contents of a branch buffer, aborting once we encounter a null entry
+         * Clear the contents of a leaf buffer, aborting once we encounter a null entry
          * to save time on small trees
          */
         private void clearLeafBuffer(Object[] array)
@@ -3353,7 +3356,8 @@ public class BTree
          */
         private void clearBranchBuffer(Object[] array)
         {
-            if (array[0] == null)
+            // a branch may have a child but no key
+            if (array[0] == null && array[MAX_KEYS] == null)
                 return;
 
             // find first null entry; loop from beginning, to amortise cost over size of working set
@@ -3525,6 +3529,9 @@ public class BTree
                 Invariants.require(builder.isEmpty() && !branch.hasRightChild);
                 builder = branch;
             }
+
+            // as for every child level, record the node we are updating as the source, so it may be reused if unchanged
+            builder.setSourceNode(update);
 
             Insert ik = this.insert.next();
             ik = updateRecursive(ik, update, null, builder);
@@ -4132,7 +4139,7 @@ public class BTree
 
         private Object rightMost(BranchBuilder level)
         {
-            Object[] node = (Object[]) level.buffer[31 + level.count];
+            Object[] node = (Object[]) level.buffer[MAX_KEYS + level.count];
             while (!BTree.isLeaf(node))
                 node = (Object[]) node[node.length - 2];
             return node[BTree.sizeOfLeaf(node) - 1];
@@ -4140,8 +4147,8 @@ public class BTree
 
         private void setRightMost(LeafOrBranchBuilder level, Object set)
         {
-            Object[] node = (Object[]) level.buffer[31 + level.count];
-            level.buffer[31 + level.count] = replaceRightMost(node, set);
+            Object[] node = (Object[]) level.buffer[MAX_KEYS + level.count];
+            level.buffer[MAX_KEYS + level.count] = replaceRightMost(node, set);
         }
 
         private Object[] replaceRightMost(Object[] node, Object set)

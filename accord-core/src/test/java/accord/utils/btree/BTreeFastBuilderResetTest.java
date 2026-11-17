@@ -18,12 +18,15 @@
 
 package accord.utils.btree;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * A pooled {@link BTree.FastBuilder} closed without being built (e.g. abandoned on an exception) must not corrupt the
@@ -31,6 +34,46 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  */
 public class BTreeFastBuilderResetTest
 {
+    /**
+     * A transformer abandoned once it has propagated an unchanged child, but no key after it, retains nothing
+     */
+    @Test
+    void abandonedTransformerReleasesRightChild() throws Exception
+    {
+        Integer[] values = new Integer[1000];
+        for (int i = 0 ; i < values.length ; ++i)
+            values[i] = i;
+        Object[] tree = BTree.build(BulkIterator.of(values), values.length, UpdateFunction.noOp());
+        // the first leaf is unchanged, so propagated whole to its parent, before we abort on the key that follows it
+        Integer abortAt = (Integer) tree[0];
+        assertThrows(UnsupportedOperationException.class, () -> BTree.transformAndFilter(tree, (Integer v) -> {
+            if (v.equals(abortAt)) throw new UnsupportedOperationException();
+            return v;
+        }));
+
+        Field poolField = Class.forName(BTree.class.getName() + "$Transformer").getDeclaredField("POOL");
+        poolField.setAccessible(true);
+        TinyThreadLocalPool.TinyPool<Object> pool = ((TinyThreadLocalPool<Object>) poolField.get(null)).get();
+        BTree.LeafOrBranchBuilder builder = (BTree.LeafOrBranchBuilder) pool.poll();
+        try
+        {
+            for (BTree.LeafOrBranchBuilder level = builder ; level != null ; level = level.parent)
+            {
+                assertNull(level.sourceNode);
+                assertNull(level.savedNextKey);
+                for (Object[] buffer : new Object[][] { level.buffer, level.savedBuffer })
+                {
+                    for (int i = 0 ; buffer != null && i < buffer.length ; ++i)
+                        assertNull(buffer[i], "height " + level.height + " retains " + i);
+                }
+            }
+        }
+        finally
+        {
+            pool.offer(builder);
+        }
+    }
+
     @Test
     void abandonedBuilderIsReset()
     {

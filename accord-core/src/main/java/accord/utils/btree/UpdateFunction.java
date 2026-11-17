@@ -85,7 +85,10 @@ public interface UpdateFunction<K, V>
 
         NoOp<V> flip()
         {
-            return noOp == this ? noOpReplace() : noOp();
+            if (this == noOp) return noOpReplace();
+            if (this == replace) return noOp();
+            if (this == reject) return this;
+            return new NoOp<>(super.flip()::merge);
         }
     }
 
