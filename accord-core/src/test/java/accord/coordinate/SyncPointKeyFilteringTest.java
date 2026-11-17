@@ -39,6 +39,7 @@ import accord.messages.ApplyThenWaitUntilApplied;
 import accord.local.Node;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.KeyDeps;
+import accord.primitives.Range;
 import accord.primitives.Keys;
 import accord.primitives.Ranges;
 import accord.primitives.RoutingKeys;
@@ -60,6 +61,7 @@ import static accord.primitives.Routables.Slice.Minimal;
 import static accord.primitives.TxnId.Cardinality.cardinality;
 import static accord.utils.async.AsyncChainUtils.getUninterruptibly;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -158,7 +160,7 @@ public class SyncPointKeyFilteringTest
                 Ranges owned = store.unsafeGetRangesForEpoch().all().slice(ranges, Minimal);
                 TreeSet<RoutingKey> ownedKeys = new TreeSet<>();
                 allKeys.slice(owned, Minimal).forEach(ownedKeys::add);
-                Scan scan = scan((InMemoryCommandStore) store, probe, owned);
+                Scan scan = scan((InMemoryCommandStore) store, probe, firstId, owned);
                 String desc = "node " + node.id() + " store " + store.id();
                 assertEquals(ownedKeys, scan.retained, "precondition: " + desc + " must still hold the writes before " + firstId);
                 if (!checkLoading)
@@ -168,6 +170,8 @@ public class SyncPointKeyFilteringTest
                 if (ownedKeys.contains(touchedKey))
                     expect.add(touchedKey);
                 assertEquals(expect, scan.relevant, desc + " would load keys with no new work since " + firstId);
+                assertFalse(scan.anyRangeRelevantBeforeFirst, desc + " would scan a range with no new work since " + firstId);
+                assertTrue(scan.everyRangeRelevantAfterFirst, desc + " would not scan a range with new work since " + firstId);
             }
         }
     }
@@ -292,13 +296,17 @@ public class SyncPointKeyFilteringTest
         final TreeSet<RoutingKey> retained = new TreeSet<>();
         /** keys whose {@link CommandsForKey} a sync point would load */
         final TreeSet<RoutingKey> relevant = new TreeSet<>();
+        /** whether any owned range would be relevant if bounded by its latest transaction before the first sync point */
+        boolean anyRangeRelevantBeforeFirst;
+        /** whether every owned range would be relevant if bounded by a transaction after the first sync point */
+        boolean everyRangeRelevantAfterFirst = true;
     }
 
     /**
      * Apply the {@link SummaryLoader} predicate that implementations use to skip keys when scanning a range for
      * {@code probe}, to every {@link CommandsForKey} the store has.
      */
-    private static Scan scan(InMemoryCommandStore store, TxnId probe, Ranges owned) throws Exception
+    private static Scan scan(InMemoryCommandStore store, TxnId probe, TxnId firstId, Ranges owned) throws Exception
     {
         return getUninterruptibly(store.chain(() -> {
             SummaryLoader loader = SummaryLoader.loader(null, store.unsafeGetRedundantBefore(), store.unsafeGetMaxDecidedRX(),
@@ -313,6 +321,24 @@ public class SyncPointKeyFilteringTest
                 scan.retained.add(cfk.key());
                 if (loader.isRelevant(cfk))
                     scan.relevant.add(cfk.key());
+            }
+            // the same judgement over a range, given the latest transaction of any key in it
+            for (Range range : owned)
+            {
+                TxnId before = TxnId.NONE, after = TxnId.NONE;
+                for (InMemoryCommandStore.GlobalCommandsForKey global : store.unsafeCommandsForKey().values())
+                {
+                    CommandsForKey cfk = global.value();
+                    if (cfk == null || cfk.size() == 0 || !range.contains(cfk.key()))
+                        continue;
+                    TxnId last = cfk.get(cfk.size() - 1);
+                    if (last.compareTo(firstId) < 0) before = TxnId.max(before, last);
+                    else after = TxnId.max(after, last);
+                }
+                if (!before.equals(TxnId.NONE))
+                    scan.anyRangeRelevantBeforeFirst |= loader.isRelevant(range, before);
+                if (!after.equals(TxnId.NONE))
+                    scan.everyRangeRelevantAfterFirst &= loader.isRelevant(range, after);
             }
             return scan;
         }), TIMEOUT_SECONDS, TimeUnit.SECONDS);

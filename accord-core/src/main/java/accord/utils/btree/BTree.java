@@ -3295,6 +3295,10 @@ public class BTree
          */
         void reset()
         {
+            // a builder may be reset without being drained (e.g. if abandoned), so we must clear our count as well as
+            // our buffers, or we would build a corrupt tree (with leading nulls) the next time we are used
+            leaf().count = 0;
+            leaf().clearSourceNode();
             if (leaf().savedBuffer != null && leaf().savedBuffer[0] != null)
             {
                 Arrays.fill(leaf().savedBuffer, null);
@@ -3304,6 +3308,7 @@ public class BTree
             else
             {
                 clearLeafBuffer(leaf().buffer);
+                leaf().savedNextKey = null;
             }
 
             BranchBuilder branch = leaf().parent;

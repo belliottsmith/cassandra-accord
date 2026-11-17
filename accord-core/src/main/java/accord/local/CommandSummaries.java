@@ -30,6 +30,7 @@ import accord.local.RedundantBefore.Bounds;
 import accord.local.cfk.CommandsForKey;
 import accord.primitives.PartialDeps;
 import accord.primitives.Participants;
+import accord.primitives.Range;
 import accord.primitives.Ranges;
 import accord.primitives.SaveStatus;
 import accord.primitives.Status;
@@ -344,6 +345,27 @@ public interface CommandSummaries
             // from our dependencies, which may mislead their recovery (see DepsCalculator.MinDependencyCalculator.include).
             // We cannot see their durability here, so skip only if a quorum has applied them all.
             return !redundantBefore.status(last, null, key).all(QUORUM_APPLIED);
+        }
+
+        /**
+         * Whether we must load any key in {@code range}, given no transaction of any key in the range is later than
+         * {@code maxLast}. As {@link #isRelevant(RoutingKey, TxnId)}, except {@code maxLast} may bound transactions of
+         * any kind, so we treat it as though it is not a sync point (which is decided by an earlier sync point only if
+         * it precedes its hlc bound).
+         */
+        public boolean isRelevant(Range range, TxnId maxLast)
+        {
+            if (maxLast.equals(TxnId.NONE) || maxLast.compareTo(minTxnId) < 0)
+                return false;
+
+            if (maxDecidedRX == null)
+                return true;
+
+            DecidedRX decidedRx = maxDecidedRX.forDeps(range, primaryTxnId);
+            if (decidedRx == null || maxLast.compareTo(decidedRx.hlcBound) >= 0)
+                return true;
+
+            return !redundantBefore.status(maxLast, null, Ranges.of(range)).all(QUORUM_APPLIED);
         }
 
         public boolean shouldRecordFutureRx(TxnId txnId, SummaryStatus status)
