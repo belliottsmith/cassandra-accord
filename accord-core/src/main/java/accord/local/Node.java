@@ -968,6 +968,14 @@ public class Node implements NodeCommandStoreService, UncaughtExceptionListener.
     /**
      * @return true iff {@code a} and {@code b} are known to be near each other (e.g. in the same DC)
      */
+    /**
+     * @return a preference for executing contended transactions in the DC of {@code node} (see {@link TopologySorter.Supplier#executionPreference})
+     */
+    public int executionPreference(Id node)
+    {
+        return topologySorter.executionPreference(node);
+    }
+
     public boolean areNearby(Id a, Id b)
     {
         if (a.equals(b)) return true;

@@ -49,7 +49,8 @@ public interface MessageType
         REMOTE_SUCCESS_REQ,
         BACKLOG_CLAIM_REQ,
         BACKLOG_APPLIED_REQ,
-        APPLY_RELAY_REQ, APPLY_RELAY_RSP;
+        APPLY_RELAY_REQ, APPLY_RELAY_RSP,
+        BACKLOG_DELEGATE_REQ;
 
         private volatile Object mapToImplementation;
         public static void initialise(Map<StandardMessage, ?> mapToImplementation)

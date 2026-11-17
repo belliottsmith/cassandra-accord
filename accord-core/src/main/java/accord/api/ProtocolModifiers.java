@@ -122,6 +122,23 @@ public class ProtocolModifiers
     }
 
     /**
+     * With {@link #coordinatorBacklogExecutionFollow()}, how readily the coordinator of a contended transaction delegates it
+     * to another DC. From executing contended transactions in a single DC (so that chains of conflicting transactions
+     * settle in one DC, minimising duplicated work and WAN traffic) towards executing them where they are coordinated
+     * (minimising latency for local clients). The extreme of every DC executing every contended transaction is
+     * {@link #coordinatorBacklogExecutionPerDc()} (optionally with {@link #coordinatorBacklogExecutionPersistLocally()}).
+     */
+    public enum CoordinatorBacklogExecutionFollowDelegation
+    {
+        /** Execute in the DC that owns some key of the transaction and is preferred (see {@link accord.local.Node#executionPreference}) */
+        PRECEDENCE,
+        /** As {@link #PRECEDENCE}, unless our DC owns the transaction's home key */
+        UNLESS_HOME_KEY_LOCAL,
+        /** As {@link #PRECEDENCE}, unless our DC owns any key of the transaction */
+        UNLESS_ANY_KEY_LOCAL
+    }
+
+    /**
      * How much information to include in messages, assuming earlier messages have been delivered.
      * Less information is more efficient, but may lead to additional traffic and latency when earlier messages
      * have not arrived, as the recipient must request (or the coordinator must resend) a more complete message.
@@ -265,6 +282,15 @@ public class ProtocolModifiers
 
         private static boolean coordinatorBacklogExecutionPerDc = false;
         public static synchronized void setCoordinatorBacklogExecutionPerDc(boolean newCoordinatorBacklogExecutionPerDc) { pre(); coordinatorBacklogExecutionPerDc = newCoordinatorBacklogExecutionPerDc; }
+
+        private static boolean coordinatorBacklogExecutionFollow = false;
+        public static synchronized void setCoordinatorBacklogExecutionFollow(boolean newCoordinatorBacklogExecutionFollow) { pre(); coordinatorBacklogExecutionFollow = newCoordinatorBacklogExecutionFollow; }
+
+        private static CoordinatorBacklogExecutionFollowDelegation coordinatorBacklogExecutionFollowDelegation = CoordinatorBacklogExecutionFollowDelegation.PRECEDENCE;
+        public static synchronized void setCoordinatorBacklogExecutionFollowDelegation(CoordinatorBacklogExecutionFollowDelegation newDelegation) { pre(); coordinatorBacklogExecutionFollowDelegation = newDelegation; }
+
+        private static long coordinatorBacklogExecutionFollowWindowMicros = TimeUnit.SECONDS.toMicros(1);
+        public static synchronized void setCoordinatorBacklogExecutionFollowWindow(long window, TimeUnit units) { pre(); coordinatorBacklogExecutionFollowWindowMicros = units.toMicros(window); }
 
         private static long coordinatorBacklogExecutionGraceMicros = 0;
         public static synchronized void setCoordinatorBacklogExecutionGrace(long grace, TimeUnit units) { pre(); coordinatorBacklogExecutionGraceMicros = units.toMicros(grace); }
@@ -474,6 +500,39 @@ public class ProtocolModifiers
      * {@link accord.messages.BacklogClaim}.
      */
     public static boolean coordinatorBacklogExecutionClaims() { return coordinatorBacklogExecutionClaims; }
+
+    private static boolean coordinatorBacklogExecutionFollow = Configure.coordinatorBacklogExecutionFollow;
+
+    /**
+     * With {@link CoordinatorBacklogExecution#DESIGNATED} and not {@link #coordinatorBacklogExecutionPerDc()}, whether
+     * contended transactions follow their predecessors: rather than executing each transaction in a DC fixed by its home
+     * key, the original coordinator of a contended transaction (one that a replica it reads from must wait to execute)
+     * learns from its read replies which replica executed the latest transaction on each of its keys
+     * ({@link accord.messages.ReadData.WaitingWithOwners}), picks a DC by
+     * {@link #coordinatorBacklogExecutionFollowDelegation()}, and if that is not its own DC, delegates execution to the
+     * designated replica there ({@link accord.messages.BacklogDelegate}), pausing until that replica reports the result.
+     * The delegate is responsible for persisting the transaction (see also {@link #relayRemoteApply()}).
+     * Must not be enabled until every replica understands {@link accord.messages.BacklogDelegate},
+     * {@link accord.messages.ReadData.WaitingWithOwners} and {@link accord.coordinate.ExecuteFlag#RELAYED} (with
+     * {@link accord.messages.Apply#executedBy}).
+     */
+    public static boolean coordinatorBacklogExecutionFollow() { return coordinatorBacklogExecutionFollow && coordinatorBacklogExecutionDesignated() && !coordinatorBacklogExecutionPerDc(); }
+
+    private static CoordinatorBacklogExecutionFollowDelegation coordinatorBacklogExecutionFollowDelegation = Configure.coordinatorBacklogExecutionFollowDelegation;
+
+    /**
+     * With {@link #coordinatorBacklogExecutionFollow()}, how readily a coordinator delegates a contended transaction to
+     * another DC, rather than executing it locally
+     */
+    public static CoordinatorBacklogExecutionFollowDelegation coordinatorBacklogExecutionFollowDelegation() { return coordinatorBacklogExecutionFollowDelegation; }
+
+    private static long coordinatorBacklogExecutionFollowWindowMicros = Configure.coordinatorBacklogExecutionFollowWindowMicros;
+
+    /**
+     * With {@link #coordinatorBacklogExecutionFollow()}, for how long since a replica last applied a transaction on a key
+     * it reports the replica that executed it, i.e. considers the key's chain active
+     */
+    public static long coordinatorBacklogExecutionFollowWindow(TimeUnit units) { return units.convert(coordinatorBacklogExecutionFollowWindowMicros, TimeUnit.MICROSECONDS); }
 
     private static boolean coordinatorBacklogExecutionYieldToNearby = Configure.coordinatorBacklogExecutionYieldToNearby;
 

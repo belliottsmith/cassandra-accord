@@ -28,7 +28,13 @@ import accord.utils.TinyEnumSet;
 
 public enum ExecuteFlag
 {
-    READY_TO_EXECUTE, HAS_UNIQUE_HLC, NO_WAIT;
+    READY_TO_EXECUTE, HAS_UNIQUE_HLC, NO_WAIT,
+    /**
+     * An Apply forwarded by a relay (see {@link accord.messages.ApplyRelay}) rather than sent by the replica that executed
+     * the transaction, so the recipient should not infer where the transaction executed from the sender
+     * (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionFollow()})
+     */
+    RELAYED;
 
     private static final ExecuteFlag[] LOOKUP = values();
     public static ExecuteFlag forOrdinal(int ordinal)

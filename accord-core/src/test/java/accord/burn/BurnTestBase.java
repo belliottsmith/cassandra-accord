@@ -520,8 +520,20 @@ public class BurnTestBase
             relayRemoteApply = Boolean.getBoolean("accord.burn.relay_remote_apply");
         setUnsafe(ProtocolModifiers.class, "relayRemoteApply", relayRemoteApply);
         logger.info("Relay remote apply: {}", relayRemoteApply);
+        boolean coordinatorBacklogExecutionFollow = persistLocallyRandom.nextBoolean();
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_follow") != null)
+            coordinatorBacklogExecutionFollow = Boolean.getBoolean("accord.burn.coordinator_backlog_execution_follow");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionFollow", coordinatorBacklogExecutionFollow);
+        ProtocolModifiers.CoordinatorBacklogExecutionFollowDelegation coordinatorBacklogExecutionFollowDelegation = persistLocallyRandom.pick(ProtocolModifiers.CoordinatorBacklogExecutionFollowDelegation.values());
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_follow_delegation") != null)
+            coordinatorBacklogExecutionFollowDelegation = ProtocolModifiers.CoordinatorBacklogExecutionFollowDelegation.valueOf(System.getProperty("accord.burn.coordinator_backlog_execution_follow_delegation"));
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionFollowDelegation", coordinatorBacklogExecutionFollowDelegation);
+        long coordinatorBacklogExecutionFollowWindowMillis = persistLocallyRandom.pickLong(100, 1000, 5000);
+        if (System.getProperty("accord.burn.coordinator_backlog_execution_follow_window_millis") != null)
+            coordinatorBacklogExecutionFollowWindowMillis = Long.getLong("accord.burn.coordinator_backlog_execution_follow_window_millis");
+        setUnsafe(ProtocolModifiers.class, "coordinatorBacklogExecutionFollowWindowMicros", MILLISECONDS.toMicros(coordinatorBacklogExecutionFollowWindowMillis));
         if (coordinatorBacklogExecution == CoordinatorBacklogExecution.DESIGNATED)
-            logger.info("Designated backlog execution: {}, grace {}us{}", coordinatorBacklogExecutionPerDc ? "per DC" : "single", coordinatorBacklogExecutionGraceMicros,
+            logger.info("Designated backlog execution: {}, grace {}us{}", coordinatorBacklogExecutionPerDc ? "per DC" : ProtocolModifiers.coordinatorBacklogExecutionFollow() ? "single, following predecessors (" + coordinatorBacklogExecutionFollowDelegation + ", window " + coordinatorBacklogExecutionFollowWindowMillis + "ms)" : "single", coordinatorBacklogExecutionGraceMicros,
                         ProtocolModifiers.coordinatorBacklogExecutionPersistLocally() ? ", persist locally (remote apply delay " + coordinatorBacklogExecutionRemoteApplyDelayMillis + "ms)" : "");
         logger.info("Backlog execution: {}{}{}{}{}{}", coordinatorBacklogExecution, coordinatorBacklogExecutionMultiKey ? " (including multi-key)" : "", coordinatorBacklogExecutionClaims ? " (with claims)" : "", coordinatorBacklogExecutionYieldToNearby ? " (yielding to nearby)" : "",
                     coordinatorBacklogExecutionWait ? " (waiting for ready)" : "", coordinatorBacklogExecutionLingerMillis > 0 ? " (lingering " + coordinatorBacklogExecutionLingerMillis + "ms)" : "");

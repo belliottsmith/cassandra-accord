@@ -19,7 +19,9 @@
 package accord.coordinate;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 
@@ -54,6 +56,8 @@ import accord.messages.ReadData;
 import accord.messages.ReadData.CommitOrReadNack;
 import accord.messages.ReadData.ReadOk;
 import accord.messages.ReadData.ReadReply;
+import accord.messages.ReadData.WaitingWithOwners;
+import accord.api.RoutingKey;
 import accord.messages.ReadTxnData;
 import accord.messages.StableThenRead;
 import accord.primitives.Ballot;
@@ -73,6 +77,7 @@ import accord.utils.SortedListSet;
 import accord.utils.UnhandledEnum;
 
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecution;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionFollow;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionMultiKey;
 import static accord.api.ProtocolModifiers.fastReadExecutionMayResendTxn;
 import static accord.api.ProtocolModifiers.fastReadsMayBypassSafeStore;
@@ -141,7 +146,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         public void onSuccessExclusive(Id from, ReadReply reply)
         {
             hasOnlyRedundant &= reply == CommitOrReadNack.Redundant;
-            if ((reply.isOk() || reply == Waiting) && RequestStatus.Success == recordSuccess(from) && informOnSuccess)
+            if ((reply.isOk() || (reply instanceof CommitOrReadNack && ((CommitOrReadNack) reply).kind == CommitOrReadNack.Kind.Waiting)) && RequestStatus.Success == recordSuccess(from) && informOnSuccess)
                 informStable();
         }
 
@@ -206,6 +211,51 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     private boolean pausedForClaim;
     // whether we have already deferred to a designated executor (see CoordinatorBacklogExecution#DESIGNATED), so may not again
     private boolean deferred;
+
+    /*
+     * Delegating to the DC executing our predecessors (see ProtocolModifiers#coordinatorBacklogExecutionFollow)
+     */
+    // the replicas we are reading from that have yet to reply (if we may delegate)
+    private @Nullable IntHashSet awaitingFirstReply;
+    // for keys whose replicas report a recent chain of contended transactions, the replica that executed the latest
+    private @Nullable Map<RoutingKey, Id> owners;
+    private boolean sawWaiting;
+
+    /**
+     * Once every replica we read from has replied, if any is waiting (i.e. the transaction is contended), decide whether
+     * to delegate execution to a replica in the DC that is executing our predecessors
+     * @return true iff we have delegated (and paused)
+     */
+    private boolean tryDelegate(Id from, ReadReply reply)
+    {
+        if (reply instanceof WaitingWithOwners)
+        {
+            WaitingWithOwners waiting = (WaitingWithOwners) reply;
+            if (owners == null) owners = new HashMap<>();
+            for (int i = 0 ; i < waiting.keys.length ; ++i)
+                owners.put(waiting.keys[i], waiting.executors[i]);
+        }
+        if (reply instanceof CommitOrReadNack && ((CommitOrReadNack) reply).kind == CommitOrReadNack.Kind.Waiting)
+            sawWaiting = true;
+
+        awaitingFirstReply.remove(from.id);
+        if (!awaitingFirstReply.isEmpty() || deferred)
+            return false;
+
+        awaitingFirstReply = null;
+        if (!sawWaiting || owners == null)
+            return false;
+
+        deferred = true;
+        Id delegate = ExecuteTxnBacklog.chooseDelegate(node, txnId, route, executeAt, owners);
+        if (delegate == null || !pauseForClaim())
+            return false;
+
+        if (tracing != null)
+            tracing.trace(null, "Delegated to %s", delegate);
+        node.executeBacklogSink().delegate(txnId, route, executeAt, delegate);
+        return true;
+    }
 
     // if we are responsible for the transaction's durability even if a designated replica in another DC executes it
     // (see ExecuteTxnBacklog#coordinatorOwnsDurability), we may reply to our client on RemoteSuccess, but continue to execute
@@ -348,6 +398,12 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
 
     protected void start(List<Id> sendReadTo, List<Id> readingFrom)
     {
+        if (!deferred && path != RECOVER && coordinatorBacklogExecutionFollow() && ExecuteTxnBacklog.mayExecute(txnId))
+        {
+            if (awaitingFirstReply == null)
+                awaitingFirstReply = new IntHashSet();
+            readingFrom.forEach(id -> awaitingFirstReply.add(id.id));
+        }
         // TODO (desired): migrate to SortedListSet; or introduce a specialised version for integer keys; or introduce a hash equivalent
         Topologies all = allTopologies;
         for (int i = 0, size = sendReadTo.size() ; i < size ; ++i)
@@ -474,6 +530,9 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
     @Override
     protected Action process(Id from, ReadReply reply)
     {
+        if (awaitingFirstReply != null && tryDelegate(from, reply))
+            return Action.Aborted;
+
         if (reply.isOk())
         {
             ReadOk ok = ((ReadOk) reply);
@@ -852,7 +911,7 @@ public class ExecuteTxn extends ReadCoordinator<Result, ReadReply>
         @Override
         protected void reply(ReadReply reply, Throwable fail)
         {
-            if (reply != Waiting)
+            if (!(reply instanceof CommitOrReadNack) || ((CommitOrReadNack) reply).kind != CommitOrReadNack.Kind.Waiting)
                 cancelSlowTimeout();
 
             // TODO (expected): execute immediately if already on CommandStore

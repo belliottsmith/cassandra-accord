@@ -98,7 +98,7 @@ public class ApplyRelay implements Request
                 on.reply(from, replyContext, null, t, null);
                 return;
             }
-            PersistTxn.relay(on, topologies, this, (appliedAt, failedAt) -> on.reply(from, replyContext, new ApplyRelayReply(appliedAt, failedAt), null, null));
+            PersistTxn.relay(on, topologies, this, from, (appliedAt, failedAt) -> on.reply(from, replyContext, new ApplyRelayReply(appliedAt, failedAt), null, null));
         });
         return null;
     }

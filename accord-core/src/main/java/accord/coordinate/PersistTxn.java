@@ -24,6 +24,7 @@ import org.agrona.collections.IntHashSet;
 
 import accord.api.Result.PersistableResult;
 import accord.coordinate.ExecuteFlag.CoordinationFlags;
+import accord.coordinate.ExecuteFlag.ExecuteFlags;
 import accord.local.Node;
 import accord.api.ExclusiveAsyncExecutor;
 import accord.messages.Apply;
@@ -57,14 +58,23 @@ public class PersistTxn extends Persist
      * Apply the transaction to the replicas {@code relay} asks us to (see {@link ApplyRelay}), and report to {@code onDone}
      * which have applied it
      */
-    public static void relay(Node node, Topologies topologies, ApplyRelay relay, BiConsumer<SortedArrayList<Node.Id>, SortedArrayList<Node.Id>> onDone)
+    private static Apply.Factory relayFactory(Node.Id executedBy)
+    {
+        return (kind, to, participates, txnId, ballot, scope, txn, executeAt, deps, writes, result, fullRoute, flags) -> {
+            Apply apply = Apply.FACTORY.create(kind, to, participates, txnId, ballot, scope, txn, executeAt, deps, writes, result, fullRoute, flags);
+            apply.executedBy = executedBy;
+            return apply;
+        };
+    }
+
+    public static void relay(Node node, Topologies topologies, ApplyRelay relay, Node.Id executedBy, BiConsumer<SortedArrayList<Node.Id>, SortedArrayList<Node.Id>> onDone)
     {
         IntHashSet noDeps = new IntHashSet();
         for (Node.Id id : relay.noDepsAt)
             noDeps.add(id.id);
-        CoordinationFlags flags = CoordinationFlags.withStableSent(CoordinationFlags.none(), noDeps);
+        CoordinationFlags flags = CoordinationFlags.withStableSent(CoordinationFlags.of(ExecuteFlags.none().with(ExecuteFlag.RELAYED)), noDeps);
         PersistTxn persist = new PersistTxn(node, node.someExclusiveExecutor(), topologies, relay.txnId, relay.ballot, relay.route, relay.txn,
-                                            relay.executeAt, relay.deps, relay.writes, relay.result, relay.route, flags, false, Apply.FACTORY, relay.kind);
+                                            relay.executeAt, relay.deps, relay.writes, relay.result, relay.route, flags, false, relayFactory(executedBy), relay.kind);
         persist.relayTo(relay.forwardTo, onDone);
         persist.start();
     }

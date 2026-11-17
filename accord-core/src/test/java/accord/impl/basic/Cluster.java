@@ -320,7 +320,27 @@ public class Cluster
 
     TopologySorter.Supplier topologySorter(Id self)
     {
-        return dcs == 1 ? SizeOfIntersectionSorter.SUPPLIER : new DcAwareSorter.Supplier(self, this::sameDc);
+        return dcs == 1 ? SizeOfIntersectionSorter.SUPPLIER : new DcAwareSorter.Supplier(self, this::sameDc, this::executionPreference);
+    }
+
+    // accord.burn.execution_preference: "central" (default) prefers the DC with the lowest total base latency to the others
+    // (happy burn only, once every DC pair's latency is known); "none" expresses no preference
+    private static final boolean PREFER_CENTRAL_DC = !"none".equals(System.getProperty("accord.burn.execution_preference", "central"));
+
+    int executionPreference(Id id)
+    {
+        if (!PREFER_CENTRAL_DC || happyDcPairBaseMicros.size() < dcs * (dcs - 1) / 2)
+            return -1;
+        int dc = dc(id);
+        long total = 0;
+        for (int other = 0 ; other < dcs ; ++other)
+        {
+            if (other == dc) continue;
+            Long base = happyDcPairBaseMicros.get(((long) Math.min(dc, other) << 32) | Math.max(dc, other));
+            if (base == null) return -1;
+            total += base;
+        }
+        return (int) Math.min(Integer.MAX_VALUE, total / 1000);
     }
 
     NodeSink create(Id self, NodeSink.TimeoutSupplier timeouts)

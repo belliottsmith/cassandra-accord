@@ -37,11 +37,19 @@ public class DcAwareSorter implements TopologySorter
     {
         final Node.Id self;
         final BiPredicate<Node.Id, Node.Id> sameDc;
+        final java.util.function.ToIntFunction<Node.Id> executionPreference;
 
-        public Supplier(Node.Id self, BiPredicate<Node.Id, Node.Id> sameDc)
+        public Supplier(Node.Id self, BiPredicate<Node.Id, Node.Id> sameDc, java.util.function.ToIntFunction<Node.Id> executionPreference)
         {
             this.self = self;
             this.sameDc = sameDc;
+            this.executionPreference = executionPreference;
+        }
+
+        @Override
+        public int executionPreference(Node.Id node)
+        {
+            return executionPreference.applyAsInt(node);
         }
 
         @Override

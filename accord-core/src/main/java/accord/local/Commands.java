@@ -878,6 +878,15 @@ public class Commands
                 else
                     adapter.notWaiting(safeStore);
 
+                // its coordinator may have delegated the transaction to us before we knew it
+                // (see ProtocolModifiers#coordinatorBacklogExecutionFollow)
+                if (onStable && saveStatus == SaveStatus.Stable && coordinatorBacklogExecutionFollow())
+                {
+                    ExecuteTxnBacklog backlog = safeStore.commandStore().node().executeBacklogSink();
+                    if (backlog != null)
+                        backlog.onStableWaiting(safeStore, safeCommand.current());
+                }
+
                 return false;
             }
         }

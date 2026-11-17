@@ -53,6 +53,7 @@ import accord.utils.async.Cancellable;
 import static accord.api.ProtocolModifiers.fastWritesMayBypassCommandsForKey;
 import static accord.api.ProtocolModifiers.fastWritesMayBypassSafeStore;
 import static accord.coordinate.ExecuteFlag.READY_TO_EXECUTE;
+import static accord.coordinate.ExecuteFlag.RELAYED;
 import static accord.messages.Apply.ApplyReply.Kind.InsufficientEpochs;
 import static accord.messages.MessageType.StandardMessage.APPLY_REQ;
 import static accord.messages.MessageType.StandardMessage.APPLY_RSP;
@@ -63,6 +64,13 @@ import static accord.primitives.SaveStatus.PreApplied;
 public class Apply extends RouteRequest<ApplyReply>
 {
     public static final Factory FACTORY = Apply::new;
+
+    /**
+     * If this Apply is forwarded by a relay ({@link accord.coordinate.ExecuteFlag#RELAYED}), the replica that executed the
+     * transaction (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionFollow()}).
+     * Note: introduced later, so implementations should only serialize this if {@link accord.coordinate.ExecuteFlag#RELAYED}.
+     */
+    public @Nullable Id executedBy;
     public static class SerializationSupport
     {
         public static Apply create(TxnId txnId, Ballot ballot, Route<?> scope, long minEpoch, long waitForEpoch, long maxEpoch, Kind kind, Timestamp executeAt, PartialDeps deps, PartialTxn txn, @Nullable FullRoute<?> fullRoute, Writes writes, PersistableResult result, ExecuteFlags flags)
@@ -172,6 +180,13 @@ public class Apply extends RouteRequest<ApplyReply>
         deps = null;
         writes = null;
         result = null;
+        if (reply != null && reply.kind == ApplyReply.Kind.Applied && ProtocolModifiers.coordinatorBacklogExecutionFollow() && node.executeBacklogSink() != null)
+        {
+            // record where the transaction executed (see ExecuteTxnBacklog#onApplyReceived), to decide where its successors execute
+            Id executor = flags.contains(RELAYED) ? executedBy : replyTo;
+            if (executor != null)
+                node.executeBacklogSink().onApplyReceived(txnId, ballot, scope, executeAt, executor);
+        }
         if (reply != null || failure != null) acceptReply(reply, failure);
         else Invariants.require(isCancelled());
     }

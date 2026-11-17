@@ -82,6 +82,14 @@ public interface TopologySorter
          * perspective of this node. If unknown, return false (unless {@code a} and {@code b} are the same node).
          */
         default boolean areNearby(Node.Id a, Node.Id b) { return a.equals(b); }
+
+        /**
+         * @return a preference for executing contended transactions in the DC of {@code node} (lower is preferred), which
+         * must be the same for every node in a DC, and agreed by every node; or -1 if there is no preference (see
+         * {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionFollow()}). E.g. a DC that is close to the
+         * others, or that most clients are near.
+         */
+        default int executionPreference(Node.Id node) { return -1; }
     }
 
     interface StaticSorter extends Supplier, TopologySorter

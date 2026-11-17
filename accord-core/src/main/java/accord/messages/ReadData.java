@@ -34,6 +34,8 @@ import accord.local.Command;
 import accord.local.Command.Committed;
 import accord.local.CommandStore;
 import accord.local.CommandStores;
+import accord.api.ProtocolModifiers;
+import accord.api.RoutingKey;
 import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
@@ -563,7 +565,17 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
                 onSetupComplete();
             onOneSuccess(-1, null);
             if (reply != null)
+            {
+                // tell the coordinator where the transaction's predecessors executed, so that it may delegate to that DC
+                // (see ProtocolModifiers#coordinatorBacklogExecutionFollow)
+                if (reply.kind == CommitOrReadNack.Kind.Waiting && ProtocolModifiers.coordinatorBacklogExecutionFollow() && !txnId.is(EphemeralRead) && node.executeBacklogSink() != null)
+                {
+                    CommitOrReadNack withOwners = node.executeBacklogSink().waitingWithOwners(txnId, scope);
+                    if (withOwners != null)
+                        reply = withOwners;
+                }
                 reply(reply, null);
+            }
         }
         else
         {
@@ -873,6 +885,35 @@ public abstract class ReadData extends AbstractRequest<Participants<?>, ReadData
     public interface ReadReply extends Reply
     {
         boolean isOk();
+    }
+
+    /**
+     * A {@link CommitOrReadNack.Kind#Waiting} reply that also reports, for keys we replicate that have a recent chain of
+     * contended transactions, the replica that executed the latest of them
+     * (see {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionFollow()}).
+     * Note: introduced later, so only sent if {@link accord.api.ProtocolModifiers#coordinatorBacklogExecutionFollow()}.
+     * TODO (desired): only send in reply to requests that ask for it
+     */
+    public static class WaitingWithOwners extends CommitOrReadNack
+    {
+        public final RoutingKey[] keys;
+        public final Node.Id[] executors;
+
+        public WaitingWithOwners(RoutingKey[] keys, Node.Id[] executors)
+        {
+            super(Kind.Waiting);
+            this.keys = keys;
+            this.executors = executors;
+        }
+
+        @Override
+        public String toString()
+        {
+            StringBuilder sb = new StringBuilder("WaitingWithOwners{");
+            for (int i = 0 ; i < keys.length ; ++i)
+                sb.append(i == 0 ? "" : ", ").append(keys[i]).append(':').append(executors[i]);
+            return sb.append('}').toString();
+        }
     }
 
     // TODO (expected): merge with ApplyReply

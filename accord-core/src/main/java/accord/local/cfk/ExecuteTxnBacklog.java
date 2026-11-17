@@ -20,6 +20,7 @@ package accord.local.cfk;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import javax.annotation.Nullable;
@@ -38,6 +39,7 @@ import accord.coordinate.Coordination.CoordinationKind;
 import accord.coordinate.ExecuteBacklogTxn;
 import accord.utils.SortedArrays.SortedArrayList;
 import accord.utils.TinyEnumSet;
+import accord.utils.UnhandledEnum;
 import accord.coordinate.Exhausted;
 import accord.coordinate.ExecuteTxn;
 import accord.coordinate.NotReady;
@@ -52,6 +54,8 @@ import accord.local.SafeCommandStore;
 import accord.local.cfk.CommandsForKey.TxnInfo;
 import accord.messages.BacklogApplied;
 import accord.messages.BacklogClaim;
+import accord.messages.BacklogDelegate;
+import accord.messages.ReadData;
 import accord.messages.ReplyContext;
 import accord.messages.SimpleReply;
 import accord.primitives.Ballot;
@@ -79,6 +83,9 @@ import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionDesignated
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionGrace;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionPerDc;
 import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionPersistLocally;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionFollow;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionFollowDelegation;
+import static accord.api.ProtocolModifiers.coordinatorBacklogExecutionFollowWindow;
 import static accord.coordinate.Coordination.CoordinationKind.Execute;
 import static accord.coordinate.Coordination.CoordinationKind.COORDINATES_STATE_MACHINE;
 import static accord.coordinate.Coordination.CoordinationKind.MaybeRecover;
@@ -171,6 +178,307 @@ public class ExecuteTxnBacklog
     public ExecuteTxnBacklog(Node node)
     {
         this.node = node;
+    }
+
+    /*
+     * Following the predecessor (see ProtocolModifiers#coordinatorBacklogExecutionFollow)
+     *
+     * Every replica records, for each key, the latest transaction it has applied there and the replica that executed it
+     * (Chain). When the original coordinator of a contended transaction (one that a replica it reads from must wait to
+     * execute) learns from its read replies where the transaction's keys' chains are executing (WaitingWithOwners), it
+     * decides once where to execute the transaction (chooseDelegate), and if that is another DC, delegates execution to
+     * the designated replica there (BacklogDelegate), pausing its own execution until that replica reports the result
+     * (RemoteSuccess), or declines or fails to reply (in which case it resumes).
+     */
+
+    // TODO (desired): record on the CFK cache entry rather than per node
+    private static final int PRUNE_CHAINS_AT_SIZE = 1 << 12;
+
+    /**
+     * The latest transaction we have applied on some key, and the replica that executed it
+     */
+    private static final class Chain
+    {
+        final Timestamp executeAt;
+        final Node.Id executor;
+        final long appliedAt; // per Node#elapsed(MICROSECONDS)
+
+        Chain(Timestamp executeAt, Node.Id executor, long appliedAt)
+        {
+            this.executeAt = executeAt;
+            this.executor = executor;
+            this.appliedAt = appliedAt;
+        }
+    }
+
+    private final ConcurrentHashMap<RoutingKey, Chain> chains = new ConcurrentHashMap<>();
+
+    /**
+     * We have applied {@code txnId} on (some of) {@code scope}, which {@code executor} executed.
+     * <p>
+     * If the transaction's own (or recovery) coordinator executed it, it may have done so only because it was not
+     * contended (so did not consider delegating it), or because its DC's chain won (by precedence) where chains met;
+     * in the first case we do not want to move the chain, as the chain's DC remains the best place to execute its
+     * successors. We cannot distinguish the cases, so we only move an existing (recent) chain to another DC if a delegated
+     * (or backlog) executor executed the transaction. If precedence chose the coordinator's own DC, the chain moves when
+     * the next transaction to join it is delegated there.
+     */
+    public void onApplyReceived(TxnId txnId, Ballot ballot, Route<?> scope, Timestamp executeAt, Node.Id executor)
+    {
+        if (!mayExecute(txnId) || scope.domain() != Key)
+            return;
+
+        long now = node.elapsed(MICROSECONDS);
+        long window = coordinatorBacklogExecutionFollowWindow(MICROSECONDS);
+        if (chains.size() >= PRUNE_CHAINS_AT_SIZE)
+            chains.values().removeIf(c -> now - c.appliedAt > window);
+
+        Node.Id coordinator = ballot.equals(Ballot.ZERO) ? txnId.node : ballot.node;
+        boolean executedByCoordinator = executor.equals(coordinator);
+        Chain chain = new Chain(executeAt, executor, now);
+        for (int i = 0, size = scope.size() ; i < size ; ++i)
+        {
+            chains.compute(scope.get(i).asRoutingKey(), (key, prev) -> {
+                if (prev == null) return chain;
+                if (prev.executeAt.compareTo(executeAt) >= 0) return prev;
+                if (!executedByCoordinator || !isRecent(prev, now, window) || node.areNearby(prev.executor, executor)) return chain;
+                return prev;
+            });
+        }
+    }
+
+    private static boolean isRecent(@Nullable Chain chain, long now, long window)
+    {
+        return chain != null && now - chain.appliedAt <= window;
+    }
+
+    /**
+     * @return a Waiting reply reporting, for each key of {@code scope} with a recent chain, the replica that executed
+     * its latest transaction; or null if there are none
+     */
+    public @Nullable ReadData.CommitOrReadNack waitingWithOwners(TxnId txnId, Participants<?> scope)
+    {
+        if (!mayExecute(txnId) || scope.domain() != Key || chains.isEmpty())
+            return null;
+
+        long now = node.elapsed(MICROSECONDS);
+        long window = coordinatorBacklogExecutionFollowWindow(MICROSECONDS);
+        List<RoutingKey> keys = null;
+        List<Node.Id> executors = null;
+        for (int i = 0, size = scope.size() ; i < size ; ++i)
+        {
+            RoutingKey key = scope.get(i).asRoutingKey();
+            Chain chain = chains.get(key);
+            if (!isRecent(chain, now, window))
+                continue;
+            if (keys == null) { keys = new ArrayList<>(); executors = new ArrayList<>(); }
+            keys.add(key);
+            executors.add(chain.executor);
+        }
+        if (keys == null)
+            return null;
+        return new ReadData.WaitingWithOwners(keys.toArray(new RoutingKey[0]), executors.toArray(new Node.Id[0]));
+    }
+
+    /**
+     * Decide (as original coordinator of a contended transaction) where to execute {@code txnId}, given {@code owners}:
+     * for keys with a recent chain, the replica that executed the latest transaction there.
+     * <p>
+     * Unless {@link ProtocolModifiers#coordinatorBacklogExecutionFollowDelegation()} says we should execute locally,
+     * of the DCs that own some key (and replicate every shard of the transaction) we pick one by a fixed precedence
+     * (the integration's {@link Node#executionPreference}, then the DC containing the lowest node id), so that chains that
+     * meet always settle in the same DC, rather than flip between DCs.
+     * TODO (desired): consider DC proximity (e.g. a fixed relationship between DCs), so that we need not delegate
+     *  between nearby DCs; only likely to be useful where latencies between DCs are very asymmetric
+     * TODO (desired): precedence by chain age, rather than a fixed preference
+     * @return the replica to delegate to, or null if we should execute the transaction ourselves
+     */
+    public static @Nullable Node.Id chooseDelegate(Node node, TxnId txnId, FullRoute<?> route, Timestamp executeAt, Map<RoutingKey, Node.Id> owners)
+    {
+        switch (coordinatorBacklogExecutionFollowDelegation())
+        {
+            default: throw new UnhandledEnum(coordinatorBacklogExecutionFollowDelegation());
+            case PRECEDENCE:
+                break;
+            case UNLESS_HOME_KEY_LOCAL:
+            {
+                Node.Id homeOwner = owners.get(route.homeKey());
+                if (homeOwner != null && node.isNearby(homeOwner))
+                    return null;
+                break;
+            }
+            case UNLESS_ANY_KEY_LOCAL:
+            {
+                for (Node.Id owner : owners.values())
+                {
+                    if (node.isNearby(owner))
+                        return null;
+                }
+            }
+        }
+
+        Topology topology;
+        try { topology = node.topology().active().globalForEpoch(executeAt.epoch()); }
+        catch (Throwable t) { topology = node.topology().current(); }
+
+        Node.Id best = null;
+        long bestRank = Long.MAX_VALUE;
+        for (Node.Id owner : owners.values())
+        {
+            if (best != null && node.areNearby(best, owner))
+                continue;
+            // we only delegate to a DC that replicates every shard of the transaction, so that it may read locally
+            // TODO (desired): we could delegate to a DC lacking some shard if every owner is such a DC
+            if (!node.isNearby(owner) && !replicatesEveryShard(node, topology, route, owner))
+                continue;
+
+            // by the integration's preference (if any), then by the lowest node id in the DC
+            int minId = Integer.MAX_VALUE;
+            for (Node.Id id : topology.nodes())
+            {
+                if (id.id < minId && node.areNearby(owner, id))
+                    minId = id.id;
+            }
+            long rank = ((long) (node.executionPreference(owner) + 1) << 32) | (minId & 0xffffffffL);
+            if (rank < bestRank)
+            {
+                best = owner;
+                bestRank = rank;
+            }
+        }
+        if (best == null || node.isNearby(best))
+        {
+            if (logger.isTraceEnabled())
+                logger.trace("{}: not delegating (owners {})", txnId, owners);
+            return null;
+        }
+
+        Node.Id owner = best;
+        Node.Id delegate = designatedExecutorIn(node, route.homeKey(), id -> node.areNearby(owner, id));
+        if (logger.isTraceEnabled())
+            logger.trace("{}: delegating to {} (owners {})", txnId, delegate, owners);
+        return delegate;
+    }
+
+    private static boolean replicatesEveryShard(Node node, Topology topology, FullRoute<?> route, Node.Id inDcOf)
+    {
+        return topology.foldl(route, (shard, covered, i) -> {
+            if (!covered) return false;
+            for (int j = 0, size = shard.nodes.size() ; j < size ; ++j)
+            {
+                if (node.areNearby(inDcOf, shard.nodes.get(j)))
+                    return true;
+            }
+            return false;
+        }, true);
+    }
+
+    /**
+     * Ask {@code to} to execute {@code txnId} on our behalf; we have paused our own execution, and resume it if
+     * {@code to} declines or does not reply
+     */
+    public void delegate(TxnId txnId, FullRoute<?> route, Timestamp executeAt, Node.Id to)
+    {
+        node.send(to, new BacklogDelegate(txnId, route, executeAt), node.someExclusiveExecutor(), new accord.messages.Callback<SimpleReply>()
+        {
+            @Override
+            public void onSuccess(Node.Id from, SimpleReply reply)
+            {
+                if (reply != SimpleReply.Ok)
+                    resumePaused(txnId, "delegate declined");
+            }
+
+            @Override
+            public void onFailure(Node.Id from, Throwable failure)
+            {
+                resumePaused(txnId, "delegate failed: " + failure);
+            }
+
+            @Override
+            public boolean onCallbackFailure(Node.Id from, Throwable failure)
+            {
+                node.agent().onException(failure);
+                return true;
+            }
+        }, null);
+    }
+
+    private void resumePaused(TxnId txnId, String reason)
+    {
+        PausedEntry entry = paused.remove(txnId);
+        if (entry == null)
+            return;
+        if (entry.timeout != null)
+            entry.timeout.cancel();
+        if (logger.isTraceEnabled())
+            logger.trace("{}: resuming execution on {} as {}", txnId, node.id(), reason);
+        entry.paused.resume();
+    }
+
+    // transactions original coordinators have delegated to us, mapped to their expiry (per Node#elapsed)
+    private final ConcurrentHashMap<TxnId, Long> delegations = new ConcurrentHashMap<>();
+
+    private boolean isDelegated(TxnId txnId)
+    {
+        if (delegations.isEmpty())
+            return false;
+        Long expiresAt = delegations.get(txnId);
+        return expiresAt != null && expiresAt > node.elapsed(MICROSECONDS);
+    }
+
+    /**
+     * An original coordinator asks us to execute {@code txnId} on its behalf; accept, and start once we know the
+     * transaction (if we have not yet received its Stable, we start once we do, see {@link #onStableWaiting} and
+     * {@link #onReadyToExecute})
+     */
+    public void onDelegated(TxnId txnId, FullRoute<?> route, Timestamp executeAt, Node.Id from, ReplyContext replyContext)
+    {
+        if (!coordinatorBacklogExecutionFollow() || !mayExecute(txnId))
+        {
+            reply(from, replyContext, false);
+            return;
+        }
+
+        prune(delegations, node.elapsed(MICROSECONDS));
+        delegations.put(txnId, claimExpiresAt(txnId));
+        reply(from, replyContext, true);
+        if (logger.isTraceEnabled())
+            logger.trace("{}: delegated by {} to {}", txnId, from, node.id());
+
+        Participants<?> participants = route.participants();
+        long epoch = executeAt.epoch();
+        node.commandStores().forEach("Delegated ExecuteBacklog", txnId, participants, epoch, epoch, safeStore -> {
+            if (safeStore.ifInitialised(txnId) != null)
+                startDelegated(safeStore.commandStore(), txnId);
+        }).begin(node.agent());
+    }
+
+    /**
+     * A command has become Stable in {@code safeStore} but must wait to execute; if it was delegated to us before we
+     * knew it, start executing it (i.e. wait for it to become ready)
+     */
+    public void onStableWaiting(SafeCommandStore safeStore, Command command)
+    {
+        if (isDelegated(command.txnId()))
+            startDelegated(safeStore.commandStore(), command.txnId());
+    }
+
+    private void startDelegated(CommandStore commandStore, TxnId txnId)
+    {
+        if (!tryMarkActive(txnId))
+            return;
+        // we have accepted responsibility for executing the transaction, so must wait for it to become ready
+        obligations.put(txnId, claimExpiresAt(txnId));
+        executeActive(commandStore, txnId, null);
+    }
+
+    /**
+     * We have executed (or somebody else has executed) a transaction we may have been delegated
+     */
+    private void releaseDelegation(TxnId txnId)
+    {
+        if (!delegations.isEmpty())
+            delegations.remove(txnId);
     }
 
     /**
@@ -446,7 +754,8 @@ public class ExecuteTxnBacklog
      */
     public boolean shouldDeferToDesignated(TxnId txnId, RoutingKey homeKey)
     {
-        if (!coordinatorBacklogExecutionDesignated() || coordinatorBacklogExecutionPerDc() || !mayExecute(txnId))
+        // when following the predecessor, coordinators only defer when claimed (see ProtocolModifiers#coordinatorBacklogExecutionFollow)
+        if (!coordinatorBacklogExecutionDesignated() || coordinatorBacklogExecutionPerDc() || coordinatorBacklogExecutionFollow() || !mayExecute(txnId))
             return false;
         Node.Id designated = designatedExecutor(node, homeKey);
         return designated != null && !node.isNearby(designated);
@@ -460,6 +769,14 @@ public class ExecuteTxnBacklog
      */
     public void onReadyToExecute(SafeCommandStore safeStore, Command command, boolean onStable)
     {
+        if (coordinatorBacklogExecutionFollow())
+        {
+            // coordinators decide where to execute their transactions, so we only execute those delegated to us
+            if (isDelegated(command.txnId()))
+                startDelegated(safeStore.commandStore(), command.txnId());
+            return;
+        }
+
         TxnId txnId = command.txnId();
         if (!mayExecute(txnId) || txnId.node.equals(node.id()) || node.isNearby(txnId.node) || !command.promised().equals(Ballot.ZERO))
             return;
@@ -563,6 +880,7 @@ public class ExecuteTxnBacklog
         obligations.remove(txnId);
     }
 
+
     /**
      * @return true if we have started execution (or, if we are obligated, are waiting to)
      */
@@ -656,7 +974,7 @@ public class ExecuteTxnBacklog
     private void start(CommandStore commandStore, TxnId txnId, FullRoute<?> route, @Nullable Txn txn, Timestamp executeAt, @Nullable Deps deps, Ballot ballot, Ballot promised, boolean obligated, @Nullable Runnable beforePersist)
     {
         if (logger.isTraceEnabled())
-            logger.trace("{}: executing backlog{}{}", txnId, txn == null ? ", collecting definition" : "", obligated ? ", as claimed" : "");
+            logger.trace("{}: executing backlog{}{}", txnId, txn == null ? ", collecting definition" : "", obligated ? ", as obligated" : "");
 
         boolean mayClaim = !obligated && mayClaim(txnId, promised);
         Runnable claimBeforePersist = beforePersist;
@@ -678,13 +996,18 @@ public class ExecuteTxnBacklog
                 if (fail == null)
                 {
                     designatedRetries.remove(txnId);
+                    releaseDelegation(txnId);
                     node.reportLocalExecution(txnId, route, promised, null, null, result);
                     return;
                 }
 
                 boolean expected = isExpectedFailure(fail);
                 if (!expected) node.agent().onException(fail);
-                if (fail instanceof Redundant) return; // somebody else has executed the transaction
+                if (fail instanceof Redundant)
+                {
+                    releaseDelegation(txnId);
+                    return; // somebody else has executed the transaction
+                }
                 if (!coordinatorBacklogExecutionDesignated())
                     return;
                 if (!expected && !persistsLocally(node, txnId, ballot))
