@@ -25,7 +25,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[-]` dropped
 | `7666518d`…`4c31d66e` | `94916a4a6cc`…`08c5a5b0de2` | Phase 2e: per-DC executors persist locally; the original coordinator owns durability (`BacklogApplied`) |
 | `e1059f75` | `6ec4697c466` | `ApplyRelay`: one Apply per remote DC, relayed by that DC's designated replica (`relay_remote_apply`) |
 | `c46f8356` | `4f8ad9d06d7` | Phase 2e: always report (`unsentAt`); `ReadTxnDataIfReady` waits for Stable; deferred maximal; fetch late definition |
-| (see `git log`) | (see `git log`) | Phase 2f: following predecessors; coordinators delegate to the DC executing the chain (`BacklogDelegate`) |
+| `2c28569b` (HEAD) | `1462904d9b9` (HEAD) | Phase 2f: following predecessors; coordinators delegate to the DC executing the chain (`BacklogDelegate`) |
 
 Uncommitted in the Cassandra root (not part of the feature): `handover/backlog-harness/` holds the
 javac/burn/unit scripts and summarisers used for every number in this document (see its README;
