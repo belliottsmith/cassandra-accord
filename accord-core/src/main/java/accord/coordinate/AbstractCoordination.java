@@ -33,6 +33,7 @@ import accord.coordinate.tracking.RequestStatus;
 import accord.local.MapReduceConsumeCommandStores;
 import accord.local.Node;
 import accord.api.ExclusiveAsyncExecutor;
+import accord.messages.MessageType;
 import accord.messages.Request;
 import accord.messages.Callback;
 import accord.primitives.Participants;
@@ -59,6 +60,7 @@ import static accord.coordinate.AbstractCoordination.LocalExecuteState.SUCCESS;
 import static accord.coordinate.AbstractCoordination.LocalExecuteState.TIMEOUT;
 import static accord.utils.ThrowableSafety.safeFail;
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public abstract class AbstractCoordination<P extends Participants<?>, Result, Reply extends accord.messages.Reply, Ok> extends AbstractSimpleCoordination<P> implements Callback<Reply>, Callback.CallbackExclusive<Reply>
 {
@@ -541,7 +543,12 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         LocalExecuteState state = PENDING;
         Cancellable cancel;
         Timeouts.RegisteredTimeout timeout;
+        long startedAtNanos;
 
+        /**
+         * @return the kind of request this executes locally in place of sending a message to ourselves
+         */
+        abstract MessageType requestType();
         abstract long expiresAt();
         abstract Cancellable submit();
         abstract void acceptInternal(R result, Throwable failure);
@@ -555,6 +562,7 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         protected void start()
         {
             markSelfContacted();
+            startedAtNanos = node.elapsed(NANOSECONDS);
             Cancellable cancel = submit();
             long expiresAt = expiresAt();
             Timeouts.RegisteredTimeout timeout = expiresAt <= 0 ? null : node.timeouts().registerAt(this, expiresAt, MICROSECONDS);
@@ -581,7 +589,8 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
         @Override
         public void accept(R result, Throwable failure)
         {
-            done();
+            if (done() && failure == null)
+                node.agent().onLocalRequest(requestType(), txnId, node.elapsed(NANOSECONDS) - startedAtNanos, NANOSECONDS);
             executor.executeMaybeImmediately(() -> acceptInternal(result, failure));
         }
 
@@ -604,22 +613,26 @@ public abstract class AbstractCoordination<P extends Participants<?>, Result, Re
             cancel.cancel();
         }
 
-        void done()
+        /**
+         * @return true iff this completed the execution (i.e. it had not already completed or timed out)
+         */
+        boolean done()
         {
             Timeouts.RegisteredTimeout cancel;
             synchronized (this)
             {
                 if (state != PENDING)
-                    return;
+                    return false;
 
                 state = SUCCESS;
                 this.cancel = null;
                 if (timeout == null)
-                    return;
+                    return true;
                 cancel = timeout;
                 timeout = null;
             }
             cancel.cancel();
+            return true;
         }
 
         @Override

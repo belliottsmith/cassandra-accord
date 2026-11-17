@@ -157,6 +157,16 @@ public interface Agent extends UncaughtExceptionListener
     long selfSlowAt(TxnId txnId, MessageType messageType, TimeUnit unit);
     long selfExpiresAt(TxnId txnId, MessageType messageType, TimeUnit unit);
 
+    /**
+     * Invoked when a request is processed by this node for itself, without sending a message, so that implementations
+     * may measure it as they would a remote round-trip: both when a request is locally delivered (see
+     * {@link accord.impl.LocalDelivery}) and replies finally, and when a coordinator executes its own part of a round
+     * directly (e.g. its own PreAccept) and completes.
+     *
+     * @param elapsed the time between submitting the request and its completion, as measured by {@link Node#elapsed}
+     */
+    default void onLocalRequest(MessageType requestType, @Nullable TxnId txnId, long elapsed, TimeUnit units) {}
+
     // make sure the staleId is sufficiently stale
     AsyncChain<TxnId> awaitStaleId(Node node, TxnId staleId, boolean requested);
     long minStaleHlc(Node node, boolean requested);

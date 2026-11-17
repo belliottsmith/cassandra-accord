@@ -44,7 +44,7 @@ public class LocalDelivery<R extends Reply> implements ReplyContext
     final Node node;
     final Callback<R> callback;
     private long expiresAtMicros;
-    // for reporting the latency of local delivery to the MessageSink
+    // for reporting the latency of local delivery to the Agent
     private MessageType requestType;
     private TxnId txnId;
     private long deliveredAtNanos;
@@ -119,7 +119,7 @@ public class LocalDelivery<R extends Reply> implements ReplyContext
         if (reply.isFinal() ? cancelTimeout() : timeout != CLEARED_TIMEOUT)
         {
             if (reply.isFinal())
-                node.messageSink().onLocalReply(requestType, txnId, node.elapsed(NANOSECONDS) - deliveredAtNanos, NANOSECONDS);
+                node.agent().onLocalRequest(requestType, txnId, node.elapsed(NANOSECONDS) - deliveredAtNanos, NANOSECONDS);
             callback.onSuccess(node.id(), reply);
         }
     }

@@ -35,6 +35,7 @@ import accord.local.Node;
 import accord.local.SafeCommand;
 import accord.local.SafeCommandStore;
 import accord.local.StoreParticipants;
+import accord.messages.MessageType;
 import accord.messages.PreAccept.PreAcceptDepsCalculator;
 import accord.messages.PreAccept.PreAcceptNack;
 import accord.messages.PreAccept.PreAcceptOk;
@@ -211,6 +212,12 @@ public class CoordinateTransaction extends CoordinatePreAccept<Result>
 
     class LocalExecute extends AbstractLocalExecute<ReplyList<PreAcceptReply>>
     {
+        @Override
+        MessageType requestType()
+        {
+            return PRE_ACCEPT_REQ;
+        }
+
         @Override
         long expiresAt()
         {
