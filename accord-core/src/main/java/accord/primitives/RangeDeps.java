@@ -1129,6 +1129,23 @@ public class RangeDeps implements Iterable<Map.Entry<Range, TxnId>>, KeyOrRangeD
             listOffset += count;
         }
 
+        @Override
+        public void close()
+        {
+            // headers and lists come from (and are resized via) the int cache; getRangesToTxnIds copies out of them
+            if (headers != null)
+            {
+                cachedInts().forceDiscard(headers);
+                headers = null;
+            }
+            if (lists != null)
+            {
+                cachedInts().forceDiscard(lists);
+                lists = null;
+            }
+            super.close();
+        }
+
         public int[] getRangesToTxnIds()
         {
             int[] out = new int[headerCount + listOffset];

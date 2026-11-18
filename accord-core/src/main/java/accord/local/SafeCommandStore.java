@@ -434,11 +434,8 @@ public abstract class SafeCommandStore implements RangesForEpochSupplier, Redund
 
     public void updateMaxConflicts(Command prev, Command updated, boolean force)
     {
-        SaveStatus oldSaveStatus = prev == null ? SaveStatus.Uninitialised : prev.saveStatus();
-        SaveStatus newSaveStatus = updated.saveStatus();
-        // a re-Accept may propose a later executeAt without changing status, so we must also compare executeAt
-        if (newSaveStatus.status.equals(oldSaveStatus.status) && oldSaveStatus.known.definition().isKnown() && !force
-            && (ProtocolModifiers.Faults.reacceptKeepsMaxConflicts || Objects.equals(prev.executeAt(), updated.executeAt())))
+        if (prev != null && prev.saveStatus == updated.saveStatus && prev.saveStatus.known.isDefinitionKnown() && !force
+            && (ProtocolModifiers.Faults.reacceptKeepsMaxConflicts || Objects.equals(prev.executeAt, updated.executeAt)))
             return;
 
         TxnId txnId = updated.txnId();

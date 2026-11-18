@@ -112,7 +112,10 @@ public class RelationMultiMap
         {
             this.adapter = adapter;
             this.keys = adapter.cachedKeys().get(16);
-            this.keyLimits = cachedInts().getInts(keys.length);
+            // size keyLimits independently of keys: the keys cache may hand back a much larger array than requested,
+            // and demanding an int[] of the same length would miss the int cache unless it happens to hold one as large;
+            // nextKey grows whichever of the two is exhausted first (keySize is their minimum)
+            this.keyLimits = cachedInts().getInts(16);
             this.keysToValues = adapter.cachedValues().get(16);
             this.keySize = Math.min(keys.length, keyLimits.length);
         }
