@@ -70,7 +70,10 @@ public class TxnState extends WaitingState implements ExecutionContext
                 Invariants.require(newDelay >= 0);
                 break;
             case Queued:
-                if (owner.isCatchingUp())
+                int attempts = updated == TxnStateKind.Home ? homeRunCounter() : waitingRunCounter();
+                // when catching up we skip the delay for a first attempt, but must still back off from attempts that
+                // made no progress, or a request that cannot succeed (e.g. no readable replica) spins on the executor
+                if (owner.isCatchingUp() && attempts == 0)
                 {
                     newDelay = 1;
                 }
@@ -80,10 +83,10 @@ public class TxnState extends WaitingState implements ExecutionContext
                     {
                         default: throw new UnhandledEnum(updated);
                         case Waiting:
-                            newDelay = owner.commandStore.agent().slowReplicaDelay(owner.node, safeStore, txnId, 1 + waitingRunCounter(), blockedUntil, MICROSECONDS);
+                            newDelay = owner.commandStore.agent().slowReplicaDelay(owner.node, safeStore, txnId, 1 + attempts, blockedUntil, MICROSECONDS);
                             break;
                         case Home:
-                            newDelay = owner.commandStore.agent().slowCoordinatorDelay(owner.node, safeStore, txnId, MICROSECONDS, 1 + homeRunCounter());
+                            newDelay = owner.commandStore.agent().slowCoordinatorDelay(owner.node, safeStore, txnId, MICROSECONDS, 1 + attempts);
                     }
                 }
                 Invariants.require(newDelay > 0);
